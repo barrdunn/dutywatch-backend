@@ -1,0 +1,32 @@
+# OS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.dist/
+build/
+.venv/
+venv/
+
+# Editors/IDE
+.vscode/
+.idea/
+
+# Runtime & local data
+data/
+*.db
+*.sqlite3
+*.log
+
+# Secrets & env
+.env
+.env.local
+.env.*.local
+AuthKey_*.p8
+
+# Coverage/tests (if added later)
+.coverage
+htmlcov/
+.pytest_cache/
