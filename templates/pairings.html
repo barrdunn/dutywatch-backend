@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8"/>
+  <title>Pairings</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #161a22;
+      --muted: #9aa4b2;
+      --text: #e6e9ef;
+      --text-soft: #cfd6df;
+      --line: #262c36;
+      --accent: #3b82f6;
+      --accent-weak: #26497d;
+      --chip: #1f2632;
+      --chip-border: #2c3544;
+      --row-hover: #1a1f29;
+      --indent: 18px;
+      --radius: 10px;
+    }
+    html, body { background: var(--bg); color: var(--text); margin: 0; padding: 0; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; padding: 28px; }
+
+    h1 { margin: 0 0 10px; font-size: 20px; font-weight: 600; }
+
+    .toolbar {
+      display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
+      margin: 10px 0 18px; color: var(--muted);
+    }
+
+    .panel {
+      background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .controls { display: inline-flex; gap: 12px; align-items: center; }
+    .controls form { display: inline-flex; gap: 12px; align-items: center; }
+    .controls button, .controls input[type=submit] {
+      background: var(--chip); color: var(--text);
+      border: 1px solid var(--chip-border); border-radius: 8px; padding: 8px 10px; cursor: pointer;
+    }
+    .controls button:hover { background: var(--row-hover); }
+
+    .badge {
+      background: var(--chip); border: 1px solid var(--chip-border);
+      color: var(--text-soft); border-radius: 999px; padding: 2px 10px; font-size: 12px;
+    }
+
+    table { width: 100%; border-collapse: collapse; }
+    thead th {
+      text-align: left; font-weight: 600; font-size: 13px; color: var(--muted);
+      background: var(--panel); border-bottom: 1px solid var(--line); padding: 12px;
+    }
+    tbody td {
+      border-bottom: 1px solid var(--line); padding: 12px; vertical-align: top;
+    }
+    tr.pairing-row { cursor: pointer; }
+    tr.pairing-row:hover { background: var(--row-hover); }
+
+    /* Hidden expander row that spans full width */
+    tr.expander { display: none; background: #0e131b; }
+    tr.expander > td { padding: 0; border-bottom: 1px solid var(--line); }
+    .expand-wrap {
+      padding: 12px 12px 16px 12px;
+    }
+    .expand-inner {
+      margin-left: var(--indent);
+      border-left: 2px solid var(--line);
+      padding-left: 12px;
+    }
+
+    .day-header {
+      font-weight: 600; margin: 12px 0 8px; color: var(--text-soft);
+    }
+    .legs-table {
+      width: 100%; border-collapse: collapse; background: #0f141d; border: 1px solid var(--line);
+      border-radius: 8px; overflow: hidden;
+    }
+    .legs-table th, .legs-table td {
+      border-bottom: 1px solid var(--line); padding: 8px 10px; font-size: 14px;
+    }
+    .legs-table thead th { color: var(--muted); background: #101623; }
+    .hotel {
+      margin-top: 6px; color: var(--muted); font-size: 13px;
+    }
+    .meta {
+      color: var(--muted); font-size: 13px; margin-left: 6px;
+    }
+
+    .muted { color: var(--muted); }
+  </style>
+</head>
+<body>
+
+  <h1>Pairings</h1>
+
+  <div class="toolbar">
+    <form method="post" action="/calendar/refresh" class="controls">
+      <input type="hidden" name="only_reports" value="{{ only_reports }}">
+      <input type="hidden" name="is_24h" value="{{ is_24h }}">
+      <button type="submit">Refresh now</button>
+    </form>
+
+    <form method="get" action="/calendar/pairings" class="controls">
+      <input type="hidden" name="year" value="{{ year }}">
+      <input type="hidden" name="month" value="{{ month }}">
+
+      <label>
+        <input type="checkbox" name="only_reports" value="1" {% if only_reports %}checked{% endif %}/>
+        Only with report
+      </label>
+
+      <label>
+        <input type="radio" name="is_24h" value="0" {% if not is_24h %}checked{% endif %}/>
+        12-hour
+      </label>
+      <label>
+        <input type="radio" name="is_24h" value="1" {% if is_24h %}checked{% endif %}/>
+        24-hour
+      </label>
+
+      <input type="submit" value="Apply"/>
+    </form>
+
+    <span class="muted">
+      Last pull: {{ last_pull_str or "never" }} ·
+      Showing {{ pairing_count }} pairings
+      {% if total_days %}<span class="badge" title="Total parsed days">{{ total_days }} days</span>{% endif %}
+    </span>
+  </div>
+
+  <div class="panel">
+    <table id="pairings">
+      <thead>
+        <tr>
+          <th style="width: 160px;">Pairing ID</th>
+          <th style="width: 260px;">Pairing Start</th>
+          <th style="width: 260px;">Pairing End</th>
+          <th>Details</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% if not rows %}
+        <tr><td colspan="4" class="muted">No pairings found for {{ year }}-{{ "%02d"|format(month) }}.</td></tr>
+      {% else %}
+        {% for r in rows %}
+          <!-- Clickable summary row -->
+          <tr class="pairing-row" data-target="exp-{{ loop.index }}">
+            <td><strong>{{ r.pairing_id }}</strong></td>
+            <td>{{ r.display.pairing_start_str }}</td>
+            <td>{{ r.display.pairing_end_str }}</td>
+            <td class="muted">click to expand</td>
+          </tr>
+
+          <!-- Hidden expander row (full-width details) -->
+          <tr id="exp-{{ loop.index }}" class="expander">
+            <td colspan="4">
+              <div class="expand-wrap">
+                <div class="expand-inner">
+                  {% if r.days and r.days|length > 0 %}
+                    {% for d in r.days %}
+                      <div class="day">
+                        <div class="day-header">Day {{ loop.index }}</div>
+
+                        <div class="meta">
+                          {% if d.report %}Report: {{ d.report|length==4 and
+                            ((is_24h and d.report ~ 'L') or
+                              ((d.report[:2]|int)%12 == 0 and '12:' ~ d.report[2:] ~ ' AM' or
+                               (((d.report[:2]|int)%12)|string) ~ ':' ~ d.report[2:] ~ ((d.report[:2]|int) < 12 and ' AM' or ' PM'))) }}
+                          {% endif %}
+                          {% if d.release %} · Release: {{ d.release|length==4 and
+                            ((is_24h and d.release ~ 'L') or
+                              ((d.release[:2]|int)%12 == 0 and '12:' ~ d.release[2:] ~ ' AM' or
+                               (((d.release[:2]|int)%12)|string) ~ ':' ~ d.release[2:] ~ ((d.release[:2]|int) < 12 and ' AM' or ' PM'))) }}
+                          {% endif %}
+                        </div>
+
+                        {% if d.legs and d.legs|length>0 %}
+                          <table class="legs-table">
+                            <thead>
+                              <tr>
+                                <th style="width: 120px;">Flight</th>
+                                <th style="width: 160px;">Route</th>
+                                <th>Block Times</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {% for leg in d.legs %}
+                                <tr>
+                                  <td>{{ leg.flight }}</td>
+                                  <td>{{ leg.dep }} → {{ leg.arr }}</td>
+                                  <td>
+                                    {% if leg.dep_time_str or leg.arr_time_str %}
+                                      {{ leg.dep_time_str }} – {{ leg.arr_time_str }}
+                                    {% else %}
+                                      <span class="muted">—</span>
+                                    {% endif %}
+                                  </td>
+                                </tr>
+                              {% endfor %}
+                            </tbody>
+                          </table>
+                        {% else %}
+                          <div class="muted" style="margin-top:6px;">No legs parsed.</div>
+                        {% endif %}
+
+                        {% if d.hotel %}
+                          <div class="hotel">Hotel: {{ d.hotel }}</div>
+                        {% endif %}
+                      </div>
+                    {% endfor %}
+                  {% else %}
+                    <div class="muted">No daily detail parsed for this pairing.</div>
+                  {% endif %}
+                </div>
+              </div>
+            </td>
+          </tr>
+        {% endfor %}
+      {% endif %}
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    // Whole-row click to expand/collapse its details row
+    document.querySelectorAll('tr.pairing-row').forEach(row => {
+      row.addEventListener('click', () => {
+        const id = row.getAttribute('data-target');
+        const expander = document.getElementById(id);
+        if (!expander) return;
+        const open = expander.style.display === 'table-row';
+        expander.style.display = open ? 'none' : 'table-row';
+      });
+    });
+  </script>
+</body>
+</html>

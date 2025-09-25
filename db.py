@@ -1,42 +1,46 @@
+# db.py
 """
-DutyWatch SQLite Database Helper (with events & schedule cache)
+DutyWatch SQLite helpers
 
-- Core tables: devices, policy, acks, notifications
-- Cache tables:
-    • schedule_cache  : last computed pairings/time-off table + content hash
-    • events_cache    : last fetched events for a given "scope" (e.g. a month)
-- Helpers:
-    • save_schedule_cache() / load_schedule_cache()
-    • overwrite_events_cache(scope, events) / read_events_cache(scope)
+Tables
+------
+devices, policy, acks, notifications      # original app tables
+events_cache(scope TEXT PK, uid_hash, json, updated_at)
+kv(key TEXT PK, value TEXT)               # tiny key/value for metadata
+
+Key helpers
+-----------
+read_events_cache(scope) -> list[dict]
+overwrite_events_cache(scope, events, *, uid_hash=None) -> None
+read_uid_hash(scope) -> str | None
+write_uid_hash(scope, uid_hash) -> None
+read_last_pull_utc(scope) -> str | None
+set_last_pull_utc(scope, iso_ts) -> None
+clear_events_cache(scope) -> None
 """
+
+from __future__ import annotations
 
 import os
-import sqlite3
 import json
+import sqlite3
 import datetime as dt
-from typing import List, Dict, Optional
+from typing import Any
 
-# Store DB under ./data/ so it doesn't clutter the repo root
+# Store DB under ./data/
 DB_DIR = os.path.join(os.path.dirname(__file__), "data")
 os.makedirs(DB_DIR, exist_ok=True)
 DB_FILE = os.path.join(DB_DIR, "dutywatch.db")
 
 
-def get_db():
-    """
-    Returns a sqlite3 connection. Works with `with get_db() as c:`
-    and sets row_factory so you can access columns by name.
-    """
+def get_db() -> sqlite3.Connection:
     con = sqlite3.connect(DB_FILE, check_same_thread=False)
     con.row_factory = sqlite3.Row
     return con
 
 
-def init_db():
-    """
-    Creates all required tables if they don't exist.
-    Safe to call multiple times.
-    """
+def init_db() -> None:
+    """Create all required tables if they don't exist."""
     with get_db() as c:
         c.executescript(
             """
@@ -71,100 +75,101 @@ def init_db():
                 sent INTEGER DEFAULT 0
             );
 
-            -- Cache of the computed schedule table (pairings + time off)
-            CREATE TABLE IF NOT EXISTS schedule_cache (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                hash TEXT,       -- sha256 over significant event fields
-                json TEXT,       -- full cached payload (rows, hash, etc.)
-                updated_at TEXT  -- UTC timestamp when cache was written
+            -- Snapshots of calendar pulls (rolling or month scopes)
+            CREATE TABLE IF NOT EXISTS events_cache(
+                scope TEXT PRIMARY KEY,
+                uid_hash TEXT,
+                json TEXT,          -- JSON array of event dicts
+                updated_at TEXT
             );
 
-            -- Cache of events fetched for a specific scope (e.g. "month:2025-10")
-            CREATE TABLE IF NOT EXISTS events_cache (
-                id INTEGER PRIMARY KEY,
-                scope TEXT NOT NULL,     -- e.g. "month:2025-10" or "range:2025-10-01..2025-11-01"
-                uid TEXT,
-                calendar TEXT,
-                summary TEXT,
-                location TEXT,
-                description TEXT,
-                start_utc TEXT,
-                end_utc TEXT,
-                last_modified TEXT
+            -- Tiny KV for misc metadata (e.g., last pull time per scope)
+            CREATE TABLE IF NOT EXISTS kv(
+                key TEXT PRIMARY KEY,
+                value TEXT
             );
-            CREATE INDEX IF NOT EXISTS idx_events_cache_scope ON events_cache(scope);
             """
         )
 
 
-# ---------- schedule cache helpers ----------
+# -------------------- events_cache helpers --------------------
 
-def save_schedule_cache(cache: dict) -> None:
-    """
-    Persist the latest schedule table + its hash.
-    Expects a dict like: {"hash": "...", "rows": [...] }
-    """
+def read_events_cache(scope: str) -> list[dict[str, Any]]:
+    with get_db() as c:
+        row = c.execute("SELECT json FROM events_cache WHERE scope=?", (scope,)).fetchone()
+        if not row or not row["json"]:
+            return []
+        try:
+            return json.loads(row["json"])
+        except Exception:
+            return []
+
+
+def overwrite_events_cache(scope: str, events: list[dict[str, Any]], *, uid_hash: str | None = None) -> None:
+    """Replace the entire snapshot for a scope."""
+    payload = json.dumps(events)
+    now = dt.datetime.utcnow().isoformat()
     with get_db() as c:
         c.execute(
-            "INSERT OR REPLACE INTO schedule_cache(id, hash, json, updated_at) VALUES(1,?,?,?)",
-            (cache.get("hash"), json.dumps(cache), dt.datetime.utcnow().isoformat()),
+            "INSERT INTO events_cache(scope, uid_hash, json, updated_at) "
+            "VALUES(?,?,?,?) "
+            "ON CONFLICT(scope) DO UPDATE SET uid_hash=excluded.uid_hash, json=excluded.json, updated_at=excluded.updated_at",
+            (scope, uid_hash, payload, now),
         )
 
 
-def load_schedule_cache() -> Optional[dict]:
-    """
-    Return the last cached schedule table, or None if empty.
-    """
-    with get_db() as c:
-        row = c.execute("SELECT json FROM schedule_cache WHERE id=1").fetchone()
-        if not row:
-            return None
-        return json.loads(row["json"])
-
-
-# ---------- events cache helpers (overwrite-on-pull) ----------
-
-def overwrite_events_cache(scope: str, events: List[Dict]) -> None:
-    """
-    Blow away old rows for 'scope' and insert the new snapshot.
-    Each event dict should contain: uid, calendar, summary, location,
-    description, start_utc, end_utc, last_modified.
-    """
+def clear_events_cache(scope: str) -> None:
     with get_db() as c:
         c.execute("DELETE FROM events_cache WHERE scope=?", (scope,))
-        if not events:
-            return
-        c.executemany(
-            """
-            INSERT INTO events_cache
-            (scope, uid, calendar, summary, location, description, start_utc, end_utc, last_modified)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                (
-                    scope,
-                    e.get("uid"),
-                    e.get("calendar"),
-                    e.get("summary"),
-                    e.get("location"),
-                    e.get("description"),
-                    e.get("start_utc"),
-                    e.get("end_utc"),
-                    e.get("last_modified"),
-                )
-                for e in events
-            ],
+
+
+def read_uid_hash(scope: str) -> str | None:
+    with get_db() as c:
+        row = c.execute("SELECT uid_hash FROM events_cache WHERE scope=?", (scope,)).fetchone()
+        return row["uid_hash"] if row else None
+
+
+def write_uid_hash(scope: str, uid_hash: str | None) -> None:
+    """Upsert just the uid_hash for a scope (creates row if missing)."""
+    now = dt.datetime.utcnow().isoformat()
+    with get_db() as c:
+        cur = c.execute("SELECT 1 FROM events_cache WHERE scope=?", (scope,)).fetchone()
+        if cur:
+            c.execute(
+                "UPDATE events_cache SET uid_hash=?, updated_at=? WHERE scope=?",
+                (uid_hash, now, scope),
+            )
+        else:
+            c.execute(
+                "INSERT INTO events_cache(scope, uid_hash, json, updated_at) VALUES(?,?,?,?)",
+                (scope, uid_hash, "[]", now),
+            )
+
+
+# -------------------- kv helpers (last pull time) --------------------
+
+def read_last_pull_utc(scope: str) -> str | None:
+    key = f"{scope}:last_pull_utc"
+    with get_db() as c:
+        row = c.execute("SELECT value FROM kv WHERE key=?", (key,)).fetchone()
+        return row["value"] if row else None
+
+
+def set_last_pull_utc(scope: str, iso_ts: str | None = None) -> None:
+    key = f"{scope}:last_pull_utc"
+    if iso_ts is None:
+        iso_ts = dt.datetime.utcnow().isoformat()
+    with get_db() as c:
+        c.execute(
+            "INSERT INTO kv(key,value) VALUES(?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, iso_ts),
         )
 
 
-def read_events_cache(scope: str) -> List[Dict]:
-    """
-    Return cached events for 'scope' (ordered by start_utc).
-    """
+# -------------------- misc --------------------
+
+def list_scopes() -> list[str]:
     with get_db() as c:
-        rows = c.execute(
-            """SELECT uid, calendar, summary, location, description, start_utc, end_utc, last_modified
-               FROM events_cache WHERE scope=? ORDER BY start_utc""",
-            (scope,),
-        ).fetchall()
-        return [dict(r) for r in rows]
+        rows = c.execute("SELECT scope FROM events_cache ORDER BY scope").fetchall()
+        return [r["scope"] for r in rows]
