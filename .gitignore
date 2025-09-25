@@ -30,3 +30,8 @@ AuthKey_*.p8
 .coverage
 htmlcov/
 .pytest_cache/
+.env
+.venv/
+__pycache__/
+*.db
+data/
