@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <title>Pairings</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="stylesheet" href="/static/pairings.css" />
+  <link rel="stylesheet" href="./pairings.css" />
 </head>
 <body>
   <div class="wrap">
@@ -24,7 +24,7 @@
 
         <label class="toggle" style="display:flex;align-items:center;gap:8px;">
           Auto-refresh:
-          <select id="refresh-mins" class="toggle"><!-- value set by JS from server -->
+          <select id="refresh-mins" class="toggle">
             <option value="1">1 min</option>
             <option value="5">5 mins</option>
             <option value="10">10 mins</option>
@@ -35,8 +35,8 @@
 
         <label class="toggle" style="display:flex;align-items:center;gap:8px;">
           Clock:
-          <select id="clock-mode" class="toggle"><!-- default 12h -->
-            <option value="12">12h</option>
+          <select id="clock-mode" class="toggle">
+            <option value="12" selected>12h</option>
             <option value="24">24h</option>
           </select>
         </label>
@@ -56,8 +56,6 @@
     </div>
   </div>
 
-  <!-- Viewer-only boot config as JSON -->
-  <script id="dw-boot" type="application/json">{{ dw_boot_json | safe }}</script>
-  <script src="/static/pairings.js" defer></script>
+<script src="./pairings.js" defer></script>
 </body>
 </html>

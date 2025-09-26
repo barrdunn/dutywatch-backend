@@ -1,0 +1,216 @@
+(function () {
+  // ---- Boot from server status (no Jinja) ----
+  const state = {
+    lastPullIso: null,
+    nextRefreshIso: null,
+    clockMode: 12,      // default 12h
+    onlyReports: true,  // show only days with report by default
+    _zeroKick: 0,
+  };
+
+  // Public action
+  window.dwManualRefresh = async function () {
+    try { await fetch('/api/refresh', { method: 'POST' }); }
+    catch (e) { console.error(e); }
+  };
+
+  // Controls
+  const refreshSel = document.getElementById('refresh-mins');
+  const clockSel   = document.getElementById('clock-mode');
+
+  // Global click handler for expand/collapse (multi-open; click again to close)
+  document.addEventListener('click', (e) => {
+    const tr = e.target.closest('tr.summary');
+    if (!tr) return;
+    tr.classList.toggle('open'); // CSS shows the next details row when .open
+  });
+
+  // Live status ticker
+  setInterval(tickStatusLine, 1000);
+
+  // First, get server schedule & defaults, wire selects, then render
+  init().then(renderOnce).catch(console.error);
+
+  // Also hook up SSE so UI refreshes as the server pulls
+  try {
+    const es = new EventSource('/api/events');
+    es.addEventListener('hello', () => {});
+    es.addEventListener('change', async () => { await renderOnce(); });
+    es.addEventListener('schedule_update', async () => { await renderOnce(); });
+    es.onerror = () => {}; // ignore
+  } catch {
+    /* non-fatal */
+  }
+
+  async function init() {
+    try {
+      const res = await fetch('/api/status', { cache: 'no-store' });
+      const st  = await res.json();
+
+      // reflect server-backed schedule (default is 30m from app.py)
+      if (refreshSel && st.refresh_minutes) {
+        refreshSel.value = String(st.refresh_minutes);
+      }
+
+      // default clock from server (we set 12)
+      state.clockMode = Number(st.default_clock || 12) === 24 ? 24 : 12;
+      if (clockSel) clockSel.value = String(state.clockMode);
+
+    } catch (e) {
+      console.error('init failed', e);
+    }
+
+    // wire handlers after initial values set
+    if (refreshSel) {
+      refreshSel.addEventListener('change', async () => {
+        const minutes = parseInt(refreshSel.value, 10);
+        try {
+          await fetch('/api/settings/refresh-seconds', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ seconds: minutes * 60 }),
+          });
+        } catch (e) { console.error(e); }
+      });
+    }
+
+    if (clockSel) {
+      clockSel.addEventListener('change', async () => {
+        state.clockMode = parseInt(clockSel.value, 10) === 24 ? 24 : 12;
+        await renderOnce();
+      });
+    }
+  }
+
+  // Core render from /api/pairings
+  async function renderOnce() {
+    const params = new URLSearchParams({
+      is_24h: String(state.clockMode === 24 ? 1 : 0),
+      only_reports: String(state.onlyReports ? 1 : 0),
+    });
+
+    let data;
+    try {
+      const res = await fetch(`/api/pairings?${params.toString()}`, { cache: 'no-store' });
+      data = await res.json();
+    } catch (e) {
+      console.error('Failed to fetch /api/pairings', e);
+      return;
+    }
+
+    // set schedule select to actual server value (prevents “looks like 30 but counts down 15” issues)
+    if (refreshSel && data.refresh_minutes) {
+      refreshSel.value = String(data.refresh_minutes);
+    }
+
+    // stamps for ticker
+    state.lastPullIso    = data.last_pull_local_iso || null;
+    state.nextRefreshIso = data.next_pull_local_iso || null;
+
+    // chips
+    setText('#looking-through', data.looking_through ?? '—');
+    setText('#last-pull', data.last_pull_local ?? '—');
+    const base = (data.next_pull_local && data.tz_label)
+      ? `${data.next_pull_local} (${data.tz_label})`
+      : '—';
+    const nextEl = qs('#next-refresh');
+    if (nextEl) nextEl.innerHTML = `${esc(base)} <span id="next-refresh-eta"></span>`;
+
+    // table
+    const tbody = qs('#pairings-body');
+    tbody.innerHTML = (data.rows || []).map(renderRowHTML).join('');
+  }
+
+  function renderRowHTML(row) {
+    if (row.kind === 'off') {
+      return `
+        <tr class="off">
+          <td><span class="off-label">OFF</span></td>
+          <td class="muted"></td>
+          <td class="muted"></td>
+          <td><span class="off-dur">${esc(row.display?.off_dur || '')}</span></td>
+        </tr>`;
+    }
+    const daysCount = row.days ? row.days.length : 0;
+    const inProg = row.in_progress ? `<span class="progress">(In progress)</span>` : '';
+    const details = (row.days || []).map((day, i) => renderDayHTML(day, i)).join('');
+
+    return `
+      <tr class="summary">
+        <td><strong>${esc(row.pairing_id || '')}</strong>
+            <span class="pill">${daysCount} day</span> ${inProg}</td>
+        <td>${esc(row.display?.report_str || '')}</td>
+        <td>${esc(row.display?.release_str || '')}</td>
+        <td class="muted">click to expand days</td>
+      </tr>
+      <tr class="details">
+        <td colspan="4">
+          <div class="daysbox">${details}</div>
+        </td>
+      </tr>`;
+  }
+
+  function renderDayHTML(day, idx) {
+    const legs = (day.legs || []).map(leg => `
+      <tr class="leg-row ${leg.done ? 'leg-done' : ''}">
+        <td>${esc(leg.flight || '')}</td>
+        <td>${esc(leg.dep || '')}–${esc(leg.arr || '')}</td>
+        <td>${esc(leg.dep_time_str || leg.dep_time || '')}
+            &nbsp;→&nbsp;
+            ${esc(leg.arr_time_str || leg.arr_time || '')}</td>
+      </tr>`).join('');
+
+    return `
+      <div class="day">
+        <div class="dayhdr">
+          Day ${idx + 1}
+          ${day.report ? `&middot; Report ${esc(day.report)}` : ''}
+          ${day.release ? `&middot; Release ${esc(day.release)}` : ''}
+          ${day.hotel ? `&middot; ${esc(day.hotel)}` : ''}
+        </div>
+        ${legs ? `
+          <table class="legs">
+            <thead><tr><th>Flight</th><th>Route</th><th>Block Times</th></tr></thead>
+            <tbody>${legs}</tbody>
+          </table>` : `<div class="muted">No legs parsed.</div>`}
+      </div>`;
+  }
+
+  function tickStatusLine() {
+    if (state.lastPullIso) {
+      const ago = preciseAgo(new Date(state.lastPullIso));
+      setText('#last-pull', ago);
+    }
+
+    const etaEl = qs('#next-refresh-eta');
+    if (!etaEl || !state.nextRefreshIso) return;
+
+    const diff = Math.floor((new Date(state.nextRefreshIso).getTime() - Date.now()) / 1000);
+    const left = Math.max(0, diff);
+    if (left > 0) {
+      const m = Math.floor(left / 60), s = left % 60;
+      etaEl.textContent = `in ${m}m ${s}s`;
+    } else {
+      etaEl.textContent = '(refreshing…)';
+      const now = Date.now();
+      if (!state._zeroKick || now - state._zeroKick > 4000) {
+        state._zeroKick = now;
+        renderOnce();
+      }
+    }
+  }
+
+  // utils
+  function qs(sel) { return document.querySelector(sel); }
+  function setText(sel, v) { const el = qs(sel); if (el) el.textContent = v; }
+  function esc(s) {
+    return String(s).replace(/[&<>"'`=\/]/g, (ch) =>
+      ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','/':'&#x2F;','`':'&#x60;','=':'&#x3D;'}[ch])
+    );
+  }
+  function preciseAgo(d){
+    const sec = Math.max(0, Math.floor((Date.now() - d.getTime())/1000));
+    const m = Math.floor(sec/60), s = sec%60;
+    return m ? `${m}m ${s}s ago` : `${s}s ago`;
+  }
+})();

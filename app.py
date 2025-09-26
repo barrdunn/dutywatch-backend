@@ -9,9 +9,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Query, Request, HTTPException
-from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
+from fastapi.responses import RedirectResponse
 from starlette.concurrency import run_in_threadpool
 from zoneinfo import ZoneInfo
 
@@ -23,13 +22,11 @@ LOCAL_TZ = ZoneInfo(os.getenv("LOCAL_TZ", "America/Chicago"))
 ROLLING_SCOPE = "rolling"
 
 app = FastAPI(title="DutyWatch Backend (Viewer-Only)")
-templates = Jinja2Templates(directory="templates")
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/ui", StaticFiles(directory="public", html=False), name="ui")
 
 
 class State:
-    # Default: 30 minutes on first run (can be overridden by API)
-    refresh_seconds: int = int(os.getenv("REFRESH_SECONDS", "1800"))
+    refresh_seconds: int = int(os.getenv("REFRESH_SECONDS", "1800"))  # default 30 min
     poll_task: Optional[asyncio.Task] = None
     version: int = 0
     sse_queue: "asyncio.Queue[dict]" = asyncio.Queue()
@@ -61,6 +58,18 @@ def end_of_next_month_local() -> dt.datetime:
     )
     first_after_next = dt.datetime(y2, m2, 1, tzinfo=LOCAL_TZ)
     return (first_after_next - dt.timedelta(seconds=1)).replace(microsecond=0)
+
+
+def next_refresh_at_local(freq_minutes: int, now: Optional[dt.datetime] = None) -> dt.datetime:
+    if now is None:
+        now = dt.datetime.now(LOCAL_TZ)
+    base = now.replace(second=0, microsecond=0)
+    m = base.minute
+    k = (m // freq_minutes) * freq_minutes
+    slot = base.replace(minute=k)
+    if slot <= now:
+        slot += dt.timedelta(minutes=freq_minutes)
+    return slot
 
 
 def iso_to_dt(s: Optional[str]) -> Optional[dt.datetime]:
@@ -421,28 +430,6 @@ async def _emit(event_type: str, payload: dict | None = None):
         pass
 
 
-def _ensure_meta_defaults(meta: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Ensure meta has refresh_minutes and next_run_utc aligned with State.refresh_seconds.
-    Only sets defaults if missing; does not override existing user choice.
-    """
-    changed = False
-
-    if "refresh_minutes" not in meta:
-        meta["refresh_minutes"] = max(1, state.refresh_seconds // 60)  # default 30
-        changed = True
-
-    if not meta.get("next_run_utc"):
-        # next run = now + refresh_minutes
-        nxt = (_now_utc() + dt.timedelta(minutes=int(meta["refresh_minutes"]))).replace(microsecond=0)
-        meta["next_run_utc"] = nxt.isoformat()
-        changed = True
-
-    if changed:
-        write_cache_meta(meta)
-    return meta
-
-
 def _next_from_meta(meta: Dict[str, Any]) -> dt.datetime:
     mins = int(meta.get("refresh_minutes", max(1, state.refresh_seconds // 60)))
     nxt = iso_to_dt(meta.get("next_run_utc"))
@@ -450,8 +437,6 @@ def _next_from_meta(meta: Dict[str, Any]) -> dt.datetime:
         nxt = _now_utc()
     if nxt <= _now_utc():
         nxt = (_now_utc() + dt.timedelta(minutes=mins)).replace(microsecond=0)
-        meta["next_run_utc"] = nxt.isoformat()
-        write_cache_meta(meta)
     return nxt
 
 
@@ -459,14 +444,13 @@ async def pull_and_update_once() -> bool:
     try:
         events = await run_in_threadpool(fetch_current_to_next_eom)
         meta = await run_in_threadpool(read_cache_meta)
-        meta = await run_in_threadpool(_ensure_meta_defaults, meta)
 
         changed = json.dumps(meta.get("events", []), sort_keys=True) != json.dumps(events, sort_keys=True)
 
         meta["events"] = events
         meta["last_pull_utc"] = _now_utc().isoformat()
-        # push next run forward from "now" to avoid drift
-        mins = int(meta.get("refresh_minutes", max(1, state.refresh_seconds // 60)))
+        meta.setdefault("refresh_minutes", max(1, state.refresh_seconds // 60))
+        mins = int(meta.get("refresh_minutes", 5))
         meta["next_run_utc"] = (_now_utc() + dt.timedelta(minutes=mins)).replace(microsecond=0).isoformat()
         await run_in_threadpool(write_cache_meta, meta)
 
@@ -483,7 +467,6 @@ async def pull_and_update_once() -> bool:
 async def poller_loop():
     while not state.shutdown_event.is_set():
         meta = await run_in_threadpool(read_cache_meta)
-        meta = await run_in_threadpool(_ensure_meta_defaults, meta)
         nxt = _next_from_meta(meta)
         delay = max(1.0, (nxt - _now_utc()).total_seconds())
         try:
@@ -498,9 +481,6 @@ async def poller_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    # Initialize meta with 30m default if empty
-    meta = read_cache_meta()
-    _ensure_meta_defaults(meta)
     state.poll_task = asyncio.create_task(poller_loop())
     try:
         yield
@@ -520,27 +500,12 @@ app.router.lifespan_context = lifespan
 def health():
     return {"ok": True}
 
+# Pure static front-end
+@app.get("/")
+def root():
+    return RedirectResponse("/ui/pairings/index.html")
 
-@app.get("/", response_class=HTMLResponse)
-@app.get("/calendar/pairings", response_class=HTMLResponse)
-async def pairings_page(request: Request):
-    # Pass boot JSON: clock defaults to 12h, refresh comes from meta
-    meta = await run_in_threadpool(read_cache_meta)
-    meta = await run_in_threadpool(_ensure_meta_defaults, meta)
-    saved_minutes = int(meta.get("refresh_minutes", max(1, state.refresh_seconds // 60)))
-    dw_boot = {
-        "clockMode": "12",          # default UI clock
-        "onlyReports": True,
-        "tz": "CT",
-        "refreshMinutes": saved_minutes,  # reflect server schedule
-        "apiBase": "",
-    }
-    return templates.TemplateResponse(
-        "pairings.html",
-        {"request": request, "dw_boot_json": json.dumps(dw_boot, ensure_ascii=False)},
-    )
-
-
+# JSON the front-end consumes
 @app.get("/api/pairings")
 async def api_pairings(
     year: Optional[int] = Query(default=None, ge=1970, le=2100),
@@ -549,8 +514,6 @@ async def api_pairings(
     is_24h: int = Query(default=0),
 ):
     meta = await run_in_threadpool(read_cache_meta)
-    meta = await run_in_threadpool(_ensure_meta_defaults, meta)
-
     events = normalize_cached_events(meta)
     y, m = (year, month) if (year and month) else pick_default_month(events)
     month_events = filter_events_to_month(events, y, m)
@@ -581,24 +544,23 @@ async def api_pairings(
         "next_pull_local_iso": nr_local.isoformat() if nr_local else "",
         "seconds_to_next": seconds_to_next,
         "tz_label": "CT",
+        "refresh_minutes": int(meta.get("refresh_minutes", max(1, state.refresh_seconds // 60))),
         "rows": rows,
         "version": state.version,
         "year": y,
         "month": m,
-        "refresh_minutes": int(meta.get("refresh_minutes", max(1, state.refresh_seconds // 60))),
     }
-
 
 @app.get("/api/status")
 async def api_status():
     meta = await run_in_threadpool(read_cache_meta)
-    meta = await run_in_threadpool(_ensure_meta_defaults, meta)
     return {
         "version": state.version,
         "refresh_minutes": int(meta.get("refresh_minutes", max(1, state.refresh_seconds // 60))),
         "now": dt.datetime.now(LOCAL_TZ).isoformat(),
+        "tz_label": "CT",
+        "default_clock": 12,  # front-end default
     }
-
 
 @app.post("/api/settings/refresh-seconds")
 async def api_set_refresh_seconds(payload: Dict[str, Any]):
@@ -608,26 +570,22 @@ async def api_set_refresh_seconds(payload: Dict[str, Any]):
             raise ValueError
     except Exception:
         raise HTTPException(status_code=400, detail="seconds must be 15..21600")
-
     state.refresh_seconds = secs
 
     meta = await run_in_threadpool(read_cache_meta)
     meta["refresh_minutes"] = max(1, secs // 60)
-    # reset next_run relative to now to keep UI countdown consistent
     meta["next_run_utc"] = (_now_utc() + dt.timedelta(minutes=meta["refresh_minutes"])).replace(microsecond=0).isoformat()
     await run_in_threadpool(write_cache_meta, meta)
 
-    state.wake.set()  # wake poller to recompute immediately
+    state.wake.set()
     await _emit("schedule_update", {"refresh_seconds": secs})
     return {"ok": True, "refresh_seconds": state.refresh_seconds}
-
 
 @app.post("/api/refresh")
 async def api_refresh():
     changed = await pull_and_update_once()
     state.wake.set()
     return {"ok": True, "changed": changed, "version": state.version}
-
 
 @app.get("/api/events")
 async def sse_events():
@@ -637,5 +595,4 @@ async def sse_events():
             msg = await state.sse_queue.get()
             evt_type = msg.get("type", "change")
             yield f"event: {evt_type}\ndata: {json.dumps(msg)}\n\n"
-
     return StreamingResponse(event_stream(), media_type="text/event-stream")
