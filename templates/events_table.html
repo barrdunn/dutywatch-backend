@@ -48,7 +48,7 @@
         <td><strong>{{ p.pairing_id }}</strong></td>
         <td>{{ p.pairing_start_local or "—" }}</td>
         <td>{{ p.pairing_end_local or "—" }}</td>
-        <td><span class="pill">{{ p.days|length }} day{{ 's' if p.days|length>1 }}</span></td>
+        <td><span class="pill">{{ p.days|length }} day</span></td>
       </tr>
       {% for d in p.days %}
       <tr id="sub-{{ loop.parent.index }}" class="sub" style="display:none">

@@ -258,8 +258,13 @@ def build_pairing_rows(
         if pairing_report_local is None:
             pairing_report_local = first_evt_local
         if pairing_release_local is None:
-            # if we can’t anchor, fall back to the last event’s local end
             pairing_release_local = to_local(iso_to_dt(evs_sorted[-1].get("end_utc")))
+
+        # --- FIX: handle overnight wrap (release after midnight) ---
+        if pairing_report_local and pairing_release_local:
+            if pairing_release_local < pairing_report_local:
+                pairing_release_local = pairing_release_local + dt.timedelta(days=1)
+        # -----------------------------------------------------------
 
         # Display strings
         def dword(d: Optional[dt.datetime]) -> str:
