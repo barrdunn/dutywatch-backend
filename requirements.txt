@@ -17,3 +17,4 @@ openai
 openai
 
 openai>=1.40
+python-multipart # add only if not present
