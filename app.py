@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import FastAPI, Query, Request, Form
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
 from zoneinfo import ZoneInfo
 
 from db import init_db, read_events_cache, overwrite_events_cache
@@ -24,6 +25,9 @@ LOCAL_TZ = ZoneInfo(os.getenv("LOCAL_TZ", "America/Chicago"))
 
 app = FastAPI(title="DutyWatch Backend")
 templates = Jinja2Templates(directory="templates")
+
+# Serve /static for JS/CSS
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # -------------------------- Time helpers --------------------------
 
@@ -39,6 +43,16 @@ def end_of_this_month_local() -> dt.datetime:
     last = (first_next - dt.timedelta(seconds=1)).replace(microsecond=0)
     return last
 
+def end_of_next_month_local() -> dt.datetime:
+    now_local = dt.datetime.now(LOCAL_TZ)
+    y, m = now_local.year, now_local.month
+    # first day of next month
+    first_next = dt.datetime(y + (1 if m == 12 else 0), (m % 12) + 1, 1, tzinfo=LOCAL_TZ)
+    # first day of month after next
+    y2, m2 = (first_next.year + (1 if first_next.month == 12 else 0), (first_next.month % 12) + 1)
+    first_after_next = dt.datetime(y2, m2, 1, tzinfo=LOCAL_TZ)
+    return (first_after_next - dt.timedelta(seconds=1)).replace(microsecond=0)
+
 def next_refresh_at_local(freq_minutes: int, now: Optional[dt.datetime] = None) -> dt.datetime:
     """
     Round *up* to the next multiple of freq_minutes from the top of the hour, in LOCAL_TZ.
@@ -49,7 +63,6 @@ def next_refresh_at_local(freq_minutes: int, now: Optional[dt.datetime] = None) 
     if now is None:
         now = dt.datetime.now(LOCAL_TZ)
     base = now.replace(second=0, microsecond=0)
-    # minutes since hour
     m = base.minute
     k = (m // freq_minutes) * freq_minutes
     slot = base.replace(minute=k)
@@ -126,7 +139,9 @@ def human_ago(from_dt: Optional[dt.datetime]) -> str:
     days = hours // 24
     return f"{days} day{'s' if days != 1 else ''} ago"
 
-# -------------------------- Cache normalization --------------------------
+# -------------------------- Cache helpers --------------------------
+
+ROLLING_SCOPE = "rolling"
 
 def normalize_cached_events(raw) -> List[Dict[str, Any]]:
     """
@@ -424,8 +439,6 @@ def build_pairing_rows(
 
 # -------------------------- Rolling window fetch --------------------------
 
-ROLLING_SCOPE = "rolling"
-
 def fetch_current_to_next_eom() -> List[Dict[str, Any]]:
     now = dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc)
     y, m = now.year, now.month
@@ -452,7 +465,6 @@ def calendar_refresh(request: Request):
         meta = read_cache_meta()
         meta["events"] = events
         meta["last_pull_utc"] = dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc).isoformat()
-        # keep refresh_minutes if already set; else default 30
         if "refresh_minutes" not in meta:
             meta["refresh_minutes"] = 30
         write_cache_meta(meta)
@@ -475,9 +487,10 @@ def settings_refresh(minutes: int = Form(...)):
     meta = read_cache_meta()
     meta["refresh_minutes"] = minutes
     write_cache_meta(meta)
-    # respond with the next refresh timestamp (local) as a convenience
     nxt = next_refresh_at_local(minutes)
-    return {"ok": True, "refresh_minutes": minutes, "next_refresh_local": nxt.strftime("%-I:%M %p") if os.name != "nt" else nxt.strftime("%I:%M %p").lstrip("0")}
+    # %-I is not portable on Windows; lstrip leading zero as fallback
+    nxt_str = nxt.strftime("%-I:%M %p") if os.name != "nt" else nxt.strftime("%I:%M %p").lstrip("0")
+    return {"ok": True, "refresh_minutes": minutes, "next_refresh_local": nxt_str}
 
 @app.get("/calendar/pairings")
 def pairings_page(
@@ -503,8 +516,8 @@ def pairings_page(
             return JSONResponse(status_code=500, content={"ok": False, "error": f"{type(e).__name__}: {e}"})
 
     # Header strings
-    last_pull_local_str = "never"
     last_pull_dt_local: Optional[dt.datetime] = None
+    last_pull_local_str = "never"
     lp = meta.get("last_pull_utc")
     if lp:
         try:
@@ -514,15 +527,16 @@ def pairings_page(
             pass
 
     refresh_minutes = int(meta.get("refresh_minutes", 30))
-    next_pull_local_str = next_refresh_at_local(refresh_minutes).strftime("%-I:%M %p") if os.name != "nt" else next_refresh_at_local(refresh_minutes).strftime("%I:%M %p").lstrip("0")
+    nxt = next_refresh_at_local(refresh_minutes)
+    next_pull_local_str = nxt.strftime("%-I:%M %p") if os.name != "nt" else nxt.strftime("%I:%M %p").lstrip("0")
 
-    eom = end_of_this_month_local()
-    looking_through_str = f"Today – {eom.strftime('%b %d (%a)')}"
+    # Looking through: Today → end of next month (always shows out through next month)
+    looking_end = end_of_next_month_local()
+    looking_through_str = f"Today – {looking_end.strftime('%b %d (%a)')}"
 
     # Month filtering for rows
     y, m = (year, month) if (year and month) else pick_default_month(events)
     month_events = filter_events_to_month(events, y, m)
-
     rows = build_pairing_rows(month_events, is_24h=bool(is_24h), only_reports=bool(only_reports))
 
     return templates.TemplateResponse(
@@ -536,8 +550,9 @@ def pairings_page(
             "is_24h": int(bool(is_24h)),
             "looking_through": looking_through_str,
             "last_pull_local": last_pull_local_str,
+            "last_pull_local_iso": last_pull_dt_local.isoformat() if last_pull_dt_local else "",
             "next_pull_local": next_pull_local_str,
             "refresh_minutes": refresh_minutes,
-            "tz_label": "CT",  # display hint for Central Time
+            "tz_label": "CT",
         },
     )

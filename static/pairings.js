@@ -1,0 +1,168 @@
+// === DutyWatch Pairings page script ===
+
+(function () {
+  const CT = 'America/Chicago';
+
+  // Boot params from server
+  const BOOT = (window.DW_BOOT || {});
+  const DEFAULT_MINUTES = Number(BOOT.refreshMinutes || 30);
+  const ONLY_INIT = Number(BOOT.onlyReports || 0) === 1;
+  const CLOCK_INIT = String(BOOT.clockMode || '12');
+
+  // Elements
+  const statusEl = document.getElementById('status-line');
+  const lastPullSpan = document.getElementById('last-pull');
+  const nextRefreshSpan = document.getElementById('next-refresh');
+  const refreshSelect = document.getElementById('refresh-mins');
+  const onlyBtn = document.getElementById('toggle-only');
+  const onlyState = document.getElementById('toggle-only-state');
+  const clkBtn = document.getElementById('toggle-clock');
+  const clkState = document.getElementById('toggle-clock-state');
+
+  // ===== Helpers =====
+  function fmtTimeCT(d) {
+    return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: CT });
+  }
+  function minutesAgo(iso) {
+    if (!iso) return null;
+    const t = new Date(iso);
+    const now = new Date();
+    const ms = now - t;
+    return Math.max(0, Math.round(ms / 60000));
+  }
+  function setQueryParam(url, key, val) {
+    const u = new URL(url, window.location.href);
+    u.searchParams.set(key, String(val));
+    return u.toString();
+  }
+
+  // ===== Live "Last pull" =====
+  const lastPullISO = statusEl?.dataset?.lastpull || '';
+  function tickRelative() {
+    if (!lastPullSpan) return;
+    if (!lastPullISO) return;
+    const mins = minutesAgo(lastPullISO);
+    if (mins == null) return;
+    lastPullSpan.textContent = mins === 0 ? 'just now' : `${mins} min${mins === 1 ? '' : 's'} ago`;
+  }
+
+  // ===== Auto-refresh scheduling =====
+  const REF_KEY = 'dw_refresh_minutes';
+  function getRefreshMinutes() {
+    const saved = Number(localStorage.getItem(REF_KEY)) || 0;
+    if (saved >= 1 && saved <= 60) return saved;
+    return DEFAULT_MINUTES;
+  }
+  function setSelectTo(minutes) {
+    if (!refreshSelect) return;
+    const opts = Array.from(refreshSelect.options).map(o => Number(o.value));
+    refreshSelect.value = String(opts.includes(minutes) ? minutes : DEFAULT_MINUTES);
+  }
+
+  let loopTimer = null;
+
+  function scheduleLoop() {
+    if (loopTimer) {
+      clearInterval(loopTimer);
+      loopTimer = null;
+    }
+    const minutes = getRefreshMinutes();
+    localStorage.setItem(REF_KEY, String(minutes));
+
+    // Update URL param so server paints consistent "Next refresh"
+    const withParam = setQueryParam(window.location.href, 'refresh_minutes', minutes);
+    if (withParam !== window.location.href) {
+      history.replaceState(null, '', withParam);
+    }
+
+    // Compute and display the next refresh time (client view)
+    const now = new Date();
+    const nextAt = new Date(now.getTime() + minutes * 60000);
+    if (nextRefreshSpan) {
+      nextRefreshSpan.textContent = `${fmtTimeCT(nextAt)} (CT)`;
+    }
+
+    // Every N minutes → POST /calendar/refresh then reload
+    loopTimer = setInterval(async () => {
+      try {
+        await fetch('/calendar/refresh', { method: 'POST' });
+      } catch (e) {
+        // ignore; reload will retry
+      } finally {
+        const url = setQueryParam(window.location.href, 'refresh_minutes', minutes);
+        window.location.href = url;
+      }
+    }, minutes * 60000);
+  }
+
+  // Initialize select and handler
+  if (refreshSelect) {
+    setSelectTo(getRefreshMinutes());
+    refreshSelect.addEventListener('change', async () => {
+      const minutes = Number(refreshSelect.value);
+      if (![1, 5, 10, 15, 30].includes(minutes)) return;
+      try {
+        // Persist server-side (optional but keeps server-side header aligned)
+        await fetch('/settings/refresh', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ minutes: String(minutes) }).toString()
+        });
+      } catch (_) {}
+      localStorage.setItem(REF_KEY, String(minutes));
+      scheduleLoop(); // reschedule & update "Next refresh"
+    });
+  }
+
+  // ===== Table expand/collapse =====
+  document.querySelectorAll('tr.summary').forEach(sum => {
+    sum.addEventListener('click', () => {
+      const idx = sum.getAttribute('data-idx');
+      const details = document.querySelector(`tr.details[data-idx="${idx}"]`);
+      if (details) details.classList.toggle('hide');
+    });
+  });
+
+  // ===== Only-with-report filter (presentation-only) =====
+  function applyOnlyReportFilter(on) {
+    const rows = Array.from(document.querySelectorAll('tbody > tr'));
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      if (!r.classList.contains('summary')) continue;
+      const hasReport = r.getAttribute('data-has-report') === '1';
+      const show = !on || hasReport;
+      const idx = r.getAttribute('data-idx');
+      const detail = document.querySelector(`tr.details[data-idx="${idx}"]`);
+      const off = rows[i + 2] && rows[i + 2].classList.contains('off') ? rows[i + 2] : null;
+      r.style.display = show ? '' : 'none';
+      if (detail) detail.style.display = show ? '' : 'none';
+      if (off) off.style.display = show ? '' : 'none';
+    }
+  }
+  applyOnlyReportFilter(ONLY_INIT);
+  if (onlyBtn && onlyState) {
+    onlyBtn.addEventListener('click', () => {
+      const on = onlyBtn.getAttribute('data-on') === '1';
+      const next = !on;
+      onlyBtn.setAttribute('data-on', next ? '1' : '0');
+      onlyState.textContent = next ? 'ON' : 'OFF';
+      applyOnlyReportFilter(next);
+    });
+  }
+
+  // ===== Clock toggle (label only; display stays as rendered) =====
+  if (clkBtn && clkState) {
+    clkBtn.addEventListener('click', () => {
+      const cur = clkBtn.getAttribute('data-clock') || CLOCK_INIT;
+      const next = cur === '12' ? '24' : '12';
+      clkBtn.setAttribute('data-clock', next);
+      clkState.textContent = next === '24' ? '24h' : '12h';
+      // If you later want server-side reformat, reload with ?is_24h=1 here.
+    });
+  }
+
+  // ===== Kick-off =====
+  tickRelative();
+  setInterval(tickRelative, 15000);
+  scheduleLoop();
+})();

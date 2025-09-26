@@ -21,19 +21,22 @@
       --pairing-bg-hover: rgba(61, 153, 106, 0.26);
       --pairing-border: rgba(73, 179, 124, 0.35);
       --strike: #84a1b7;
-      --note: #c6d4e2;
+      --chip: #182231;
     }
     body { margin: 0; background: var(--bg); color: var(--text);
       font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial, "Noto Sans", sans-serif; }
     .wrap { max-width: 1100px; margin: 28px auto; padding: 0 16px; }
     .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 16px; box-shadow: 0 6px 18px rgba(0,0,0,0.25); }
     h1 { margin: 0 0 8px; font-size: 22px; }
-    .sub { color: var(--note); margin-bottom: 16px; font-size: 13px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+
+    .sub { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin: 8px 0 16px; }
+    .chip { background: var(--chip); border: 1px solid var(--border); border-radius: 999px; padding: 4px 10px; color: var(--muted); font-weight: 600; }
+
     .controls { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
     .controls form { display: inline-flex; gap: 8px; align-items: center; }
     .btn { background: var(--accent); color: #031323; border: none; border-radius: 10px; padding: 8px 12px; font-weight: 600; cursor: pointer; }
     .toggle { background: transparent; color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 6px 10px; cursor: pointer; }
-    .sel { background: transparent; color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 6px 8px; }
+    select.toggle { padding: 6px 10px; }
 
     table { width: 100%; border-collapse: separate; border-spacing: 0 10px; }
     th, td { padding: 10px 12px; }
@@ -41,7 +44,6 @@
 
     tr.summary { background: var(--pairing-bg); border: 1px solid var(--pairing-border); cursor: pointer; }
     tr.summary:hover { background: var(--pairing-bg-hover); }
-
     tr.details { background: var(--row-alt); border: 1px dashed var(--border); }
     tr.off { background: var(--row); border: 1px solid var(--border); }
 
@@ -57,11 +59,9 @@
     .off-dur { font-weight: 800; color: var(--off); }
     .hide { display: none; }
 
-    /* completed legs */
+    /* strikethrough for completed legs */
     .leg-done td { text-decoration: line-through; color: var(--strike); }
     .progress { font-weight: 800; margin-left: 8px; color: var(--green); }
-
-    .chip { border: 1px solid var(--border); padding: 4px 8px; border-radius: 999px; }
   </style>
 </head>
 <body>
@@ -69,26 +69,27 @@
     <div class="card">
       <h1>Pairings</h1>
 
-      <div class="sub" id="status-line">
+      <div class="sub" id="status-line" data-lastpull="{{ last_pull_local_iso or '' }}">
         <span class="chip">Looking through <strong>{{ looking_through }}</strong></span>
         <span class="chip">Last pull: <strong id="last-pull">{{ last_pull_local }}</strong></span>
-        <span class="chip">Next refresh: <strong id="next-pull">{{ next_pull_local }}</strong> <span class="muted">({{ tz_label }})</span></span>
-
-        <label class="chip" style="display:inline-flex; gap:6px; align-items:center;">
-          Auto-refresh:
-          <select id="refresh-select" class="sel">
-            {% set opts = [1,5,10,15,30] %}
-            {% for o in opts %}
-              <option value="{{ o }}" {% if o == refresh_minutes %}selected{% endif %}>every {{ o }} min{% if o>1 %}s{% endif %}</option>
-            {% endfor %}
-          </select>
-        </label>
+        <span class="chip">Next refresh: <strong id="next-refresh">{{ next_pull_local }} ({{ tz_label }})</strong></span>
       </div>
 
       <div class="controls">
         <form method="post" action="/calendar/refresh">
           <button class="btn" type="submit">Pull / Refresh</button>
         </form>
+
+        <label class="toggle" style="display:flex;align-items:center;gap:8px;">
+          Auto-refresh:
+          <select id="refresh-mins" class="toggle">
+            <option value="1">1 min</option>
+            <option value="5">5 mins</option>
+            <option value="10">10 mins</option>
+            <option value="15">15 mins</option>
+            <option value="30">30 mins</option>
+          </select>
+        </label>
 
         <button id="toggle-only" class="toggle" data-on="{{ 1 if only_reports else 0 }}">
           Only with report: <strong id="toggle-only-state">{{ 'ON' if only_reports else 'OFF' }}</strong>
@@ -179,76 +180,15 @@
     </div>
   </div>
 
+  <!-- External page script -->
   <script>
-    // Expand/collapse
-    document.querySelectorAll('tr.summary').forEach(sum => {
-      sum.addEventListener('click', () => {
-        const idx = sum.getAttribute('data-idx');
-        const details = document.querySelector(`tr.details[data-idx="${idx}"]`);
-        if (details) details.classList.toggle('hide');
-      });
-    });
-
-    // Only-with-report front-end filter (no server hit)
-    const onlyBtn = document.getElementById('toggle-only');
-    const onlyState = document.getElementById('toggle-only-state');
-    function applyOnlyReportFilter(on) {
-      const rows = Array.from(document.querySelectorAll('tbody > tr'));
-      for (let i = 0; i < rows.length; i++) {
-        const r = rows[i];
-        if (!r.classList.contains('summary')) continue;
-        const hasReport = r.getAttribute('data-has-report') === '1';
-        const show = !on || hasReport;
-        const idx = r.getAttribute('data-idx');
-        const detail = document.querySelector(`tr.details[data-idx="${idx}"]`);
-        const off = rows[i + 2] && rows[i + 2].classList.contains('off') ? rows[i + 2] : null;
-        r.style.display = show ? '' : 'none';
-        if (detail) detail.style.display = show ? '' : 'none';
-        if (off) off.style.display = show ? '' : 'none';
-      }
-    }
-    (function initOnly(){
-      const initial = {{ 1 if only_reports else 0 }};
-      applyOnlyReportFilter(initial === 1);
-    })();
-    onlyBtn.addEventListener('click', () => {
-      const on = onlyBtn.getAttribute('data-on') === '1';
-      const next = !on;
-      onlyBtn.setAttribute('data-on', next ? '1' : '0');
-      onlyState.textContent = next ? 'ON' : 'OFF';
-      applyOnlyReportFilter(next);
-    });
-
-    // Clock toggle label (client-side label only; times in rows are already formatted server-side)
-    const clkBtn = document.getElementById('toggle-clock');
-    const clkState = document.getElementById('toggle-clock-state');
-    clkBtn.addEventListener('click', () => {
-      const cur = clkBtn.getAttribute('data-clock') || '12';
-      const next = cur === '12' ? '24' : '12';
-      clkBtn.setAttribute('data-clock', next);
-      clkState.textContent = next === '24' ? '24h' : '12h';
-      // If you want live reformat without reload, we could add JS to transform visible times;
-      // for now, this is a visual hint only (no fetch).
-    });
-
-    // Refresh frequency dropdown
-    const refreshSelect = document.getElementById('refresh-select');
-    const nextPullEl = document.getElementById('next-pull');
-
-    refreshSelect.addEventListener('change', async () => {
-      const minutes = parseInt(refreshSelect.value, 10);
-      try {
-        const form = new FormData();
-        form.append('minutes', String(minutes));
-        const res = await fetch('/settings/refresh', { method: 'POST', body: form });
-        const data = await res.json();
-        if (data.ok) {
-          nextPullEl.textContent = data.next_refresh_local || nextPullEl.textContent;
-        }
-      } catch (e) {
-        console.error(e);
-      }
-    });
+    window.DW_BOOT = {
+      refreshMinutes: {{ refresh_minutes|int }},
+      onlyReports: {{ 1 if only_reports else 0 }},
+      clockMode: "{{ '24' if is_24h else '12' }}",
+      tz: "{{ tz_label }}"
+    };
   </script>
+  <script src="/static/pairings.js"></script>
 </body>
 </html>
