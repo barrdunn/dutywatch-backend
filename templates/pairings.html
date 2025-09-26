@@ -21,22 +21,19 @@
       --pairing-bg-hover: rgba(61, 153, 106, 0.26);
       --pairing-border: rgba(73, 179, 124, 0.35);
       --strike: #84a1b7;
-      --chip: #0f1a26;
+      --note: #c6d4e2;
     }
     body { margin: 0; background: var(--bg); color: var(--text);
       font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial, "Noto Sans", sans-serif; }
     .wrap { max-width: 1100px; margin: 28px auto; padding: 0 16px; }
     .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 16px; box-shadow: 0 6px 18px rgba(0,0,0,0.25); }
-    h1 { margin: 0 0 12px; font-size: 22px; }
-
-    .info { display: flex; gap: 10px; flex-wrap: wrap; margin: 6px 0 14px; }
-    .chip { background: var(--chip); border: 1px solid var(--border); border-radius: 999px; padding: 6px 10px; color: var(--muted); }
-    .chip b { color: var(--text); }
-
+    h1 { margin: 0 0 8px; font-size: 22px; }
+    .sub { color: var(--note); margin-bottom: 16px; font-size: 13px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
     .controls { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
     .controls form { display: inline-flex; gap: 8px; align-items: center; }
     .btn { background: var(--accent); color: #031323; border: none; border-radius: 10px; padding: 8px 12px; font-weight: 600; cursor: pointer; }
     .toggle { background: transparent; color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 6px 10px; cursor: pointer; }
+    .sel { background: transparent; color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 6px 8px; }
 
     table { width: 100%; border-collapse: separate; border-spacing: 0 10px; }
     th, td { padding: 10px 12px; }
@@ -44,6 +41,7 @@
 
     tr.summary { background: var(--pairing-bg); border: 1px solid var(--pairing-border); cursor: pointer; }
     tr.summary:hover { background: var(--pairing-bg-hover); }
+
     tr.details { background: var(--row-alt); border: 1px dashed var(--border); }
     tr.off { background: var(--row); border: 1px solid var(--border); }
 
@@ -59,8 +57,11 @@
     .off-dur { font-weight: 800; color: var(--off); }
     .hide { display: none; }
 
+    /* completed legs */
     .leg-done td { text-decoration: line-through; color: var(--strike); }
     .progress { font-weight: 800; margin-left: 8px; color: var(--green); }
+
+    .chip { border: 1px solid var(--border); padding: 4px 8px; border-radius: 999px; }
   </style>
 </head>
 <body>
@@ -68,10 +69,20 @@
     <div class="card">
       <h1>Pairings</h1>
 
-      <div class="info">
-        <span class="chip"><b>Looking through</b> {{ looking_through }}</span>
-        <span class="chip"><b>Last pull</b> {{ last_pull_local }}</span>
-        <span class="chip"><b>Next pull</b> {{ next_pull_local }}</span>
+      <div class="sub" id="status-line">
+        <span class="chip">Looking through <strong>{{ looking_through }}</strong></span>
+        <span class="chip">Last pull: <strong id="last-pull">{{ last_pull_local }}</strong></span>
+        <span class="chip">Next refresh: <strong id="next-pull">{{ next_pull_local }}</strong> <span class="muted">({{ tz_label }})</span></span>
+
+        <label class="chip" style="display:inline-flex; gap:6px; align-items:center;">
+          Auto-refresh:
+          <select id="refresh-select" class="sel">
+            {% set opts = [1,5,10,15,30] %}
+            {% for o in opts %}
+              <option value="{{ o }}" {% if o == refresh_minutes %}selected{% endif %}>every {{ o }} min{% if o>1 %}s{% endif %}</option>
+            {% endfor %}
+          </select>
+        </label>
       </div>
 
       <div class="controls">
@@ -106,24 +117,8 @@
               <span class="pill">{{ row.days|length }} day</span>
               {% if row.in_progress %}<span class="progress">(In progress)</span>{% endif %}
             </td>
-            <td>
-              {% set rday = row.display.report_day %}
-              {% set rh = row.display.report_hhmm %}
-              <span class="report-day">{{ rday }}</span>
-              {% if rh %}
-                <span class="report-time"
-                      data-hhmm="{{ rh }}">{{ rh }}</span>
-              {% endif %}
-            </td>
-            <td>
-              {% set lday = row.display.release_day %}
-              {% set lh = row.display.release_hhmm %}
-              <span class="release-day">{{ lday }}</span>
-              {% if lh %}
-                <span class="release-time"
-                      data-hhmm="{{ lh }}">{{ lh }}</span>
-              {% endif %}
-            </td>
+            <td>{{ row.display.report_str }}</td>
+            <td>{{ row.display.release_str }}</td>
             <td class="muted">click to expand days</td>
           </tr>
 
@@ -153,13 +148,9 @@
                             <td>{{ leg.flight or '' }}</td>
                             <td>{{ leg.dep }}–{{ leg.arr }}</td>
                             <td>
-                              <span class="leg-dep" data-hhmm="{{ leg.dep_time|default('', true) }}">
-                                {{ leg.dep_time_str or leg.dep_time or '' }}
-                              </span>
+                              {{ leg.dep_time_str or leg.dep_time or '' }}
                               &nbsp;→&nbsp;
-                              <span class="leg-arr" data-hhmm="{{ leg.arr_time|default('', true) }}">
-                                {{ leg.arr_time_str or leg.arr_time or '' }}
-                              </span>
+                              {{ leg.arr_time_str or leg.arr_time or '' }}
                             </td>
                           </tr>
                         {% endfor %}
@@ -198,7 +189,7 @@
       });
     });
 
-    // Only-with-report front-end filter (instant)
+    // Only-with-report front-end filter (no server hit)
     const onlyBtn = document.getElementById('toggle-only');
     const onlyState = document.getElementById('toggle-only-state');
     function applyOnlyReportFilter(on) {
@@ -210,9 +201,10 @@
         const show = !on || hasReport;
         const idx = r.getAttribute('data-idx');
         const detail = document.querySelector(`tr.details[data-idx="${idx}"]`);
-        // OFF rows are not strictly coupled to summaries anymore, so don't try to show/hide them here.
+        const off = rows[i + 2] && rows[i + 2].classList.contains('off') ? rows[i + 2] : null;
         r.style.display = show ? '' : 'none';
         if (detail) detail.style.display = show ? '' : 'none';
+        if (off) off.style.display = show ? '' : 'none';
       }
     }
     (function initOnly(){
@@ -227,46 +219,35 @@
       applyOnlyReportFilter(next);
     });
 
-    // Clock toggle (instant)
+    // Clock toggle label (client-side label only; times in rows are already formatted server-side)
     const clkBtn = document.getElementById('toggle-clock');
     const clkState = document.getElementById('toggle-clock-state');
-
-    function fmt12(hhmm) {
-      if (!hhmm || hhmm.length < 3) return hhmm || '';
-      hhmm = hhmm.padStart(4, '0');
-      const h = parseInt(hhmm.slice(0,2), 10);
-      const m = hhmm.slice(2,4);
-      const ampm = h < 12 ? 'AM' : 'PM';
-      const h12 = (h % 12) || 12;
-      return `${h12}:${m} ${ampm}`;
-    }
-    function fmt24(hhmm) {
-      if (!hhmm || hhmm.length < 3) return hhmm || '';
-      return hhmm.padStart(4, '0');
-    }
-    function applyClockFormat(use24) {
-      // Summary report/release times
-      document.querySelectorAll('.report-time, .release-time').forEach(el => {
-        const hhmm = el.getAttribute('data-hhmm') || '';
-        el.textContent = use24 ? fmt24(hhmm) : fmt12(hhmm);
-      });
-      // Legs times
-      document.querySelectorAll('.leg-dep, .leg-arr').forEach(el => {
-        const hhmm = el.getAttribute('data-hhmm') || '';
-        if (!hhmm) return;
-        el.textContent = use24 ? fmt24(hhmm) : fmt12(hhmm);
-      });
-    }
-    (function initClock(){
-      const initial24 = {{ 1 if is_24h else 0 }} === 1;
-      applyClockFormat(initial24);
-    })();
     clkBtn.addEventListener('click', () => {
       const cur = clkBtn.getAttribute('data-clock') || '12';
       const next = cur === '12' ? '24' : '12';
       clkBtn.setAttribute('data-clock', next);
       clkState.textContent = next === '24' ? '24h' : '12h';
-      applyClockFormat(next === '24');
+      // If you want live reformat without reload, we could add JS to transform visible times;
+      // for now, this is a visual hint only (no fetch).
+    });
+
+    // Refresh frequency dropdown
+    const refreshSelect = document.getElementById('refresh-select');
+    const nextPullEl = document.getElementById('next-pull');
+
+    refreshSelect.addEventListener('change', async () => {
+      const minutes = parseInt(refreshSelect.value, 10);
+      try {
+        const form = new FormData();
+        form.append('minutes', String(minutes));
+        const res = await fetch('/settings/refresh', { method: 'POST', body: form });
+        const data = await res.json();
+        if (data.ok) {
+          nextPullEl.textContent = data.next_refresh_local || nextPullEl.textContent;
+        }
+      } catch (e) {
+        console.error(e);
+      }
     });
   </script>
 </body>

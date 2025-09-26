@@ -4,57 +4,57 @@ DutyWatch FastAPI — Pairings view with OFF gaps (local time, dark UI)
 
 from __future__ import annotations
 
+import os
 import datetime as dt
 import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import FastAPI, Query, Request
+from fastapi import FastAPI, Query, Request, Form
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from zoneinfo import ZoneInfo
 
 from db import init_db, read_events_cache, overwrite_events_cache
 import cal_client as cal
 
-# Optional LLM parser
-try:
-    from llm_parser import parse_pairing_days as parse_pairing_days_llm
-except Exception:
-    parse_pairing_days_llm = None
+# -------------------------- Local time zone --------------------------
+# Force Central Time by default; can override with LOCAL_TZ env (e.g. "America/Chicago").
+LOCAL_TZ = ZoneInfo(os.getenv("LOCAL_TZ", "America/Chicago"))
 
 app = FastAPI(title="DutyWatch Backend")
 templates = Jinja2Templates(directory="templates")
 
 # -------------------------- Time helpers --------------------------
 
-LOCAL_TZ = dt.datetime.now().astimezone().tzinfo  # server local tz
-
 def month_bounds(year: int, month: int) -> Tuple[dt.datetime, dt.datetime]:
     start = dt.datetime(year, month, 1, tzinfo=dt.timezone.utc)
     end = dt.datetime(year + (month // 12), (month % 12) + 1, 1, tzinfo=dt.timezone.utc)
     return start, end
 
-def end_of_next_month_local() -> dt.datetime:
-    """End of next month (local tz)."""
+def end_of_this_month_local() -> dt.datetime:
     now_local = dt.datetime.now(LOCAL_TZ)
     y, m = now_local.year, now_local.month
-    # first day of next month
     first_next = dt.datetime(y + (1 if m == 12 else 0), (m % 12) + 1, 1, tzinfo=LOCAL_TZ)
-    # first day of month after next
-    y2, m2 = first_next.year, first_next.month
-    first_after_next = dt.datetime(y2 + (1 if m2 == 12 else 0), (m2 % 12) + 1, 1, tzinfo=LOCAL_TZ)
-    # end of next month
-    last = (first_after_next - dt.timedelta(seconds=1)).replace(microsecond=0)
+    last = (first_next - dt.timedelta(seconds=1)).replace(microsecond=0)
     return last
 
-def next_half_hour_slot_local(now: Optional[dt.datetime] = None) -> dt.datetime:
-    """Round up to the next :00 or :30 in LOCAL_TZ."""
+def next_refresh_at_local(freq_minutes: int, now: Optional[dt.datetime] = None) -> dt.datetime:
+    """
+    Round *up* to the next multiple of freq_minutes from the top of the hour, in LOCAL_TZ.
+    Example: now=10:44, freq=5  -> 10:45
+             now=10:44, freq=15 -> 10:45
+             now=10:44, freq=30 -> 11:00
+    """
     if now is None:
         now = dt.datetime.now(LOCAL_TZ)
-    minute_slot = 0 if now.minute < 30 else 30
-    slot = now.replace(minute=minute_slot, second=0, microsecond=0)
+    base = now.replace(second=0, microsecond=0)
+    # minutes since hour
+    m = base.minute
+    k = (m // freq_minutes) * freq_minutes
+    slot = base.replace(minute=k)
     if slot <= now:
-        slot += dt.timedelta(minutes=30)
+        slot += dt.timedelta(minutes=freq_minutes)
     return slot
 
 def iso_to_dt(s: Optional[str]) -> Optional[dt.datetime]:
@@ -109,11 +109,10 @@ def human_dur(td: dt.timedelta) -> str:
         return f"{d}d {h}h"
     return f"{total_h}h"
 
-def relative_ago(from_dt: Optional[dt.datetime], now: Optional[dt.datetime] = None) -> str:
+def human_ago(from_dt: Optional[dt.datetime]) -> str:
     if not from_dt:
         return "never"
-    if not now:
-        now = dt.datetime.now(LOCAL_TZ)
+    now = dt.datetime.now(LOCAL_TZ)
     delta = now - from_dt
     secs = int(delta.total_seconds())
     if secs < 60:
@@ -130,6 +129,12 @@ def relative_ago(from_dt: Optional[dt.datetime], now: Optional[dt.datetime] = No
 # -------------------------- Cache normalization --------------------------
 
 def normalize_cached_events(raw) -> List[Dict[str, Any]]:
+    """
+    Accepts either:
+      - a list of event dicts
+      - or a dict with {"events": [...], ...}
+    Returns just the list for event pipeline use. Keep 'raw' for meta fields.
+    """
     if raw is None:
         return []
     if isinstance(raw, list):
@@ -147,6 +152,29 @@ def normalize_cached_events(raw) -> List[Dict[str, Any]]:
     if isinstance(raw, dict) and isinstance(raw.get("events"), list):
         return raw["events"]
     return []
+
+def read_cache_meta() -> Dict[str, Any]:
+    raw = read_events_cache(ROLLING_SCOPE)
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, list):
+        return {"events": raw}
+    if isinstance(raw, str):
+        try:
+            data = json.loads(raw)
+            if isinstance(data, list):
+                return {"events": data}
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+    return {"events": []}
+
+def write_cache_meta(meta: Dict[str, Any]) -> None:
+    # Ensure we always store a dict with at least "events":[]
+    if "events" not in meta or not isinstance(meta["events"], list):
+        meta["events"] = []
+    overwrite_events_cache(ROLLING_SCOPE, meta)
 
 # -------------------------- Parsing helpers --------------------------
 
@@ -182,7 +210,7 @@ def time_display(hhmm: Optional[str], is_24h: bool) -> str:
     if not hhmm:
         return ""
     if is_24h:
-        return ensure_hhmm(hhmm)  # keep pure HHMM in 24h
+        return ensure_hhmm(hhmm)
     return to_12h(hhmm)
 
 def parse_with_regex(text: str) -> Dict[str, Any]:
@@ -221,6 +249,10 @@ def parse_with_regex(text: str) -> Dict[str, Any]:
 
 def parse_pairing_days(description: Optional[str]) -> Dict[str, Any]:
     text = description or ""
+    try:
+        from llm_parser import parse_pairing_days as parse_pairing_days_llm  # optional
+    except Exception:
+        parse_pairing_days_llm = None
     if parse_pairing_days_llm:
         try:
             return parse_pairing_days_llm(text)
@@ -305,7 +337,7 @@ def build_pairing_rows(
             if pairing_release_local < pairing_report_local:
                 pairing_release_local = pairing_release_local + dt.timedelta(days=1)
 
-        # In-progress + per-leg done flags
+        # Mark in-progress + per-leg done flags
         now_local = dt.datetime.now(LOCAL_TZ)
         in_progress = False
         if pairing_report_local and pairing_release_local:
@@ -342,20 +374,17 @@ def build_pairing_rows(
                 "day_index": idx,
             })
 
+        # Display strings
         def dword(d: Optional[dt.datetime]) -> str:
             return d.strftime("%a %b %d") if d else ""
 
         report_disp = ""
-        report_hhmm = None
         if pairing_report_local:
-            report_hhmm = pairing_report_local.strftime('%H%M')
-            report_disp = f"{dword(pairing_report_local)} {time_display(report_hhmm, is_24h)}".strip()
+            report_disp = f"{dword(pairing_report_local)} {time_display(pairing_report_local.strftime('%H%M'), is_24h)}".strip()
 
         release_disp = ""
-        release_hhmm = None
         if pairing_release_local:
-            release_hhmm = pairing_release_local.strftime('%H%M')
-            release_disp = f"{dword(pairing_release_local)} {time_display(release_hhmm, is_24h)}".strip()
+            release_disp = f"{dword(pairing_release_local)} {time_display(pairing_release_local.strftime('%H%M'), is_24h)}".strip()
 
         pairings.append({
             "kind": "pairing",
@@ -366,10 +395,6 @@ def build_pairing_rows(
             "display": {
                 "report_str": report_disp,
                 "release_str": release_disp,
-                "report_hhmm": report_hhmm,
-                "release_hhmm": release_hhmm,
-                "report_day": dword(pairing_report_local) if pairing_report_local else "",
-                "release_day": dword(pairing_release_local) if pairing_release_local else "",
             },
             "days": days_with_flags,
         })
@@ -424,16 +449,35 @@ def health():
 def calendar_refresh(request: Request):
     try:
         events = fetch_current_to_next_eom()
-        overwrite_events_cache(ROLLING_SCOPE, {
-            "events": events,
-            "last_pull_utc": dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc).isoformat()
-        })
+        meta = read_cache_meta()
+        meta["events"] = events
+        meta["last_pull_utc"] = dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc).isoformat()
+        # keep refresh_minutes if already set; else default 30
+        if "refresh_minutes" not in meta:
+            meta["refresh_minutes"] = 30
+        write_cache_meta(meta)
     except Exception as e:
         return JSONResponse(status_code=500, content={"ok": False, "error": f"{type(e).__name__}: {e}"})
     target = "/calendar/pairings"
     if request.query_params:
         target += f"?{request.query_params}"
     return RedirectResponse(target, status_code=303)
+
+@app.post("/settings/refresh")
+def settings_refresh(minutes: int = Form(...)):
+    """
+    Persist the chosen auto-refresh frequency (minutes) in the cache metadata.
+    Accepts 1, 5, 10, 15, 30.
+    """
+    allowed = {1, 5, 10, 15, 30}
+    if minutes not in allowed:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "invalid minutes"})
+    meta = read_cache_meta()
+    meta["refresh_minutes"] = minutes
+    write_cache_meta(meta)
+    # respond with the next refresh timestamp (local) as a convenience
+    nxt = next_refresh_at_local(minutes)
+    return {"ok": True, "refresh_minutes": minutes, "next_refresh_local": nxt.strftime("%-I:%M %p") if os.name != "nt" else nxt.strftime("%I:%M %p").lstrip("0")}
 
 @app.get("/calendar/pairings")
 def pairings_page(
@@ -443,38 +487,39 @@ def pairings_page(
     only_reports: int = Query(default=1),
     is_24h: int = Query(default=0),
 ):
-    cached_raw = read_events_cache(ROLLING_SCOPE)
-    events: List[Dict[str, Any]] = normalize_cached_events(cached_raw)
-
-    # ensure cached "last_pull_utc" exists even on first load
-    last_pull_local: Optional[dt.datetime] = None
-    if isinstance(cached_raw, dict):
-        lp = cached_raw.get("last_pull_utc")
-        if lp:
-            try:
-                last_pull_local = dt.datetime.fromisoformat(lp.replace("Z", "+00:00")).astimezone(LOCAL_TZ)
-            except Exception:
-                last_pull_local = None
+    # Read meta and events
+    meta = read_cache_meta()
+    events = normalize_cached_events(meta)
 
     if not events:
         try:
             events = fetch_current_to_next_eom()
-            last_pull_local = dt.datetime.now(LOCAL_TZ)
-            overwrite_events_cache(ROLLING_SCOPE, {
-                "events": events,
-                "last_pull_utc": last_pull_local.astimezone(dt.timezone.utc).isoformat()
-            })
+            meta["events"] = events
+            meta["last_pull_utc"] = dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc).isoformat()
+            if "refresh_minutes" not in meta:
+                meta["refresh_minutes"] = 30
+            write_cache_meta(meta)
         except Exception as e:
             return JSONResponse(status_code=500, content={"ok": False, "error": f"{type(e).__name__}: {e}"})
 
     # Header strings
-    today_local = dt.datetime.now(LOCAL_TZ)
-    end_next_month = end_of_next_month_local()
-    looking_through_str = f"Today – {end_next_month.strftime('%b %d (%a)')}"
-    last_pull_str = relative_ago(last_pull_local)
-    next_pull_local_str = next_half_hour_slot_local().strftime("%I:%M %p").lstrip("0")
+    last_pull_local_str = "never"
+    last_pull_dt_local: Optional[dt.datetime] = None
+    lp = meta.get("last_pull_utc")
+    if lp:
+        try:
+            last_pull_dt_local = dt.datetime.fromisoformat(lp.replace("Z", "+00:00")).astimezone(LOCAL_TZ)
+            last_pull_local_str = human_ago(last_pull_dt_local)
+        except Exception:
+            pass
 
-    # Month filter (unchanged)
+    refresh_minutes = int(meta.get("refresh_minutes", 30))
+    next_pull_local_str = next_refresh_at_local(refresh_minutes).strftime("%-I:%M %p") if os.name != "nt" else next_refresh_at_local(refresh_minutes).strftime("%I:%M %p").lstrip("0")
+
+    eom = end_of_this_month_local()
+    looking_through_str = f"Today – {eom.strftime('%b %d (%a)')}"
+
+    # Month filtering for rows
     y, m = (year, month) if (year and month) else pick_default_month(events)
     month_events = filter_events_to_month(events, y, m)
 
@@ -490,7 +535,9 @@ def pairings_page(
             "only_reports": int(bool(only_reports)),
             "is_24h": int(bool(is_24h)),
             "looking_through": looking_through_str,
-            "last_pull_local": last_pull_str,
+            "last_pull_local": last_pull_local_str,
             "next_pull_local": next_pull_local_str,
+            "refresh_minutes": refresh_minutes,
+            "tz_label": "CT",  # display hint for Central Time
         },
     )
