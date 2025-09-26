@@ -2,10 +2,15 @@
   // ---- Boot config ----
   const cfg = safeParseJSON(document.getElementById('dw-boot')?.textContent) || {};
   const apiBase = cfg.apiBase || '';
+
+  // ===== Base settings =====
+  // Hard-coded per request. If you want this dynamic later, we can pass via dw_boot_json.
+  const BASE = 'DFW';
+
   const state = {
     lastPullIso: null,
     nextRefreshIso: null,
-    clockMode: cfg.clockMode === '24' ? 24 : 12, // default 12h
+    clockMode: cfg.clockMode === '12' ? 12 : 24,
     onlyReports: cfg.onlyReports !== false,
     _zeroKick: 0,
   };
@@ -19,10 +24,7 @@
   // ---- Controls wiring ----
   const refreshSel = document.getElementById('refresh-mins');
   if (refreshSel) {
-    // Reflect server schedule on first paint
-    if (cfg.refreshMinutes) {
-      refreshSel.value = String(cfg.refreshMinutes);
-    }
+    refreshSel.value = String(cfg.refreshMinutes || 30);
     refreshSel.addEventListener('change', async () => {
       const minutes = parseInt(refreshSel.value, 10);
       try {
@@ -40,7 +42,7 @@
     clockSel.value = String(state.clockMode);
     clockSel.addEventListener('change', async () => {
       state.clockMode = parseInt(clockSel.value, 10) === 12 ? 12 : 24;
-      await renderOnce();  // re-render rows with new time format
+      await renderOnce();
     });
   }
 
@@ -58,13 +60,6 @@
 
   // ---- 1s ticker for mm:ss + countdown & zero-kick ----
   setInterval(tickStatusLine, 1000);
-
-  // ---- Global click handler for expand/collapse (persists across table re-renders) ----
-  document.addEventListener('click', (e) => {
-    const tr = e.target.closest('tr.summary');
-    if (!tr) return;
-    tr.classList.toggle('open');
-  });
 
   // ---- Core render ----
   async function renderOnce() {
@@ -85,11 +80,6 @@
     state.lastPullIso    = data.last_pull_local_iso || null;
     state.nextRefreshIso = data.next_pull_local_iso || null;
 
-    // Reflect actual server schedule in the select (avoid stale defaults)
-    if (refreshSel && data.refresh_minutes) {
-      refreshSel.value = String(data.refresh_minutes);
-    }
-
     // Status chips
     setText('#looking-through', data.looking_through ?? '—');
     setText('#last-pull', data.last_pull_local ?? '—');
@@ -100,9 +90,12 @@
     const nextEl = qs('#next-refresh');
     if (nextEl) nextEl.innerHTML = `${esc(base)} <span id="next-refresh-eta"></span>`;
 
-    // Table (fresh HTML each render)
+    // Table
     const tbody = qs('#pairings-body');
     tbody.innerHTML = (data.rows || []).map(renderRowHTML).join('');
+
+    // bind expand/collapse on summaries and per-day rows
+    bindExpanders();
   }
 
   function renderRowHTML(row) {
@@ -115,9 +108,15 @@
           <td><span class="off-dur">${esc(row.display?.off_dur || '')}</span></td>
         </tr>`;
     }
-    const daysCount = row.days ? row.days.length : 0;
+    const days = row.days || [];
+    const daysCount = days.length;
     const inProg = row.in_progress ? `<span class="progress">(In progress)</span>` : '';
-    const details = (row.days || []).map((day, i) => renderDayHTML(day, i)).join('');
+
+    // day mini-rows (always present)
+    const dayMiniRows = days.map((day, i) => renderDayMiniRow(day, i)).join('');
+
+    // legs panels for each day (collapsed by default)
+    const dayPanels = days.map((day, i) => renderDayPanel(day, i)).join('');
 
     return `
       <tr class="summary">
@@ -127,15 +126,46 @@
         <td>${esc(row.display?.release_str || '')}</td>
         <td class="muted">click to expand days</td>
       </tr>
-      <tr class="details">
+      ${dayMiniRows}
+      ${dayPanels}`;
+  }
+
+  // ----- Day mini row (green, indented; no icon; OOB pill on Day 1 when dep ≠ DFW) -----
+  function renderDayMiniRow(day, idx) {
+    const legs = Array.isArray(day.legs) ? day.legs : [];
+    const firstDep = (legs[0]?.dep || '').toUpperCase();
+
+    // Only flag Day 1 if its first leg doesn't depart from BASE
+    const isOutOfBase = (idx === 0) && firstDep && firstDep !== BASE;
+
+    const oobPill = isOutOfBase
+      ? `<span class="pill pill-red">${esc(BASE)}</span>`
+      : '';
+
+    const subTitleParts = [];
+    if (day.report)  subTitleParts.push(`Report ${esc(day.report)}`);
+    if (day.release) subTitleParts.push(`Release ${esc(day.release)}`);
+    if (day.hotel)   subTitleParts.push(`${esc(day.hotel)}`);
+
+    return `
+      <tr class="day-mini" data-day="${idx}">
         <td colspan="4">
-          <div class="daysbox">${details}</div>
+          <div class="day-mini-inner">
+            <div class="day-mini-header">
+              <span class="day-title">Day ${idx + 1}</span>
+              ${oobPill}
+              <span class="day-sub">&middot; ${subTitleParts.join(' · ')}</span>
+              <button class="link day-toggle" data-day="${idx}" type="button">click to show legs</button>
+            </div>
+          </div>
         </td>
       </tr>`;
   }
 
-  function renderDayHTML(day, idx) {
-    const legs = (day.legs || []).map(leg => `
+  // ----- Day legs panel (indent more; toggled by mini row) -----
+  function renderDayPanel(day, idx) {
+    const legs = Array.isArray(day.legs) ? day.legs : [];
+    const legsRows = legs.map(leg => `
       <tr class="leg-row ${leg.done ? 'leg-done' : ''}">
         <td>${esc(leg.flight || '')}</td>
         <td>${esc(leg.dep || '')}–${esc(leg.arr || '')}</td>
@@ -144,29 +174,65 @@
             ${esc(leg.arr_time_str || leg.arr_time || '')}</td>
       </tr>`).join('');
 
+    const table = legs.length ? `
+      <table class="legs">
+        <thead><tr><th>Flight</th><th>Route</th><th>Block Times</th></tr></thead>
+        <tbody>${legsRows}</tbody>
+      </table>` : `<div class="muted">No legs parsed.</div>`;
+
     return `
-      <div class="day">
-        <div class="dayhdr">
-          Day ${idx + 1}
-          ${day.report ? `&middot; Report ${esc(day.report)}` : ''}
-          ${day.release ? `&middot; Release ${esc(day.release)}` : ''}
-          ${day.hotel ? `&middot; ${esc(day.hotel)}` : ''}
-        </div>
-        ${legs ? `
-          <table class="legs">
-            <thead><tr><th>Flight</th><th>Route</th><th>Block Times</th></tr></thead>
-            <tbody>${legs}</tbody>
-          </table>` : `<div class="muted">No legs parsed.</div>`}
-      </div>`;
+      <tr class="details" data-day-panel="${idx}">
+        <td colspan="4">
+          <div class="daysbox">${table}</div>
+        </td>
+      </tr>`;
+  }
+
+  function bindExpanders() {
+    // Expand/collapse all day panels for a pairing when summary clicked
+    document.querySelectorAll('tr.summary').forEach(sum => {
+      sum.addEventListener('click', () => {
+        // find following rows until next summary/off
+        let n = sum.nextElementSibling;
+        let toggleOpen = false;
+        // decide target by first panel state
+        while (n && !n.classList.contains('summary') && !n.classList.contains('off')) {
+          if (n.matches('[data-day-panel]')) {
+            toggleOpen = !n.classList.contains('open');
+            break;
+          }
+          n = n.nextElementSibling;
+        }
+        n = sum.nextElementSibling;
+        while (n && !n.classList.contains('summary') && !n.classList.contains('off')) {
+          if (n.matches('[data-day-panel]')) {
+            if (toggleOpen) n.classList.add('open'); else n.classList.remove('open');
+          }
+          n = n.nextElementSibling;
+        }
+      });
+    });
+
+    // Toggle a single day panel when its "click to show legs" link is clicked
+    document.querySelectorAll('.day-toggle').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const idx = btn.getAttribute('data-day');
+        const panel = document.querySelector(`tr.details[data-day-panel="${idx}"]`);
+        if (panel) panel.classList.toggle('open');
+      });
+    });
   }
 
   // ---- Live status ticker ----
   function tickStatusLine() {
+    // last pull mm:ss
     if (state.lastPullIso) {
       const ago = preciseAgo(new Date(state.lastPullIso));
       setText('#last-pull', ago);
     }
 
+    // next refresh countdown
     const etaEl = qs('#next-refresh-eta');
     if (!etaEl || !state.nextRefreshIso) return;
 
@@ -180,7 +246,7 @@
       const now = Date.now();
       if (!state._zeroKick || now - state._zeroKick > 4000) {
         state._zeroKick = now;
-        renderOnce();
+        renderOnce(); // single retry in case SSE is late
       }
     }
   }
