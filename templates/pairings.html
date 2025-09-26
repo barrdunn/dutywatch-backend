@@ -16,11 +16,11 @@
       --row-alt: #0d1219;
       --border: #1e2a38;
       --green: #98f5a7;
-      --off: #ffae60; /* text only */
-      /* new: light green for pairing summary rows */
-        --pairing-bg: rgba(51, 127, 86, 0.16);      /* base */
-        --pairing-bg-hover: rgba(61, 153, 106, 0.26);/* hover */
-        --pairing-border: rgba(73, 179, 124, 0.35);  /* subtle border */
+      --off: #ffae60;
+      --pairing-bg: rgba(51,127,86,0.16);
+      --pairing-bg-hover: rgba(61,153,106,0.26);
+      --pairing-border: rgba(73,179,124,0.35);
+      --warn: #ffd166;
     }
     body { margin: 0; background: var(--bg); color: var(--text);
       font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial, "Noto Sans", sans-serif; }
@@ -37,19 +37,15 @@
     th, td { padding: 10px 12px; }
     th { color: var(--muted); font-weight: 600; text-align: left; border-bottom: 1px solid var(--border); }
 
-    /* Pairing summary rows (clickable) — now light green */
     tr.summary { background: var(--pairing-bg); border: 1px solid var(--pairing-border); cursor: pointer; }
     tr.summary:hover { background: var(--pairing-bg-hover); }
-
-    /* Detail rows keep neutral dark */
     tr.details { background: var(--row-alt); border: 1px dashed var(--border); }
-
-    /* OFF rows: no orange background, match normal dark row */
     tr.off { background: var(--row); border: 1px solid var(--border); }
 
     .pill { font-size: 12px; font-weight: 700; color: #021216; background: var(--green);
       display: inline-block; padding: 3px 8px; border-radius: 999px; margin-left: 8px; }
     .muted { color: var(--muted); }
+    .warn { color: var(--warn); font-weight: 800; margin-left: 8px; }
     .daysbox { padding: 10px 10px 12px; border-radius: 10px; }
     .dayhdr { font-weight: 700; margin: 4px 0 8px; }
     .legs { width: 100%; border-collapse: collapse; }
@@ -58,16 +54,17 @@
     .off-label { font-weight: 800; color: var(--off); }
     .off-dur { font-weight: 800; color: var(--off); }
     .hide { display: none; }
+    .done { text-decoration: line-through; opacity: 0.6; }
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="card">
       <h1>Pairings</h1>
+
       <div class="sub">
-        Last pull: {{ last_pull_str }} &middot; Month: {{ year }}-{{ "%02d"|format(month) }}
-        &middot; Showing {{ pairing_count }} pairing{{ '' if pairing_count == 1 else 's' }}
-        &middot; Parsed days: {{ total_days }}
+        Looking through <strong>Today</strong> – <strong>{{ span_str }}</strong>
+        &nbsp;&middot;&nbsp; Next pull at <strong>{{ next_pull_str }}</strong>
       </div>
 
       <div class="controls">
@@ -99,7 +96,8 @@
           <tr class="summary" data-idx="{{ loop.index0 }}" data-has-report="{{ 1 if row.display.report_str else 0 }}">
             <td>
               <strong>{{ row.pairing_id }}</strong>
-            <span class="pill">{{ row.days|length }} day</span>
+              {% if row.in_progress %}<span class="warn">(In&nbsp;Progress)</span>{% endif %}
+              <span class="pill">{{ row.days|length }} day</span>
             </td>
             <td>{{ row.display.report_str }}</td>
             <td>{{ row.display.release_str }}</td>
@@ -128,7 +126,7 @@
                         </thead>
                         <tbody>
                         {% for leg in day.legs %}
-                          <tr class="leg-row" data-has-report="{{ 1 if day.report else 0 }}">
+                          <tr class="leg-row{% if leg.done %} done{% endif %}" data-has-report="{{ 1 if day.report else 0 }}">
                             <td>{{ leg.flight or '' }}</td>
                             <td>{{ leg.dep }}–{{ leg.arr }}</td>
                             <td>
@@ -211,7 +209,7 @@
       const next = cur === '12' ? '24' : '12';
       clkBtn.setAttribute('data-clock', next);
       clkState.textContent = next === '24' ? '24h' : '12h';
-      // For actual re-render:
+      // To actually switch formats, reload with a query param:
       // const url = new URL(window.location.href);
       // url.searchParams.set('is_24h', next === '24' ? '1' : '0');
       // window.location.href = url.toString();
