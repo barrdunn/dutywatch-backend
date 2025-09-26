@@ -131,6 +131,19 @@
     tbody.innerHTML = (data.rows || []).map(row => renderRowHTML(row, state.clockMode, BASE_AIRPORT)).join('');
   }
 
+  // ---- Out-of-base detection moved to pairing level ----
+  function pairingOutOfBase(row, baseAirport) {
+    const days = row?.days || [];
+    for (const d of days) {
+      const legs = d?.legs || [];
+      if (legs.length) {
+        const dep = String(legs[0].dep || '').toUpperCase();
+        return dep && dep !== baseAirport;
+      }
+    }
+    return false;
+  }
+
   function renderRowHTML(row, clockMode, baseAirport) {
     if (row.kind === 'off') {
       return `
@@ -144,12 +157,18 @@
 
     const daysCount = row.days ? row.days.length : 0;
     const inProg = row.in_progress ? `<span class="progress">(In progress)</span>` : '';
-    const details = (row.days || []).map((day, i) => renderDayHTML(day, i, baseAirport)).join('');
+    const oob = pairingOutOfBase(row, baseAirport);
+    const basePill = oob ? `<span class="pill pill-red">${esc(baseAirport)}</span>` : '';
+
+    const details = (row.days || []).map((day, i) => renderDayHTML(day, i)).join('');
 
     return `
       <tr class="summary">
-        <td class="sum-first"><strong>${esc(row.pairing_id || '')}</strong>
-            <span class="pill">${daysCount} day</span> ${inProg}</td>
+        <td class="sum-first">
+          <strong>${esc(row.pairing_id || '')}</strong>
+          ${basePill}
+          <span class="pill">${daysCount} day</span> ${inProg}
+        </td>
         <td>${esc(row.display?.report_str || '')}</td>
         <td>${esc(row.display?.release_str || '')}</td>
         <td class="muted">click to expand days</td>
@@ -161,10 +180,8 @@
       </tr>`;
   }
 
-  function renderDayHTML(day, idx, baseAirport) {
-    const outOfBase = isOutOfBase(day, baseAirport);
-    const redPill = outOfBase ? `<span class="pill pill-red">${esc(baseAirport)}</span>` : '';
-
+  // NOTE: red pill removed from day rows (kept clean as sub-rows)
+  function renderDayHTML(day, idx) {
     const legs = (day.legs || []).map(leg => `
       <tr class="leg-row ${leg.done ? 'leg-done' : ''}">
         <td>${esc(leg.flight || '')}</td>
@@ -179,7 +196,6 @@
         <div class="dayhdr">
           <span class="dot"></span>
           <span class="daytitle">Day ${idx + 1}</span>
-          ${redPill}
           ${day.report ? `· Report ${esc(day.report)}` : ''}
           ${day.release ? `· Release ${esc(day.release)}` : ''}
           ${day.hotel ? `· ${esc(day.hotel)}` : ''}
@@ -193,13 +209,6 @@
             </table>
           </div>` : `<div class="muted subnote">No legs parsed.</div>`}
       </div>`;
-  }
-
-  function isOutOfBase(day, baseAirport) {
-    const legs = day?.legs || [];
-    if (!legs.length) return false;
-    const firstDep = (legs[0].dep || '').toUpperCase();
-    return firstDep && firstDep !== baseAirport;
   }
 
   // ---- Live status ticker ----
