@@ -2,7 +2,7 @@
   // ---- Boot config ----
   const cfg = safeParseJSON(document.getElementById('dw-boot')?.textContent) || {};
   const apiBase = cfg.apiBase || '';
-  const BASE_IATA = 'DFW'; // for out-of-base pill
+  const BASE_AIRPORT = (cfg.baseAirport || 'DFW').toUpperCase();
 
   const state = {
     lastPullIso: null,
@@ -21,6 +21,7 @@
   // ---- Controls wiring ----
   const refreshSel = document.getElementById('refresh-mins');
   if (refreshSel) {
+    if (cfg.refreshMinutes) refreshSel.value = String(cfg.refreshMinutes);
     refreshSel.addEventListener('change', async () => {
       const minutes = parseInt(refreshSel.value, 10);
       try {
@@ -38,7 +39,7 @@
     clockSel.value = String(state.clockMode);
     clockSel.addEventListener('change', async () => {
       state.clockMode = parseInt(clockSel.value, 10) === 12 ? 12 : 24;
-      await renderOnce();
+      await renderOnce();  // re-render rows with new time format
     });
   }
 
@@ -57,27 +58,37 @@
   // ---- 1s ticker for mm:ss + countdown & zero-kick ----
   setInterval(tickStatusLine, 1000);
 
-  // Toggle all day legs for a pairing (click the summary row)
+  // ---- Global click handlers ----
+  // Toggle a pairing's details row (expand/collapse)
   document.addEventListener('click', (e) => {
-    const tr = e.target.closest('tr.summary');
-    if (!tr) return;
-    const groupId = tr.getAttribute('data-group');
-    if (!groupId) return;
-    const open = tr.classList.toggle('open');
-    document.querySelectorAll(`.day-legs[data-group="${groupId}"]`).forEach(dl => {
-      if (open) dl.removeAttribute('hidden'); else dl.setAttribute('hidden', '');
+    const sum = e.target.closest('tr.summary');
+    if (!sum) return;
+    sum.classList.toggle('open');
+
+    // If opening, expand all day legs; if closing, collapse all
+    const details = sum.nextElementSibling;
+    if (!details || !details.classList.contains('details')) return;
+    const open = sum.classList.contains('open');
+    details.querySelectorAll('.day .legs').forEach(tbl => {
+      tbl.style.display = open ? 'table' : 'none';
+    });
+    // Update helper labels
+    details.querySelectorAll('.day .helper').forEach(h => {
+      h.textContent = open ? 'click to hide legs' : 'click to show legs';
     });
   });
 
-  // Toggle a single day's legs
+  // Toggle a single day legs table
   document.addEventListener('click', (e) => {
-    const toggle = e.target.closest('.day-toggle');
-    if (!toggle) return;
-    const id = toggle.getAttribute('data-target');
-    const box = document.getElementById(id);
-    if (!box) return;
-    const isHidden = box.hasAttribute('hidden');
-    if (isHidden) box.removeAttribute('hidden'); else box.setAttribute('hidden', '');
+    const hdr = e.target.closest('.dayhdr');
+    if (!hdr) return;
+    const day = hdr.closest('.day');
+    const legs = day?.querySelector('.legs');
+    if (!legs) return;
+    const shown = legs.style.display !== 'none';
+    legs.style.display = shown ? 'none' : 'table';
+    const helper = day.querySelector('.helper');
+    if (helper) helper.textContent = shown ? 'click to show legs' : 'click to hide legs';
   });
 
   // ---- Core render ----
@@ -86,6 +97,7 @@
       is_24h: String(state.clockMode === 24 ? 1 : 0),
       only_reports: String(state.onlyReports ? 1 : 0),
     });
+
     let data;
     try {
       const res = await fetch(`${apiBase}/api/pairings?${params.toString()}`, { cache: 'no-store' });
@@ -95,13 +107,16 @@
       return;
     }
 
+    // Save stamps for live ticker
     state.lastPullIso    = data.last_pull_local_iso || null;
     state.nextRefreshIso = data.next_pull_local_iso || null;
 
+    // Reflect actual server schedule in the select (avoid stale defaults)
     if (refreshSel && data.refresh_minutes) {
       refreshSel.value = String(data.refresh_minutes);
     }
 
+    // Status chips
     setText('#looking-through', data.looking_through ?? '—');
     setText('#last-pull', data.last_pull_local ?? '—');
 
@@ -111,11 +126,12 @@
     const nextEl = qs('#next-refresh');
     if (nextEl) nextEl.innerHTML = `${esc(base)} <span id="next-refresh-eta"></span>`;
 
+    // Table
     const tbody = qs('#pairings-body');
-    tbody.innerHTML = (data.rows || []).map((row, i) => renderRowHTML(row, i)).join('');
+    tbody.innerHTML = (data.rows || []).map(row => renderRowHTML(row, state.clockMode, BASE_AIRPORT)).join('');
   }
 
-  function renderRowHTML(row, idx) {
+  function renderRowHTML(row, clockMode, baseAirport) {
     if (row.kind === 'off') {
       return `
         <tr class="off">
@@ -126,73 +142,64 @@
         </tr>`;
     }
 
-    const days = row.days || [];
-    const daysCount = days.length;
+    const daysCount = row.days ? row.days.length : 0;
     const inProg = row.in_progress ? `<span class="progress">(In progress)</span>` : '';
-    const group = `g${idx}`;
-
-    const dayBlocks = days.map((day, dIdx) => {
-      let outOfBase = '';
-      if (dIdx === 0) {
-        const firstLeg = (day.legs || [])[0];
-        if (firstLeg && firstLeg.dep && firstLeg.dep !== BASE_IATA) {
-          outOfBase = `<span class="pill pill-danger">${esc(firstLeg.dep)}</span>`;
-        }
-      }
-      const id = `${group}-day-${dIdx}`;
-      const legsTbl = renderLegsHTML(day);
-
-      return `
-        <div class="day-mini">
-          <span class="day-label">Day ${dIdx + 1}</span>
-          <span class="day-meta">
-            ${day.report ? `· Report ${esc(day.report)}` : ''}
-            ${day.release ? `· Release ${esc(day.release)}` : ''}
-            ${day.hotel ? `· ${esc(day.hotel)}` : ''}
-          </span>
-          ${outOfBase}
-          <span class="day-toggle" data-target="${id}">toggle legs</span>
-        </div>
-        <div class="day-legs" id="${id}" data-group="${group}" hidden>
-          ${legsTbl || `<div class="muted" style="padding:8px 10px;">No legs parsed.</div>`}
-        </div>`;
-    }).join('');
+    const details = (row.days || []).map((day, i) => renderDayHTML(day, i, baseAirport)).join('');
 
     return `
-      <tr class="summary" data-group="${group}">
-        <td><strong>${esc(row.pairing_id || '')}</strong>
+      <tr class="summary">
+        <td class="sum-first"><strong>${esc(row.pairing_id || '')}</strong>
             <span class="pill">${daysCount} day</span> ${inProg}</td>
         <td>${esc(row.display?.report_str || '')}</td>
         <td>${esc(row.display?.release_str || '')}</td>
-        <td class="summary-hint">click to expand all days</td>
+        <td class="muted">click to expand days</td>
       </tr>
       <tr class="details">
         <td colspan="4">
-          <div class="days">
-            ${dayBlocks}
-          </div>
+          <div class="daysbox">${details}</div>
         </td>
       </tr>`;
   }
 
-  function renderLegsHTML(day) {
-    const legs = (day.legs || []);
-    if (!legs.length) return '';
-    const rows = legs.map(leg => `
-      <tr class="${leg.done ? 'leg-done' : ''}">
+  function renderDayHTML(day, idx, baseAirport) {
+    const outOfBase = isOutOfBase(day, baseAirport);
+    const redPill = outOfBase ? `<span class="pill pill-red">${esc(baseAirport)}</span>` : '';
+
+    const legs = (day.legs || []).map(leg => `
+      <tr class="leg-row ${leg.done ? 'leg-done' : ''}">
         <td>${esc(leg.flight || '')}</td>
         <td>${esc(leg.dep || '')}–${esc(leg.arr || '')}</td>
-        <td>${esc(leg.dep_time_str || leg.dep_time || '')} &nbsp;→&nbsp; ${esc(leg.arr_time_str || leg.arr_time || '')}</td>
+        <td>${esc(leg.dep_time_str || leg.dep_time || '')}
+            &nbsp;→&nbsp;
+            ${esc(leg.arr_time_str || leg.arr_time || '')}</td>
       </tr>`).join('');
+
     return `
-      <div class="day-legs-inner">
-        <table class="legs">
-          <thead>
-            <tr><th>Flight</th><th>Route</th><th>Block Times</th></tr>
-          </thead>
-          <tbody>${rows}</tbody>
-        </table>
+      <div class="day">
+        <div class="dayhdr">
+          <span class="dot"></span>
+          <span class="daytitle">Day ${idx + 1}</span>
+          ${redPill}
+          ${day.report ? `· Report ${esc(day.report)}` : ''}
+          ${day.release ? `· Release ${esc(day.release)}` : ''}
+          ${day.hotel ? `· ${esc(day.hotel)}` : ''}
+          <span class="helper">click to show legs</span>
+        </div>
+        ${legs ? `
+          <div class="legs-wrap">
+            <table class="legs" style="display:none">
+              <thead><tr><th>Flight</th><th>Route</th><th>Block Times</th></tr></thead>
+              <tbody>${legs}</tbody>
+            </table>
+          </div>` : `<div class="muted subnote">No legs parsed.</div>`}
       </div>`;
+  }
+
+  function isOutOfBase(day, baseAirport) {
+    const legs = day?.legs || [];
+    if (!legs.length) return false;
+    const firstDep = (legs[0].dep || '').toUpperCase();
+    return firstDep && firstDep !== baseAirport;
   }
 
   // ---- Live status ticker ----

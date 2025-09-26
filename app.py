@@ -7,9 +7,10 @@ import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
 from contextlib import asynccontextmanager, suppress
+from pathlib import Path
 
-from fastapi import FastAPI, Query, HTTPException
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi import FastAPI, Query, Request, HTTPException
+from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from zoneinfo import ZoneInfo
@@ -17,28 +18,45 @@ from zoneinfo import ZoneInfo
 from db import init_db, read_events_cache, overwrite_events_cache
 import cal_client as cal
 
+# ---------------- Paths / Static ----------------
+BASE_DIR = Path(__file__).parent.resolve()
+PAIRINGS_DIR = BASE_DIR / "public" / "pairings"
+
+app = FastAPI(title="DutyWatch Backend (Viewer-Only)")
+
+# Serve the pairings folder at /pairings (serves index.html at /pairings/)
+app.mount("/pairings", StaticFiles(directory=PAIRINGS_DIR, html=True), name="pairings")
+
+# Also serve /pairings (no trailing slash) directly without redirect
+@app.get("/pairings", include_in_schema=False)
+def pairings_index_direct():
+    return FileResponse(PAIRINGS_DIR / "index.html")
+
+# Optionally make it the root page too (comment out if undesired)
+@app.get("/", include_in_schema=False)
+def root_index():
+    return FileResponse(PAIRINGS_DIR / "index.html")
+
+
 # ---------------- Config / Time ----------------
 LOCAL_TZ = ZoneInfo(os.getenv("LOCAL_TZ", "America/Chicago"))
 ROLLING_SCOPE = "rolling"
 
-app = FastAPI(title="DutyWatch Backend (Viewer-Only)")
+class State:
+    refresh_seconds: int = int(os.getenv("REFRESH_SECONDS", "1800"))  # default 30 min
+    poll_task: Optional[asyncio.Task] = None
+    version: int = 0
+    sse_queue: "asyncio.Queue[dict]" = asyncio.Queue()
+    shutdown_event: asyncio.Event = asyncio.Event()
+    wake: asyncio.Event = asyncio.Event()
 
-# Serve the single-page UI at root "/"
-@app.get("/", include_in_schema=False)
-def root_index():
-    return FileResponse("public/pairings/index.html")
+state = State()
 
-# Serve its static assets at /assets/*
-app.mount(
-    "/assets",
-    StaticFiles(directory="public/pairings", html=False),
-    name="assets",
-)
-
-# ---------------- Small helpers ----------------
 def _now_utc() -> dt.datetime:
     return dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc)
 
+
+# ---------------- Time helpers ----------------
 def month_bounds(year: int, month: int) -> Tuple[dt.datetime, dt.datetime]:
     start = dt.datetime(year, month, 1, tzinfo=dt.timezone.utc)
     end = dt.datetime(year + (month // 12), (month % 12) + 1, 1, tzinfo=dt.timezone.utc)
@@ -90,6 +108,7 @@ def pick_default_month(events: List[Dict[str, Any]]) -> Tuple[int, int]:
     now = dt.datetime.now(LOCAL_TZ)
     return now.year, now.month
 
+
 def filter_events_to_month(events: List[Dict[str, Any]], year: int, month: int) -> List[Dict[str, Any]]:
     start_utc, end_utc = month_bounds(year, month)
     out: List[Dict[str, Any]] = []
@@ -140,6 +159,7 @@ def human_ago(from_dt: Optional[dt.datetime]) -> str:
     days = hours // 24
     return f"{days} day{'s' if days != 1 else ''} ago"
 
+
 # ---------------- Cache helpers ----------------
 def normalize_cached_events(raw) -> List[Dict[str, Any]]:
     if raw is None:
@@ -181,6 +201,7 @@ def write_cache_meta(meta: Dict[str, Any]) -> None:
     if "events" not in meta or not isinstance(meta["events"], list):
         meta["events"] = []
     overwrite_events_cache(ROLLING_SCOPE, meta)
+
 
 # ---------------- Parsing helpers ----------------
 REPORT_RE = re.compile(r"\bReport:\s*(\d{3,4})L?\b", re.IGNORECASE)
@@ -268,6 +289,7 @@ def parse_pairing_days(description: Optional[str]) -> Dict[str, Any]:
         except Exception:
             pass
     return parse_with_regex(text)
+
 
 # ---------------- Pairing rows + OFF rows ----------------
 def grouping_key(e: Dict[str, Any]) -> str:
@@ -374,6 +396,7 @@ def build_pairing_rows(
             rows.append({"kind": "off", "display": {"off_dur": human_dur(gap if gap.total_seconds() >= 0 else dt.timedelta(0))}})
     return rows
 
+
 # ---------------- Calendar fetch ----------------
 def fetch_current_to_next_eom() -> List[Dict[str, Any]]:
     now = dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc)
@@ -384,17 +407,8 @@ def fetch_current_to_next_eom() -> List[Dict[str, Any]]:
     hours = int((end - now).total_seconds() // 3600) + 1
     return cal.fetch_upcoming_events(hours_ahead=hours)
 
-# ---------------- Background poller + SSE ----------------
-class State:
-    refresh_seconds: int = int(os.getenv("REFRESH_SECONDS", "1800"))  # default 30 min
-    poll_task: Optional[asyncio.Task] = None
-    version: int = 0
-    sse_queue: "asyncio.Queue[dict]" = asyncio.Queue()
-    shutdown_event: asyncio.Event = asyncio.Event()
-    wake: asyncio.Event = asyncio.Event()
 
-state = State()
-
+# ---------------- SSE + Poller ----------------
 async def _emit(event_type: str, payload: dict | None = None):
     try:
         await state.sse_queue.put({"type": event_type, "payload": payload or {}, "version": state.version})
@@ -427,6 +441,7 @@ async def pull_and_update_once() -> bool:
         if changed:
             state.version += 1
 
+        # Always emit so UI can update countdown/status
         await _emit("change", {"changed": changed})
         return changed
     except Exception as e:
@@ -461,7 +476,8 @@ async def lifespan(app: FastAPI):
 
 app.router.lifespan_context = lifespan
 
-# ---------------- API ----------------
+
+# ---------------- API Routes ----------------
 @app.get("/health")
 def health():
     return {"ok": True}
@@ -488,6 +504,7 @@ async def api_pairings(
 
     last_pull_local = human_ago_precise(lp_local)
     last_pull_human_simple = human_ago(lp_local)
+
     next_refresh_local_clock = nr_local.strftime("%I:%M %p").lstrip("0") if nr_local else ""
     seconds_to_next = max(0, int((nr_local - now_local).total_seconds())) if nr_local else 0
 
@@ -503,12 +520,11 @@ async def api_pairings(
         "next_pull_local_iso": nr_local.isoformat() if nr_local else "",
         "seconds_to_next": seconds_to_next,
         "tz_label": "CT",
-        # reflect server's current schedule; default is 30 min
-        "refresh_minutes": int(meta.get("refresh_minutes", max(1, state.refresh_seconds // 60))),
         "rows": rows,
         "version": state.version,
         "year": y,
         "month": m,
+        "refresh_minutes": int(meta.get("refresh_minutes", max(1, state.refresh_seconds // 60))),
     }
 
 @app.get("/api/status")
@@ -553,5 +569,4 @@ async def sse_events():
             msg = await state.sse_queue.get()
             evt_type = msg.get("type", "change")
             yield f"event: {evt_type}\ndata: {json.dumps(msg)}\n\n"
-
     return StreamingResponse(event_stream(), media_type="text/event-stream")
