@@ -34,19 +34,24 @@ def month_bounds(year: int, month: int) -> Tuple[dt.datetime, dt.datetime]:
     end = dt.datetime(year + (month // 12), (month % 12) + 1, 1, tzinfo=dt.timezone.utc)
     return start, end
 
-def end_of_month(year: int, month: int) -> dt.date:
-    # last day = day before the first of the next month
-    start, end = month_bounds(year, month)
-    return (end - dt.timedelta(days=1)).date()
+def end_of_this_month_local() -> dt.datetime:
+    now_local = dt.datetime.now(LOCAL_TZ)
+    y, m = now_local.year, now_local.month
+    first_next = dt.datetime(y + (1 if m == 12 else 0), (m % 12) + 1, 1, tzinfo=LOCAL_TZ)
+    # last moment of this month, rounded down to a whole minute to keep formatting tidy
+    last = (first_next - dt.timedelta(seconds=1)).replace(second=0, microsecond=0)
+    return last
 
-def next_half_hour(now: dt.datetime) -> dt.datetime:
-    # Return the next :00 or :30 boundary strictly in the future
-    now = now.replace(second=0, microsecond=0)
-    if now.minute < 30:
-        return now.replace(minute=30)
-    else:
-        # bump to next hour :00
-        return (now + dt.timedelta(hours=1)).replace(minute=0)
+def next_half_hour_slot_local(now: Optional[dt.datetime] = None) -> dt.datetime:
+    """Round up to the next :00 or :30 in LOCAL_TZ."""
+    if now is None:
+        now = dt.datetime.now(LOCAL_TZ)
+    # choose the upcoming slot boundary
+    minute_slot = 30 if now.minute < 30 else 60
+    slot = now.replace(minute=0 if minute_slot == 60 else 30, second=0, microsecond=0)
+    if minute_slot == 60:
+        slot += dt.timedelta(hours=1)
+    return slot
 
 def iso_to_dt(s: Optional[str]) -> Optional[dt.datetime]:
     if not s:
@@ -155,7 +160,7 @@ def time_display(hhmm: Optional[str], is_24h: bool) -> str:
     if not hhmm:
         return ""
     if is_24h:
-        return ensure_hhmm(hhmm)
+        return ensure_hhmm(hhmm)  # no 'L' suffix
     return to_12h(hhmm)
 
 def parse_with_regex(text: str) -> Dict[str, Any]:
@@ -215,8 +220,6 @@ def build_pairing_rows(
     is_24h: bool,
     only_reports: bool,
 ) -> List[Dict[str, Any]]:
-    now_local = dt.datetime.now(LOCAL_TZ)
-
     # Group events by pairing id (summary)
     groups: Dict[str, List[Dict[str, Any]]] = {}
     for e in events:
@@ -266,49 +269,61 @@ def build_pairing_rows(
                 tzinfo=LOCAL_TZ
             )
 
-        pairing_report_local = combine_local(start_anchor_date, first_report_hhmm) or first_evt_local
-        pairing_release_local = combine_local(end_anchor_date, last_release_hhmm) or to_local(iso_to_dt(evs_sorted[-1].get("end_utc")))
+        pairing_report_local = combine_local(start_anchor_date, first_report_hhmm)
+        pairing_release_local = combine_local(end_anchor_date, last_release_hhmm)
 
-        # Overnight wrap (release after midnight)
-        if pairing_report_local and pairing_release_local and pairing_release_local < pairing_report_local:
-            pairing_release_local = pairing_release_local + dt.timedelta(days=1)
+        # Fallbacks if parsing missed something
+        if pairing_report_local is None:
+            pairing_report_local = first_evt_local
+        if pairing_release_local is None:
+            pairing_release_local = to_local(iso_to_dt(evs_sorted[-1].get("end_utc")))
 
-        # Mark pairing in-progress
+        # Handle overnight wrap (release after midnight)
+        if pairing_report_local and pairing_release_local:
+            if pairing_release_local < pairing_report_local:
+                pairing_release_local = pairing_release_local + dt.timedelta(days=1)
+
+        # Mark in-progress + compute per-leg done flags
+        now_local = dt.datetime.now(LOCAL_TZ)
         in_progress = False
         if pairing_report_local and pairing_release_local:
-            in_progress = (pairing_report_local <= now_local < pairing_release_local)
+            in_progress = pairing_report_local <= now_local <= pairing_release_local
 
-        # Compute per-day anchors and mark completed legs (line-through)
-        if start_anchor_date:
-            for day_index, d in enumerate(parsed_days, start=1):
-                anchor = start_anchor_date + dt.timedelta(days=day_index - 1)
-                # Save for template display if you want later:
-                d["day_index"] = day_index
-                d["anchor_local_date_iso"] = dt.datetime(anchor.year, anchor.month, anchor.day, tzinfo=LOCAL_TZ).isoformat()
-
-                for leg in d.get("legs", []):
-                    # Build local datetimes for dep/arr using the day anchor
-                    dep_hhmm = leg.get("dep_time")
-                    arr_hhmm = leg.get("arr_time")
-                    dep_dt = None
-                    arr_dt = None
-                    if dep_hhmm:
-                        dep_dt = dt.datetime(anchor.year, anchor.month, anchor.day, int(dep_hhmm[:2]), int(dep_hhmm[2:]), tzinfo=LOCAL_TZ)
-                    if arr_hhmm:
-                        arr_dt = dt.datetime(anchor.year, anchor.month, anchor.day, int(arr_hhmm[:2]), int(arr_hhmm[2:]), tzinfo=LOCAL_TZ)
-                        # If arrival clock time is before departure clock time, it wrapped past midnight
+        days_with_flags: List[Dict[str, Any]] = []
+        for idx, d in enumerate(parsed_days, start=1):
+            anchor_date = start_anchor_date + dt.timedelta(days=idx - 1) if start_anchor_date else None
+            legs = d.get("legs", [])
+            for leg in legs:
+                dep_dt = arr_dt = None
+                if anchor_date:
+                    if leg.get("dep_time"):
+                        dep_dt = dt.datetime(
+                            anchor_date.year, anchor_date.month, anchor_date.day,
+                            int(leg["dep_time"][:2]), int(leg["dep_time"][2:]),
+                            tzinfo=LOCAL_TZ
+                        )
+                    if leg.get("arr_time"):
+                        arr_dt = dt.datetime(
+                            anchor_date.year, anchor_date.month, anchor_date.day,
+                            int(leg["arr_time"][:2]), int(leg["arr_time"][2:]),
+                            tzinfo=LOCAL_TZ
+                        )
                         if dep_dt and arr_dt and arr_dt < dep_dt:
                             arr_dt = arr_dt + dt.timedelta(days=1)
+                leg["done"] = bool(arr_dt and now_local >= arr_dt)
 
-                    # Mark done if arrival has passed
-                    leg["done"] = bool(arr_dt and now_local >= arr_dt)
+            days_with_flags.append({**d, "day_index": idx})
 
-        # Display strings
         def dword(d: Optional[dt.datetime]) -> str:
             return d.strftime("%a %b %d") if d else ""
 
-        report_disp = f"{dword(pairing_report_local)} {time_display(pairing_report_local.strftime('%H%M'), is_24h)}".strip() if pairing_report_local else ""
-        release_disp = f"{dword(pairing_release_local)} {time_display(pairing_release_local.strftime('%H%M'), is_24h)}".strip() if pairing_release_local else ""
+        report_disp = ""
+        if pairing_report_local:
+            report_disp = f"{dword(pairing_report_local)} {time_display(pairing_report_local.strftime('%H%M'), is_24h)}".strip()
+
+        release_disp = ""
+        if pairing_release_local:
+            release_disp = f"{dword(pairing_release_local)} {time_display(pairing_release_local.strftime('%H%M'), is_24h)}".strip()
 
         pairings.append({
             "kind": "pairing",
@@ -320,7 +335,7 @@ def build_pairing_rows(
                 "report_str": report_disp,
                 "release_str": release_disp,
             },
-            "days": parsed_days,
+            "days": days_with_flags,
         })
 
     # Sort by local report time
@@ -353,7 +368,7 @@ ROLLING_SCOPE = "rolling"
 def fetch_current_to_next_eom() -> List[Dict[str, Any]]:
     now = dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc)
     y, m = now.year, now.month
-    end = dt.datetime(y + (1 if m >= 11 else 0), ((m % 12) + 2 if m < 11 else 1), 1, tzinfo=dt.timezone.utc)  # first day of month after next
+    end = dt.datetime(y + (1 if m >= 11 else 0), ((m + 1) % 12) + 1, 1, tzinfo=dt.timezone.utc)  # first day of month after next
     if hasattr(cal, "fetch_events_between"):
         return cal.fetch_events_between(now.isoformat(), end.isoformat())
     hours = int((end - now).total_seconds() // 3600) + 1
@@ -373,7 +388,10 @@ def health():
 def calendar_refresh(request: Request):
     try:
         events = fetch_current_to_next_eom()
-        overwrite_events_cache(ROLLING_SCOPE, events)
+        overwrite_events_cache(ROLLING_SCOPE, {
+            "events": events,
+            "last_pull_utc": dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc).isoformat()
+        })
     except Exception as e:
         return JSONResponse(status_code=500, content={"ok": False, "error": f"{type(e).__name__}: {e}"})
     target = "/calendar/pairings"
@@ -392,25 +410,53 @@ def pairings_page(
     cached_raw = read_events_cache(ROLLING_SCOPE)
     events: List[Dict[str, Any]] = normalize_cached_events(cached_raw)
 
+    # if cache empty, fetch once to seed and stamp pull time
     if not events:
         try:
             events = fetch_current_to_next_eom()
-            overwrite_events_cache(ROLLING_SCOPE, events)
+            overwrite_events_cache(ROLLING_SCOPE, {
+                "events": events,
+                "last_pull_utc": dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc).isoformat()
+            })
         except Exception as e:
             return JSONResponse(status_code=500, content={"ok": False, "error": f"{type(e).__name__}: {e}"})
+        cached_raw = read_events_cache(ROLLING_SCOPE)
 
+    # --- Header strings (always local) ---
+    now_local = dt.datetime.now(LOCAL_TZ)
+
+    # Looking through: Today → end of THIS month (local), regardless of event presence
+    eom = end_of_this_month_local()
+    looking_through_str = f"Today – {eom.strftime('%b %d (%a)')}"
+
+    # Last pull: X minutes ago (local)
+    last_pull_ago = "never"
+    if isinstance(cached_raw, dict):
+        lp = cached_raw.get("last_pull_utc")
+        if lp:
+            try:
+                lp_dt = dt.datetime.fromisoformat(lp.replace("Z", "+00:00")).astimezone(LOCAL_TZ)
+                delta = now_local - lp_dt
+                mins = max(0, int(delta.total_seconds() // 60))
+                if mins < 1:
+                    last_pull_ago = "just now"
+                elif mins == 1:
+                    last_pull_ago = "1 min ago"
+                elif mins < 60:
+                    last_pull_ago = f"{mins} mins ago"
+                else:
+                    hrs = mins // 60
+                    last_pull_ago = f"{hrs} hr ago" if hrs == 1 else f"{hrs} hrs ago"
+            except Exception:
+                pass
+
+    # Next pull at: next :00 or :30 in local time
+    next_pull_local = next_half_hour_slot_local(now_local).strftime("%I:%M %p").lstrip("0")
+
+    # Build rows for whichever month you’re viewing (kept as-is)
     y, m = (year, month) if (year and month) else pick_default_month(events)
     month_events = filter_events_to_month(events, y, m)
-
     rows = build_pairing_rows(month_events, is_24h=bool(is_24h), only_reports=bool(only_reports))
-
-    # Header: "Looking through Today – {last day of month (weekday)}"
-    now_local = dt.datetime.now(LOCAL_TZ)
-    eom = end_of_month(y, m)
-    span_str = f"Today – {eom.strftime('%b %d (%a)')}"
-    # Next pull (next :00 or :30)
-    nxt = next_half_hour(now_local)
-    next_pull_str = nxt.strftime('%I:%M %p').lstrip('0') if not bool(is_24h) else nxt.strftime('%H:%M')
 
     return templates.TemplateResponse(
         "pairings.html",
@@ -421,9 +467,8 @@ def pairings_page(
             "month": m,
             "only_reports": int(bool(only_reports)),
             "is_24h": int(bool(is_24h)),
-            "span_str": span_str,
-            "next_pull_str": next_pull_str,
-            # keep last_pull_str if your template references it
-            "last_pull_str": "use Pull / Refresh to update",
+            "looking_through": looking_through_str,
+            "last_pull_ago": last_pull_ago,
+            "next_pull_local": next_pull_local,
         },
     )
