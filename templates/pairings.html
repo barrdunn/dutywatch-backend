@@ -24,9 +24,9 @@
 
         <label class="toggle" style="display:flex;align-items:center;gap:8px;">
           Auto-refresh:
-          <select id="refresh-mins" class="toggle">
+          <select id="refresh-mins" class="toggle"><!-- value set by JS from server -->
             <option value="1">1 min</option>
-            <option value="5" selected>5 mins</option>
+            <option value="5">5 mins</option>
             <option value="10">10 mins</option>
             <option value="15">15 mins</option>
             <option value="30">30 mins</option>
@@ -35,9 +35,9 @@
 
         <label class="toggle" style="display:flex;align-items:center;gap:8px;">
           Clock:
-          <select id="clock-mode" class="toggle">
+          <select id="clock-mode" class="toggle"><!-- default 12h -->
             <option value="12">12h</option>
-            <option value="24" selected>24h</option>
+            <option value="24">24h</option>
           </select>
         </label>
       </div>

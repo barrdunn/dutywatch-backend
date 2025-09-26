@@ -5,10 +5,9 @@
   const state = {
     lastPullIso: null,
     nextRefreshIso: null,
-    clockMode: cfg.clockMode === '12' ? 12 : 24,
+    clockMode: cfg.clockMode === '24' ? 24 : 12, // default 12h
     onlyReports: cfg.onlyReports !== false,
     _zeroKick: 0,
-    openSet: new Set(JSON.parse(localStorage.getItem('dw_open_rows') || '[]')), // pairing_id strings
   };
 
   // ---- Public actions ----
@@ -20,7 +19,10 @@
   // ---- Controls wiring ----
   const refreshSel = document.getElementById('refresh-mins');
   if (refreshSel) {
-    refreshSel.value = String(cfg.refreshMinutes || 5);
+    // Reflect server schedule on first paint
+    if (cfg.refreshMinutes) {
+      refreshSel.value = String(cfg.refreshMinutes);
+    }
     refreshSel.addEventListener('change', async () => {
       const minutes = parseInt(refreshSel.value, 10);
       try {
@@ -38,7 +40,7 @@
     clockSel.value = String(state.clockMode);
     clockSel.addEventListener('change', async () => {
       state.clockMode = parseInt(clockSel.value, 10) === 12 ? 12 : 24;
-      await renderOnce();  // pull fresh rows with new time format (server formats the strings)
+      await renderOnce();  // re-render rows with new time format
     });
   }
 
@@ -56,25 +58,6 @@
 
   // ---- 1s ticker for mm:ss + countdown & zero-kick ----
   setInterval(tickStatusLine, 1000);
-
-  // ---- Delegated click to expand/collapse summary rows ----
-  const tbody = qs('#pairings-body');
-  if (tbody) {
-    tbody.addEventListener('click', (e) => {
-      const tr = e.target.closest('tr.summary');
-      if (!tr) return;
-      tr.classList.toggle('open');
-      const id = tr.getAttribute('data-pairing-id') || '';
-      if (id) {
-        if (tr.classList.contains('open')) state.openSet.add(id);
-        else state.openSet.delete(id);
-        localStorage.setItem('dw_open_rows', JSON.stringify(Array.from(state.openSet)));
-      }
-      // Update helper label
-      const helper = tr.querySelector('.helper');
-      if (helper) helper.textContent = tr.classList.contains('open') ? 'click to collapse' : 'click to expand days';
-    });
-  }
 
   // ---- Core render ----
   async function renderOnce() {
@@ -95,6 +78,11 @@
     state.lastPullIso    = data.last_pull_local_iso || null;
     state.nextRefreshIso = data.next_pull_local_iso || null;
 
+    // Reflect actual server schedule in the select (avoid stale defaults)
+    if (refreshSel && data.refresh_minutes) {
+      refreshSel.value = String(data.refresh_minutes);
+    }
+
     // Status chips
     setText('#looking-through', data.looking_through ?? '—');
     setText('#last-pull', data.last_pull_local ?? '—');
@@ -109,15 +97,14 @@
     const tbody = qs('#pairings-body');
     tbody.innerHTML = (data.rows || []).map(renderRowHTML).join('');
 
-    // Re-open previously open rows
-    tbody.querySelectorAll('tr.summary').forEach(tr => {
-      const id = tr.getAttribute('data-pairing-id') || '';
-      if (id && state.openSet.has(id)) {
-        tr.classList.add('open');
-        const helper = tr.querySelector('.helper');
-        if (helper) helper.textContent = 'click to collapse';
-      }
-    });
+    // Wire expand/collapse via event delegation
+    tbody.addEventListener('click', onTableClick, { once: true });
+  }
+
+  function onTableClick(e) {
+    const tr = e.target.closest('tr.summary');
+    if (!tr) return;
+    tr.classList.toggle('open');
   }
 
   function renderRowHTML(row) {
@@ -135,12 +122,12 @@
     const details = (row.days || []).map((day, i) => renderDayHTML(day, i)).join('');
 
     return `
-      <tr class="summary" data-pairing-id="${escAttr(row.pairing_id || '')}" aria-expanded="false">
+      <tr class="summary">
         <td><strong>${esc(row.pairing_id || '')}</strong>
             <span class="pill">${daysCount} day</span> ${inProg}</td>
         <td>${esc(row.display?.report_str || '')}</td>
         <td>${esc(row.display?.release_str || '')}</td>
-        <td class="muted helper">click to expand days</td>
+        <td class="muted">click to expand days</td>
       </tr>
       <tr class="details">
         <td colspan="4">
@@ -210,14 +197,10 @@
       ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','/':'&#x2F;','`':'&#x60;','=':'&#x3D;'}[ch])
     );
   }
-  function escAttr(s) {
-    // conservative attribute esc (no quotes returned)
-    return String(s).replace(/"/g, '&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  }
   function preciseAgo(d){
     const sec = Math.max(0, Math.floor((Date.now() - d.getTime())/1000));
     const m = Math.floor(sec/60), s = sec%60;
     return m ? `${m}m ${s}s ago` : `${s}s ago`;
-  }
+    }
   function safeParseJSON(s) { try { return JSON.parse(s || '{}'); } catch { return null; } }
 })();
