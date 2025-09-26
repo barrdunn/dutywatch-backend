@@ -99,7 +99,7 @@
           <tr class="summary" data-idx="{{ loop.index0 }}" data-has-report="{{ 1 if row.display.report_str else 0 }}">
             <td>
               <strong>{{ row.pairing_id }}</strong>
-              <span class="pill">{{ row.days|length }} day{{ '' if row.days|length == 1 else 's' }}</span>
+            <span class="pill">{{ row.days|length }} day</span>
             </td>
             <td>{{ row.display.report_str }}</td>
             <td>{{ row.display.release_str }}</td>
