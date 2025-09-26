@@ -1,127 +1,121 @@
 (function () {
-  // ---- Boot from server status (no Jinja) ----
+  // ---- Boot config ----
+  const cfg = safeParseJSON(document.getElementById('dw-boot')?.textContent) || {};
+  const apiBase = cfg.apiBase || '';
+  const BASE_IATA = 'DFW'; // for out-of-base pill
+
   const state = {
     lastPullIso: null,
     nextRefreshIso: null,
-    clockMode: 12,      // default 12h
-    onlyReports: true,  // show only days with report by default
+    clockMode: cfg.clockMode === '24' ? 24 : 12, // default 12h
+    onlyReports: cfg.onlyReports !== false,
     _zeroKick: 0,
   };
 
-  // Public action
+  // ---- Public actions ----
   window.dwManualRefresh = async function () {
-    try { await fetch('/api/refresh', { method: 'POST' }); }
+    try { await fetch(apiBase + '/api/refresh', { method: 'POST' }); }
     catch (e) { console.error(e); }
   };
 
-  // Controls
+  // ---- Controls wiring ----
   const refreshSel = document.getElementById('refresh-mins');
-  const clockSel   = document.getElementById('clock-mode');
+  if (refreshSel) {
+    refreshSel.addEventListener('change', async () => {
+      const minutes = parseInt(refreshSel.value, 10);
+      try {
+        await fetch(apiBase + '/api/settings/refresh-seconds', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ seconds: minutes * 60 }),
+        });
+      } catch (e) { console.error(e); }
+    });
+  }
 
-  // Global click handler for expand/collapse (multi-open; click again to close)
+  const clockSel = document.getElementById('clock-mode');
+  if (clockSel) {
+    clockSel.value = String(state.clockMode);
+    clockSel.addEventListener('change', async () => {
+      state.clockMode = parseInt(clockSel.value, 10) === 12 ? 12 : 24;
+      await renderOnce();
+    });
+  }
+
+  // ---- First paint ----
+  renderOnce();
+
+  // ---- SSE hookup with fallbacks ----
+  try {
+    const es = new EventSource(apiBase + '/api/events');
+    es.addEventListener('hello', () => {/* initial */});
+    es.addEventListener('change', async () => { await renderOnce(); });
+    es.addEventListener('schedule_update', async () => { await renderOnce(); });
+    es.onerror = () => { /* fallback via ticker zero-kick */ };
+  } catch { /* non-fatal */ }
+
+  // ---- 1s ticker for mm:ss + countdown & zero-kick ----
+  setInterval(tickStatusLine, 1000);
+
+  // Toggle all day legs for a pairing (click the summary row)
   document.addEventListener('click', (e) => {
     const tr = e.target.closest('tr.summary');
     if (!tr) return;
-    tr.classList.toggle('open'); // CSS shows the next details row when .open
+    const groupId = tr.getAttribute('data-group');
+    if (!groupId) return;
+    const open = tr.classList.toggle('open');
+    document.querySelectorAll(`.day-legs[data-group="${groupId}"]`).forEach(dl => {
+      if (open) dl.removeAttribute('hidden'); else dl.setAttribute('hidden', '');
+    });
   });
 
-  // Live status ticker
-  setInterval(tickStatusLine, 1000);
+  // Toggle a single day's legs
+  document.addEventListener('click', (e) => {
+    const toggle = e.target.closest('.day-toggle');
+    if (!toggle) return;
+    const id = toggle.getAttribute('data-target');
+    const box = document.getElementById(id);
+    if (!box) return;
+    const isHidden = box.hasAttribute('hidden');
+    if (isHidden) box.removeAttribute('hidden'); else box.setAttribute('hidden', '');
+  });
 
-  // First, get server schedule & defaults, wire selects, then render
-  init().then(renderOnce).catch(console.error);
-
-  // Also hook up SSE so UI refreshes as the server pulls
-  try {
-    const es = new EventSource('/api/events');
-    es.addEventListener('hello', () => {});
-    es.addEventListener('change', async () => { await renderOnce(); });
-    es.addEventListener('schedule_update', async () => { await renderOnce(); });
-    es.onerror = () => {}; // ignore
-  } catch {
-    /* non-fatal */
-  }
-
-  async function init() {
-    try {
-      const res = await fetch('/api/status', { cache: 'no-store' });
-      const st  = await res.json();
-
-      // reflect server-backed schedule (default is 30m from app.py)
-      if (refreshSel && st.refresh_minutes) {
-        refreshSel.value = String(st.refresh_minutes);
-      }
-
-      // default clock from server (we set 12)
-      state.clockMode = Number(st.default_clock || 12) === 24 ? 24 : 12;
-      if (clockSel) clockSel.value = String(state.clockMode);
-
-    } catch (e) {
-      console.error('init failed', e);
-    }
-
-    // wire handlers after initial values set
-    if (refreshSel) {
-      refreshSel.addEventListener('change', async () => {
-        const minutes = parseInt(refreshSel.value, 10);
-        try {
-          await fetch('/api/settings/refresh-seconds', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ seconds: minutes * 60 }),
-          });
-        } catch (e) { console.error(e); }
-      });
-    }
-
-    if (clockSel) {
-      clockSel.addEventListener('change', async () => {
-        state.clockMode = parseInt(clockSel.value, 10) === 24 ? 24 : 12;
-        await renderOnce();
-      });
-    }
-  }
-
-  // Core render from /api/pairings
+  // ---- Core render ----
   async function renderOnce() {
     const params = new URLSearchParams({
       is_24h: String(state.clockMode === 24 ? 1 : 0),
       only_reports: String(state.onlyReports ? 1 : 0),
     });
-
     let data;
     try {
-      const res = await fetch(`/api/pairings?${params.toString()}`, { cache: 'no-store' });
+      const res = await fetch(`${apiBase}/api/pairings?${params.toString()}`, { cache: 'no-store' });
       data = await res.json();
     } catch (e) {
       console.error('Failed to fetch /api/pairings', e);
       return;
     }
 
-    // set schedule select to actual server value (prevents “looks like 30 but counts down 15” issues)
+    state.lastPullIso    = data.last_pull_local_iso || null;
+    state.nextRefreshIso = data.next_pull_local_iso || null;
+
     if (refreshSel && data.refresh_minutes) {
       refreshSel.value = String(data.refresh_minutes);
     }
 
-    // stamps for ticker
-    state.lastPullIso    = data.last_pull_local_iso || null;
-    state.nextRefreshIso = data.next_pull_local_iso || null;
-
-    // chips
     setText('#looking-through', data.looking_through ?? '—');
     setText('#last-pull', data.last_pull_local ?? '—');
+
     const base = (data.next_pull_local && data.tz_label)
       ? `${data.next_pull_local} (${data.tz_label})`
       : '—';
     const nextEl = qs('#next-refresh');
     if (nextEl) nextEl.innerHTML = `${esc(base)} <span id="next-refresh-eta"></span>`;
 
-    // table
     const tbody = qs('#pairings-body');
-    tbody.innerHTML = (data.rows || []).map(renderRowHTML).join('');
+    tbody.innerHTML = (data.rows || []).map((row, i) => renderRowHTML(row, i)).join('');
   }
 
-  function renderRowHTML(row) {
+  function renderRowHTML(row, idx) {
     if (row.kind === 'off') {
       return `
         <tr class="off">
@@ -131,51 +125,77 @@
           <td><span class="off-dur">${esc(row.display?.off_dur || '')}</span></td>
         </tr>`;
     }
-    const daysCount = row.days ? row.days.length : 0;
+
+    const days = row.days || [];
+    const daysCount = days.length;
     const inProg = row.in_progress ? `<span class="progress">(In progress)</span>` : '';
-    const details = (row.days || []).map((day, i) => renderDayHTML(day, i)).join('');
+    const group = `g${idx}`;
+
+    const dayBlocks = days.map((day, dIdx) => {
+      let outOfBase = '';
+      if (dIdx === 0) {
+        const firstLeg = (day.legs || [])[0];
+        if (firstLeg && firstLeg.dep && firstLeg.dep !== BASE_IATA) {
+          outOfBase = `<span class="pill pill-danger">${esc(firstLeg.dep)}</span>`;
+        }
+      }
+      const id = `${group}-day-${dIdx}`;
+      const legsTbl = renderLegsHTML(day);
+
+      return `
+        <div class="day-mini">
+          <span class="day-label">Day ${dIdx + 1}</span>
+          <span class="day-meta">
+            ${day.report ? `· Report ${esc(day.report)}` : ''}
+            ${day.release ? `· Release ${esc(day.release)}` : ''}
+            ${day.hotel ? `· ${esc(day.hotel)}` : ''}
+          </span>
+          ${outOfBase}
+          <span class="day-toggle" data-target="${id}">toggle legs</span>
+        </div>
+        <div class="day-legs" id="${id}" data-group="${group}" hidden>
+          ${legsTbl || `<div class="muted" style="padding:8px 10px;">No legs parsed.</div>`}
+        </div>`;
+    }).join('');
 
     return `
-      <tr class="summary">
+      <tr class="summary" data-group="${group}">
         <td><strong>${esc(row.pairing_id || '')}</strong>
             <span class="pill">${daysCount} day</span> ${inProg}</td>
         <td>${esc(row.display?.report_str || '')}</td>
         <td>${esc(row.display?.release_str || '')}</td>
-        <td class="muted">click to expand days</td>
+        <td class="summary-hint">click to expand all days</td>
       </tr>
       <tr class="details">
         <td colspan="4">
-          <div class="daysbox">${details}</div>
+          <div class="days">
+            ${dayBlocks}
+          </div>
         </td>
       </tr>`;
   }
 
-  function renderDayHTML(day, idx) {
-    const legs = (day.legs || []).map(leg => `
-      <tr class="leg-row ${leg.done ? 'leg-done' : ''}">
+  function renderLegsHTML(day) {
+    const legs = (day.legs || []);
+    if (!legs.length) return '';
+    const rows = legs.map(leg => `
+      <tr class="${leg.done ? 'leg-done' : ''}">
         <td>${esc(leg.flight || '')}</td>
         <td>${esc(leg.dep || '')}–${esc(leg.arr || '')}</td>
-        <td>${esc(leg.dep_time_str || leg.dep_time || '')}
-            &nbsp;→&nbsp;
-            ${esc(leg.arr_time_str || leg.arr_time || '')}</td>
+        <td>${esc(leg.dep_time_str || leg.dep_time || '')} &nbsp;→&nbsp; ${esc(leg.arr_time_str || leg.arr_time || '')}</td>
       </tr>`).join('');
-
     return `
-      <div class="day">
-        <div class="dayhdr">
-          Day ${idx + 1}
-          ${day.report ? `&middot; Report ${esc(day.report)}` : ''}
-          ${day.release ? `&middot; Release ${esc(day.release)}` : ''}
-          ${day.hotel ? `&middot; ${esc(day.hotel)}` : ''}
-        </div>
-        ${legs ? `
-          <table class="legs">
-            <thead><tr><th>Flight</th><th>Route</th><th>Block Times</th></tr></thead>
-            <tbody>${legs}</tbody>
-          </table>` : `<div class="muted">No legs parsed.</div>`}
+      <div class="day-legs-inner">
+        <table class="legs">
+          <thead>
+            <tr><th>Flight</th><th>Route</th><th>Block Times</th></tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
       </div>`;
   }
 
+  // ---- Live status ticker ----
   function tickStatusLine() {
     if (state.lastPullIso) {
       const ago = preciseAgo(new Date(state.lastPullIso));
@@ -200,7 +220,7 @@
     }
   }
 
-  // utils
+  // ---- utils ----
   function qs(sel) { return document.querySelector(sel); }
   function setText(sel, v) { const el = qs(sel); if (el) el.textContent = v; }
   function esc(s) {
@@ -213,4 +233,5 @@
     const m = Math.floor(sec/60), s = sec%60;
     return m ? `${m}m ${s}s ago` : `${s}s ago`;
   }
+  function safeParseJSON(s) { try { return JSON.parse(s || '{}'); } catch { return null; } }
 })();

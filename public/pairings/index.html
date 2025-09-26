@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <title>Pairings</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="stylesheet" href="./pairings.css" />
+  <link rel="stylesheet" href="/assets/pairings.css" />
 </head>
 <body>
   <div class="wrap">
@@ -14,7 +14,10 @@
       <div class="sub" id="status-line">
         <span class="chip">Looking through <strong id="looking-through">—</strong></span>
         <span class="chip">Last pull: <strong id="last-pull">—</strong></span>
-        <span class="chip">Next refresh: <strong id="next-refresh">—</strong> <span class="muted" id="next-refresh-eta"></span></span>
+        <span class="chip">
+          Next refresh: <strong id="next-refresh">—</strong>
+          <span class="muted" id="next-refresh-eta"></span>
+        </span>
       </div>
 
       <div class="controls">
@@ -29,7 +32,7 @@
             <option value="5">5 mins</option>
             <option value="10">10 mins</option>
             <option value="15">15 mins</option>
-            <option value="30">30 mins</option>
+            <option value="30" selected>30 mins</option>
           </select>
         </label>
 
@@ -56,6 +59,10 @@
     </div>
   </div>
 
-<script src="./pairings.js" defer></script>
+  <!-- Boot config -->
+  <script id="dw-boot" type="application/json">
+    { "apiBase": "", "clockMode": "12", "onlyReports": true }
+  </script>
+  <script src="/assets/pairings.js" defer></script>
 </body>
 </html>

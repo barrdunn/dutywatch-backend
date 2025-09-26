@@ -15,7 +15,9 @@
   --pairing-border: rgba(73, 179, 124, 0.35);
   --strike: #84a1b7;
   --chip: #182231;
+  --danger: #ff6b6b;
 }
+
 body { margin: 0; background: var(--bg); color: var(--text);
   font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial, "Noto Sans", sans-serif; }
 .wrap { max-width: 1100px; margin: 28px auto; padding: 0 16px; }
@@ -35,36 +37,69 @@ table { width: 100%; border-collapse: separate; border-spacing: 0 10px; }
 th, td { padding: 10px 12px; }
 th { color: var(--muted); font-weight: 600; text-align: left; border-bottom: 1px solid var(--border); }
 
-/* pairing top row */
-tr.summary { background: var(--pairing-bg); border: 1px solid var(--pairing-border); cursor: pointer; border-radius: 12px; overflow: hidden; }
+/* Pairing summary rows */
+tr.summary {
+  background: var(--pairing-bg);
+  border: 1px solid var(--pairing-border);
+  border-radius: 12px;
+  cursor: pointer;
+}
 tr.summary:hover { background: var(--pairing-bg-hover); }
 
-/* details block row that follows a summary */
-tr.details { background: var(--row-alt); border: 1px dashed var(--border); }
+/* Details container row */
+tr.details { background: transparent; border: none; }
 
-/* OFF rows */
+/* OFF rows keep bold orange */
 tr.off { background: var(--row); border: 1px solid var(--border); }
 .off-label { font-weight: 800; color: var(--off); }
 .off-dur { font-weight: 800; color: var(--off); }
 
+/* Pills etc */
 .pill { font-size: 12px; font-weight: 700; color: #021216; background: var(--green);
   display: inline-block; padding: 3px 8px; border-radius: 999px; margin-left: 8px; }
-.muted { color: var(--muted); }
+.pill-danger { background: var(--danger); color: #210909; }
 
-/* inner days layout */
-.daysbox { padding: 10px 10px 12px; border-radius: 10px; }
-.day { margin: 6px 0; padding: 6px 10px; background: rgba(73,179,124,0.10); border-left: 6px solid rgba(73,179,124,0.35); border-radius: 10px; }
-.dayhdr { font-weight: 700; margin: 4px 0 8px; }
+/* Days: mini sub-rows, always visible; thin and indented */
+.days { margin-top: 6px; }
+.day-mini {
+  margin-left: 24px;               /* indent under pairing */
+  background: rgba(73,179,124,0.14);
+  padding: 6px 10px;
+  border-radius: 10px;             /* no border */
+  font-weight: 500;                /* not bold */
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.day-label { color: var(--text); }
+.day-meta { color: var(--muted); }
+.day-toggle {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
 
-/* legs inside a day */
-.legs { width: 100%; border-collapse: collapse; margin-left: 24px; } /* slight indent to show hierarchy */
+/* Legs table under each day, further indented */
+.day-legs {
+  margin: 6px 0 10px 40px;
+  background: var(--row-alt);
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.legs { width: 100%; border-collapse: collapse; }
 .legs th, .legs td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
 .legs th { color: var(--muted); font-size: 12px; }
 
-/* completed legs */
+/* Completed legs */
 .leg-done td { text-decoration: line-through; color: var(--strike); }
-.progress { font-weight: 800; margin-left: 8px; color: var(--green); }
 
-/* collapse details by default; expand when summary has .open and sits right before its details row */
-tr.details { display: none; }
-tr.summary.open + tr.details { display: table-row; }
+/* Hide legs until day is opened */
+.day-legs[hidden] { display: none; }
+
+/* Summary expand hint */
+.summary-hint { color: var(--muted); }
+
+/* Progress flag */
+.progress { font-weight: 800; margin-left: 8px; color: var(--green); }

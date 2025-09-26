@@ -8,9 +8,9 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 from contextlib import asynccontextmanager, suppress
 
-from fastapi import FastAPI, Query, Request, HTTPException
+from fastapi import FastAPI, Query, HTTPException
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import RedirectResponse
 from starlette.concurrency import run_in_threadpool
 from zoneinfo import ZoneInfo
 
@@ -22,31 +22,27 @@ LOCAL_TZ = ZoneInfo(os.getenv("LOCAL_TZ", "America/Chicago"))
 ROLLING_SCOPE = "rolling"
 
 app = FastAPI(title="DutyWatch Backend (Viewer-Only)")
-app.mount("/ui", StaticFiles(directory="public", html=False), name="ui")
 
+# Serve the single-page UI at root "/"
+@app.get("/", include_in_schema=False)
+def root_index():
+    return FileResponse("public/pairings/index.html")
 
-class State:
-    refresh_seconds: int = int(os.getenv("REFRESH_SECONDS", "1800"))  # default 30 min
-    poll_task: Optional[asyncio.Task] = None
-    version: int = 0
-    sse_queue: "asyncio.Queue[dict]" = asyncio.Queue()
-    shutdown_event: asyncio.Event = asyncio.Event()
-    wake: asyncio.Event = asyncio.Event()
+# Serve its static assets at /assets/*
+app.mount(
+    "/assets",
+    StaticFiles(directory="public/pairings", html=False),
+    name="assets",
+)
 
-
-state = State()
-
-
+# ---------------- Small helpers ----------------
 def _now_utc() -> dt.datetime:
     return dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc)
 
-
-# ---------------- Time helpers ----------------
 def month_bounds(year: int, month: int) -> Tuple[dt.datetime, dt.datetime]:
     start = dt.datetime(year, month, 1, tzinfo=dt.timezone.utc)
     end = dt.datetime(year + (month // 12), (month % 12) + 1, 1, tzinfo=dt.timezone.utc)
     return start, end
-
 
 def end_of_next_month_local() -> dt.datetime:
     now_local = dt.datetime.now(LOCAL_TZ)
@@ -59,19 +55,6 @@ def end_of_next_month_local() -> dt.datetime:
     first_after_next = dt.datetime(y2, m2, 1, tzinfo=LOCAL_TZ)
     return (first_after_next - dt.timedelta(seconds=1)).replace(microsecond=0)
 
-
-def next_refresh_at_local(freq_minutes: int, now: Optional[dt.datetime] = None) -> dt.datetime:
-    if now is None:
-        now = dt.datetime.now(LOCAL_TZ)
-    base = now.replace(second=0, microsecond=0)
-    m = base.minute
-    k = (m // freq_minutes) * freq_minutes
-    slot = base.replace(minute=k)
-    if slot <= now:
-        slot += dt.timedelta(minutes=freq_minutes)
-    return slot
-
-
 def iso_to_dt(s: Optional[str]) -> Optional[dt.datetime]:
     if not s:
         return None
@@ -81,14 +64,12 @@ def iso_to_dt(s: Optional[str]) -> Optional[dt.datetime]:
     except Exception:
         return None
 
-
 def to_local(d: Optional[dt.datetime]) -> Optional[dt.datetime]:
     if not d:
         return None
     if d.tzinfo is None:
         d = d.replace(tzinfo=dt.timezone.utc)
     return d.astimezone(LOCAL_TZ)
-
 
 def pick_default_month(events: List[Dict[str, Any]]) -> Tuple[int, int]:
     today = dt.datetime.now(LOCAL_TZ).date()
@@ -109,7 +90,6 @@ def pick_default_month(events: List[Dict[str, Any]]) -> Tuple[int, int]:
     now = dt.datetime.now(LOCAL_TZ)
     return now.year, now.month
 
-
 def filter_events_to_month(events: List[Dict[str, Any]], year: int, month: int) -> List[Dict[str, Any]]:
     start_utc, end_utc = month_bounds(year, month)
     out: List[Dict[str, Any]] = []
@@ -119,7 +99,6 @@ def filter_events_to_month(events: List[Dict[str, Any]], year: int, month: int) 
             out.append(e)
     return out
 
-
 def human_dur(td: dt.timedelta) -> str:
     total_h = max(0, int(td.total_seconds() // 3600))
     if total_h >= 48:
@@ -127,7 +106,6 @@ def human_dur(td: dt.timedelta) -> str:
         h = total_h % 24
         return f"{d}d {h}h"
     return f"{total_h}h"
-
 
 def human_ago_precise(from_dt: Optional[dt.datetime]) -> str:
     if not from_dt:
@@ -145,7 +123,6 @@ def human_ago_precise(from_dt: Optional[dt.datetime]) -> str:
         return f"{m}m ago"
     return f"{s}s ago"
 
-
 def human_ago(from_dt: Optional[dt.datetime]) -> str:
     if not from_dt:
         return "never"
@@ -162,7 +139,6 @@ def human_ago(from_dt: Optional[dt.datetime]) -> str:
         return f"{hours} hour{'s' if hours != 1 else ''} ago"
     days = hours // 24
     return f"{days} day{'s' if days != 1 else ''} ago"
-
 
 # ---------------- Cache helpers ----------------
 def normalize_cached_events(raw) -> List[Dict[str, Any]]:
@@ -184,7 +160,6 @@ def normalize_cached_events(raw) -> List[Dict[str, Any]]:
         return raw["events"]
     return []
 
-
 def read_cache_meta() -> Dict[str, Any]:
     raw = read_events_cache(ROLLING_SCOPE)
     if isinstance(raw, dict):
@@ -202,12 +177,10 @@ def read_cache_meta() -> Dict[str, Any]:
             pass
     return {"events": []}
 
-
 def write_cache_meta(meta: Dict[str, Any]) -> None:
     if "events" not in meta or not isinstance(meta["events"], list):
         meta["events"] = []
     overwrite_events_cache(ROLLING_SCOPE, meta)
-
 
 # ---------------- Parsing helpers ----------------
 REPORT_RE = re.compile(r"\bReport:\s*(\d{3,4})L?\b", re.IGNORECASE)
@@ -217,22 +190,18 @@ HOTEL_RE = re.compile(
     re.IGNORECASE,
 )
 
-
 def ensure_hhmm(s: str) -> str:
     return s if len(s) == 4 else s.zfill(4)
-
 
 def minutes_from_hhmm(hhmm: str) -> int:
     hhmm = ensure_hhmm(hhmm)
     return int(hhmm[:2]) * 60 + int(hhmm[2:])
-
 
 def hhmm_from_minutes(total: int) -> str:
     total = total % (24 * 60)
     h = total // 60
     m = total % 60
     return f"{h:02d}{m:02d}"
-
 
 def to_12h(hhmm: str) -> str:
     hhmm = ensure_hhmm(hhmm)
@@ -242,14 +211,12 @@ def to_12h(hhmm: str) -> str:
     h12 = h % 12 or 12
     return f"{h12}:{m} {ampm}"
 
-
 def time_display(hhmm: Optional[str], is_24h: bool) -> str:
     if not hhmm:
         return ""
     if is_24h:
         return ensure_hhmm(hhmm)
     return to_12h(hhmm)
-
 
 def parse_with_regex(text: str) -> Dict[str, Any]:
     out: Dict[str, Any] = {"days": []}
@@ -289,7 +256,6 @@ def parse_with_regex(text: str) -> Dict[str, Any]:
         )
     return out
 
-
 def parse_pairing_days(description: Optional[str]) -> Dict[str, Any]:
     text = description or ""
     try:
@@ -303,7 +269,6 @@ def parse_pairing_days(description: Optional[str]) -> Dict[str, Any]:
             pass
     return parse_with_regex(text)
 
-
 # ---------------- Pairing rows + OFF rows ----------------
 def grouping_key(e: Dict[str, Any]) -> str:
     pid = (e.get("summary") or "").strip()
@@ -311,7 +276,6 @@ def grouping_key(e: Dict[str, Any]) -> str:
         return pid
     uid = (e.get("uid") or "")[:8]
     return f"PAIR-{uid}"
-
 
 def build_pairing_rows(
     events: List[Dict[str, Any]],
@@ -410,7 +374,6 @@ def build_pairing_rows(
             rows.append({"kind": "off", "display": {"off_dur": human_dur(gap if gap.total_seconds() >= 0 else dt.timedelta(0))}})
     return rows
 
-
 # ---------------- Calendar fetch ----------------
 def fetch_current_to_next_eom() -> List[Dict[str, Any]]:
     now = dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc)
@@ -421,14 +384,22 @@ def fetch_current_to_next_eom() -> List[Dict[str, Any]]:
     hours = int((end - now).total_seconds() // 3600) + 1
     return cal.fetch_upcoming_events(hours_ahead=hours)
 
+# ---------------- Background poller + SSE ----------------
+class State:
+    refresh_seconds: int = int(os.getenv("REFRESH_SECONDS", "1800"))  # default 30 min
+    poll_task: Optional[asyncio.Task] = None
+    version: int = 0
+    sse_queue: "asyncio.Queue[dict]" = asyncio.Queue()
+    shutdown_event: asyncio.Event = asyncio.Event()
+    wake: asyncio.Event = asyncio.Event()
 
-# ---------------- SSE + Poller ----------------
+state = State()
+
 async def _emit(event_type: str, payload: dict | None = None):
     try:
         await state.sse_queue.put({"type": event_type, "payload": payload or {}, "version": state.version})
     except Exception:
         pass
-
 
 def _next_from_meta(meta: Dict[str, Any]) -> dt.datetime:
     mins = int(meta.get("refresh_minutes", max(1, state.refresh_seconds // 60)))
@@ -438,7 +409,6 @@ def _next_from_meta(meta: Dict[str, Any]) -> dt.datetime:
     if nxt <= _now_utc():
         nxt = (_now_utc() + dt.timedelta(minutes=mins)).replace(microsecond=0)
     return nxt
-
 
 async def pull_and_update_once() -> bool:
     try:
@@ -450,7 +420,7 @@ async def pull_and_update_once() -> bool:
         meta["events"] = events
         meta["last_pull_utc"] = _now_utc().isoformat()
         meta.setdefault("refresh_minutes", max(1, state.refresh_seconds // 60))
-        mins = int(meta.get("refresh_minutes", 5))
+        mins = int(meta.get("refresh_minutes", 30))
         meta["next_run_utc"] = (_now_utc() + dt.timedelta(minutes=mins)).replace(microsecond=0).isoformat()
         await run_in_threadpool(write_cache_meta, meta)
 
@@ -462,7 +432,6 @@ async def pull_and_update_once() -> bool:
     except Exception as e:
         print(f"[pull] error: {e}")
         return False
-
 
 async def poller_loop():
     while not state.shutdown_event.is_set():
@@ -477,7 +446,6 @@ async def poller_loop():
             pass
         await pull_and_update_once()
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
@@ -491,21 +459,13 @@ async def lifespan(app: FastAPI):
             with suppress(asyncio.CancelledError):
                 await state.poll_task
 
-
 app.router.lifespan_context = lifespan
 
-
-# ---------------- Routes ----------------
+# ---------------- API ----------------
 @app.get("/health")
 def health():
     return {"ok": True}
 
-# Pure static front-end
-@app.get("/")
-def root():
-    return RedirectResponse("/ui/pairings/index.html")
-
-# JSON the front-end consumes
 @app.get("/api/pairings")
 async def api_pairings(
     year: Optional[int] = Query(default=None, ge=1970, le=2100),
@@ -528,7 +488,6 @@ async def api_pairings(
 
     last_pull_local = human_ago_precise(lp_local)
     last_pull_human_simple = human_ago(lp_local)
-
     next_refresh_local_clock = nr_local.strftime("%I:%M %p").lstrip("0") if nr_local else ""
     seconds_to_next = max(0, int((nr_local - now_local).total_seconds())) if nr_local else 0
 
@@ -544,6 +503,7 @@ async def api_pairings(
         "next_pull_local_iso": nr_local.isoformat() if nr_local else "",
         "seconds_to_next": seconds_to_next,
         "tz_label": "CT",
+        # reflect server's current schedule; default is 30 min
         "refresh_minutes": int(meta.get("refresh_minutes", max(1, state.refresh_seconds // 60))),
         "rows": rows,
         "version": state.version,
@@ -558,8 +518,6 @@ async def api_status():
         "version": state.version,
         "refresh_minutes": int(meta.get("refresh_minutes", max(1, state.refresh_seconds // 60))),
         "now": dt.datetime.now(LOCAL_TZ).isoformat(),
-        "tz_label": "CT",
-        "default_clock": 12,  # front-end default
     }
 
 @app.post("/api/settings/refresh-seconds")
@@ -595,4 +553,5 @@ async def sse_events():
             msg = await state.sse_queue.get()
             evt_type = msg.get("type", "change")
             yield f"event: {evt_type}\ndata: {json.dumps(msg)}\n\n"
+
     return StreamingResponse(event_stream(), media_type="text/event-stream")
