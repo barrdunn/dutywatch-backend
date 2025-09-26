@@ -51,7 +51,34 @@
 
     const tbody = qs('#pairings-body');
     tbody.innerHTML = (data.rows || []).map(renderRowHTML).join('');
-    // TODO: attach expand/collapse if you want
+
+    // Collapse all by default
+    for (const tr of tbody.querySelectorAll('tr.summary')) {
+      tr.classList.remove('open');
+      const det = tr.nextElementSibling;
+      if (det && det.classList.contains('details')) det.style.display = 'none';
+    }
+
+    // Optionally auto-open in-progress pairings
+    for (const tr of tbody.querySelectorAll('tr.summary')) {
+      const inProg = /\(In progress\)/.test(tr.innerHTML);
+      if (inProg) toggleRow(tr, true);
+    }
+  }
+
+  // Event delegation: click summary to toggle its details row
+  document.addEventListener('click', (ev) => {
+    const tr = ev.target.closest('tr.summary');
+    if (!tr) return;
+    toggleRow(tr, !tr.classList.contains('open'));
+  });
+
+  function toggleRow(summaryTr, open) {
+    summaryTr.classList.toggle('open', open);
+    const det = summaryTr.nextElementSibling;
+    if (det && det.classList.contains('details')) {
+      det.style.display = open ? 'table-row' : 'none';
+    }
   }
 
   function renderRowHTML(row) {

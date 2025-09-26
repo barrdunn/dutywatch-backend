@@ -53,3 +53,6 @@ tr.off { background: var(--row); border: 1px solid var(--border); }
 
 .leg-done td { text-decoration: line-through; color: var(--strike); }
 .progress { font-weight: 800; margin-left: 8px; color: var(--green); }
+/* collapse details by default; expand when summary has .open */
+tr.details { display: none; }
+tr.summary.open + tr.details { display: table-row; }
