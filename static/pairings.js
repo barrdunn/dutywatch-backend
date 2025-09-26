@@ -8,6 +8,7 @@
     clockMode: cfg.clockMode === '12' ? 12 : 24,
     onlyReports: cfg.onlyReports !== false,
     _zeroKick: 0,
+    openSet: new Set(JSON.parse(localStorage.getItem('dw_open_rows') || '[]')), // pairing_id strings
   };
 
   // ---- Public actions ----
@@ -37,7 +38,7 @@
     clockSel.value = String(state.clockMode);
     clockSel.addEventListener('change', async () => {
       state.clockMode = parseInt(clockSel.value, 10) === 12 ? 12 : 24;
-      await renderOnce();  // pull fresh rows with new time format
+      await renderOnce();  // pull fresh rows with new time format (server formats the strings)
     });
   }
 
@@ -55,6 +56,25 @@
 
   // ---- 1s ticker for mm:ss + countdown & zero-kick ----
   setInterval(tickStatusLine, 1000);
+
+  // ---- Delegated click to expand/collapse summary rows ----
+  const tbody = qs('#pairings-body');
+  if (tbody) {
+    tbody.addEventListener('click', (e) => {
+      const tr = e.target.closest('tr.summary');
+      if (!tr) return;
+      tr.classList.toggle('open');
+      const id = tr.getAttribute('data-pairing-id') || '';
+      if (id) {
+        if (tr.classList.contains('open')) state.openSet.add(id);
+        else state.openSet.delete(id);
+        localStorage.setItem('dw_open_rows', JSON.stringify(Array.from(state.openSet)));
+      }
+      // Update helper label
+      const helper = tr.querySelector('.helper');
+      if (helper) helper.textContent = tr.classList.contains('open') ? 'click to collapse' : 'click to expand days';
+    });
+  }
 
   // ---- Core render ----
   async function renderOnce() {
@@ -88,6 +108,16 @@
     // Table
     const tbody = qs('#pairings-body');
     tbody.innerHTML = (data.rows || []).map(renderRowHTML).join('');
+
+    // Re-open previously open rows
+    tbody.querySelectorAll('tr.summary').forEach(tr => {
+      const id = tr.getAttribute('data-pairing-id') || '';
+      if (id && state.openSet.has(id)) {
+        tr.classList.add('open');
+        const helper = tr.querySelector('.helper');
+        if (helper) helper.textContent = 'click to collapse';
+      }
+    });
   }
 
   function renderRowHTML(row) {
@@ -105,12 +135,12 @@
     const details = (row.days || []).map((day, i) => renderDayHTML(day, i)).join('');
 
     return `
-      <tr class="summary">
+      <tr class="summary" data-pairing-id="${escAttr(row.pairing_id || '')}" aria-expanded="false">
         <td><strong>${esc(row.pairing_id || '')}</strong>
             <span class="pill">${daysCount} day</span> ${inProg}</td>
         <td>${esc(row.display?.report_str || '')}</td>
         <td>${esc(row.display?.release_str || '')}</td>
-        <td class="muted">click to expand days</td>
+        <td class="muted helper">click to expand days</td>
       </tr>
       <tr class="details">
         <td colspan="4">
@@ -179,6 +209,10 @@
     return String(s).replace(/[&<>"'`=\/]/g, (ch) =>
       ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','/':'&#x2F;','`':'&#x60;','=':'&#x3D;'}[ch])
     );
+  }
+  function escAttr(s) {
+    // conservative attribute esc (no quotes returned)
+    return String(s).replace(/"/g, '&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
   function preciseAgo(d){
     const sec = Math.max(0, Math.floor((Date.now() - d.getTime())/1000));
