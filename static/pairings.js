@@ -59,6 +59,13 @@
   // ---- 1s ticker for mm:ss + countdown & zero-kick ----
   setInterval(tickStatusLine, 1000);
 
+  // ---- Global click handler for expand/collapse (persists across table re-renders) ----
+  document.addEventListener('click', (e) => {
+    const tr = e.target.closest('tr.summary');
+    if (!tr) return;
+    tr.classList.toggle('open');
+  });
+
   // ---- Core render ----
   async function renderOnce() {
     const params = new URLSearchParams({
@@ -93,18 +100,9 @@
     const nextEl = qs('#next-refresh');
     if (nextEl) nextEl.innerHTML = `${esc(base)} <span id="next-refresh-eta"></span>`;
 
-    // Table
+    // Table (fresh HTML each render)
     const tbody = qs('#pairings-body');
     tbody.innerHTML = (data.rows || []).map(renderRowHTML).join('');
-
-    // Wire expand/collapse via event delegation
-    tbody.addEventListener('click', onTableClick, { once: true });
-  }
-
-  function onTableClick(e) {
-    const tr = e.target.closest('tr.summary');
-    if (!tr) return;
-    tr.classList.toggle('open');
   }
 
   function renderRowHTML(row) {
@@ -164,13 +162,11 @@
 
   // ---- Live status ticker ----
   function tickStatusLine() {
-    // last pull mm:ss
     if (state.lastPullIso) {
       const ago = preciseAgo(new Date(state.lastPullIso));
       setText('#last-pull', ago);
     }
 
-    // next refresh countdown
     const etaEl = qs('#next-refresh-eta');
     if (!etaEl || !state.nextRefreshIso) return;
 
@@ -184,7 +180,7 @@
       const now = Date.now();
       if (!state._zeroKick || now - state._zeroKick > 4000) {
         state._zeroKick = now;
-        renderOnce(); // single retry in case SSE is late
+        renderOnce();
       }
     }
   }
@@ -201,6 +197,6 @@
     const sec = Math.max(0, Math.floor((Date.now() - d.getTime())/1000));
     const m = Math.floor(sec/60), s = sec%60;
     return m ? `${m}m ${s}s ago` : `${s}s ago`;
-    }
+  }
   function safeParseJSON(s) { try { return JSON.parse(s || '{}'); } catch { return null; } }
 })();
