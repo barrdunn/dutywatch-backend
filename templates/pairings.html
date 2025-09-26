@@ -180,15 +180,30 @@
     </div>
   </div>
 
-  <!-- External page script -->
-  <script>
-    window.DW_BOOT = {
-      refreshMinutes: {{ refresh_minutes|int }},
-      onlyReports: {{ 1 if only_reports else 0 }},
-      clockMode: "{{ '24' if is_24h else '12' }}",
-      tz: "{{ tz_label }}"
-    };
-  </script>
-  <script src="/static/pairings.js"></script>
+<!-- Server data as pure JSON (no JS to parse here) -->
+<script id="dw-boot" type="application/json">
+{{ {
+  "refreshMinutes": refresh_minutes|int,
+  "onlyReports": (true if only_reports else false),  // use booleans for sanity
+  "clockMode": ("24" if is_24h else "12"),
+  "tz": tz_label
+} | tojson }}
+</script>
+
+<!-- Your app script; read & parse after DOM is ready -->
+<script>
+  (function () {
+    const el = document.getElementById('dw-boot');
+    try {
+      window.DW_BOOT = JSON.parse(el.textContent);
+    } catch (e) {
+      console.error('Failed to parse DW_BOOT JSON', e);
+      window.DW_BOOT = {};
+    }
+  })();
+</script>
+
+<script src="/static/pairings.js" defer></script>
+
 </body>
 </html>
