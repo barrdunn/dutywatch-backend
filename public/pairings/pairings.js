@@ -2,7 +2,7 @@
   // ---- Boot config ----
   const cfg = safeParseJSON(document.getElementById('dw-boot')?.textContent) || {};
   const apiBase = cfg.apiBase || '';
-  const BASE_AIRPORT = (cfg.baseAirport || 'DFW').toUpperCase();
+  const HOME_BASE = (cfg.baseAirport || 'DFW').toUpperCase(); // your home base
 
   const state = {
     lastPullIso: null,
@@ -59,26 +59,22 @@
   setInterval(tickStatusLine, 1000);
 
   // ---- Global click handlers ----
-  // Toggle a pairing's details row (expand/collapse)
   document.addEventListener('click', (e) => {
     const sum = e.target.closest('tr.summary');
     if (!sum) return;
     sum.classList.toggle('open');
 
-    // If opening, expand all day legs; if closing, collapse all
     const details = sum.nextElementSibling;
     if (!details || !details.classList.contains('details')) return;
     const open = sum.classList.contains('open');
     details.querySelectorAll('.day .legs').forEach(tbl => {
       tbl.style.display = open ? 'table' : 'none';
     });
-    // Update helper labels
     details.querySelectorAll('.day .helper').forEach(h => {
       h.textContent = open ? 'click to hide legs' : 'click to show legs';
     });
   });
 
-  // Toggle a single day legs table
   document.addEventListener('click', (e) => {
     const hdr = e.target.closest('.dayhdr');
     if (!hdr) return;
@@ -107,16 +103,13 @@
       return;
     }
 
-    // Save stamps for live ticker
     state.lastPullIso    = data.last_pull_local_iso || null;
     state.nextRefreshIso = data.next_pull_local_iso || null;
 
-    // Reflect actual server schedule in the select (avoid stale defaults)
     if (refreshSel && data.refresh_minutes) {
       refreshSel.value = String(data.refresh_minutes);
     }
 
-    // Status chips
     setText('#looking-through', data.looking_through ?? '—');
     setText('#last-pull', data.last_pull_local ?? '—');
 
@@ -126,25 +119,23 @@
     const nextEl = qs('#next-refresh');
     if (nextEl) nextEl.innerHTML = `${esc(base)} <span id="next-refresh-eta"></span>`;
 
-    // Table
     const tbody = qs('#pairings-body');
-    tbody.innerHTML = (data.rows || []).map(row => renderRowHTML(row, state.clockMode, BASE_AIRPORT)).join('');
+    tbody.innerHTML = (data.rows || []).map(row => renderRowHTML(row, HOME_BASE)).join('');
   }
 
-  // ---- Out-of-base detection moved to pairing level ----
-  function pairingOutOfBase(row, baseAirport) {
+  // ---- Helpers for start airport / out-of-base pill ----
+  function firstDepartureAirport(row) {
     const days = row?.days || [];
     for (const d of days) {
       const legs = d?.legs || [];
-      if (legs.length) {
-        const dep = String(legs[0].dep || '').toUpperCase();
-        return dep && dep !== baseAirport;
+      if (legs.length && legs[0].dep) {
+        return String(legs[0].dep).toUpperCase();
       }
     }
-    return false;
+    return null;
   }
 
-  function renderRowHTML(row, clockMode, baseAirport) {
+  function renderRowHTML(row, homeBase) {
     if (row.kind === 'off') {
       return `
         <tr class="off">
@@ -157,8 +148,11 @@
 
     const daysCount = row.days ? row.days.length : 0;
     const inProg = row.in_progress ? `<span class="progress">(In progress)</span>` : '';
-    const oob = pairingOutOfBase(row, baseAirport);
-    const basePill = oob ? `<span class="pill pill-red">${esc(baseAirport)}</span>` : '';
+
+    // Decide pill: only if first departure != home base
+    const startDep = firstDepartureAirport(row);
+    const showOOB = !!(startDep && startDep !== homeBase);
+    const oobPill = showOOB ? `<span class="pill pill-red">${esc(startDep)}</span>` : '';
 
     const details = (row.days || []).map((day, i) => renderDayHTML(day, i)).join('');
 
@@ -166,8 +160,9 @@
       <tr class="summary">
         <td class="sum-first">
           <strong>${esc(row.pairing_id || '')}</strong>
-          ${basePill}
-          <span class="pill">${daysCount} day</span> ${inProg}
+          <span class="pill">${daysCount} day</span>
+          ${oobPill}
+          ${inProg}
         </td>
         <td>${esc(row.display?.report_str || '')}</td>
         <td>${esc(row.display?.release_str || '')}</td>
@@ -180,7 +175,6 @@
       </tr>`;
   }
 
-  // NOTE: red pill removed from day rows (kept clean as sub-rows)
   function renderDayHTML(day, idx) {
     const legs = (day.legs || []).map(leg => `
       <tr class="leg-row ${leg.done ? 'leg-done' : ''}">
@@ -241,7 +235,7 @@
   function setText(sel, v) { const el = qs(sel); if (el) el.textContent = v; }
   function esc(s) {
     return String(s).replace(/[&<>"'`=\/]/g, (ch) =>
-      ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','/':'&#x2F;','`':'&#x60;','=':'&#x3D;'}[ch])
+      ({'&':'&amp;','<':'&lt;','>':'&#x3E;','"':'&quot;',"'":'&#39;','/':'&#x2F;','`':'&#x60;','=':'&#x3D;'}[ch])
     );
   }
   function preciseAgo(d){
