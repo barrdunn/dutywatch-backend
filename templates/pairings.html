@@ -4,78 +4,21 @@
   <meta charset="utf-8" />
   <title>Pairings</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    :root {
-      color-scheme: dark;
-      --bg: #0b0f14;
-      --card: #121821;
-      --muted: #9fb0c0;
-      --text: #e8edf2;
-      --accent: #6fb1ff;
-      --row: #0f141b;
-      --row-alt: #0d1219;
-      --border: #1e2a38;
-      --green: #98f5a7;
-      --off: #ffae60;
-      --pairing-bg: rgba(51, 127, 86, 0.16);
-      --pairing-bg-hover: rgba(61, 153, 106, 0.26);
-      --pairing-border: rgba(73, 179, 124, 0.35);
-      --strike: #84a1b7;
-      --chip: #182231;
-    }
-    body { margin: 0; background: var(--bg); color: var(--text);
-      font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial, "Noto Sans", sans-serif; }
-    .wrap { max-width: 1100px; margin: 28px auto; padding: 0 16px; }
-    .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 16px; box-shadow: 0 6px 18px rgba(0,0,0,0.25); }
-    h1 { margin: 0 0 8px; font-size: 22px; }
-
-    .sub { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin: 8px 0 16px; }
-    .chip { background: var(--chip); border: 1px solid var(--border); border-radius: 999px; padding: 4px 10px; color: var(--muted); font-weight: 600; }
-
-    .controls { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
-    .controls form { display: inline-flex; gap: 8px; align-items: center; }
-    .btn { background: var(--accent); color: #031323; border: none; border-radius: 10px; padding: 8px 12px; font-weight: 600; cursor: pointer; }
-    .toggle { background: transparent; color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 6px 10px; cursor: pointer; }
-    select.toggle { padding: 6px 10px; }
-
-    table { width: 100%; border-collapse: separate; border-spacing: 0 10px; }
-    th, td { padding: 10px 12px; }
-    th { color: var(--muted); font-weight: 600; text-align: left; border-bottom: 1px solid var(--border); }
-
-    tr.summary { background: var(--pairing-bg); border: 1px solid var(--pairing-border); cursor: pointer; }
-    tr.summary:hover { background: var(--pairing-bg-hover); }
-    tr.details { background: var(--row-alt); border: 1px dashed var(--border); }
-    tr.off { background: var(--row); border: 1px solid var(--border); }
-
-    .pill { font-size: 12px; font-weight: 700; color: #021216; background: var(--green);
-      display: inline-block; padding: 3px 8px; border-radius: 999px; margin-left: 8px; }
-    .muted { color: var(--muted); }
-    .daysbox { padding: 10px 10px 12px; border-radius: 10px; }
-    .dayhdr { font-weight: 700; margin: 4px 0 8px; }
-    .legs { width: 100%; border-collapse: collapse; }
-    .legs th, .legs td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
-    .legs th { color: var(--muted); font-size: 12px; }
-    .off-label { font-weight: 800; color: var(--off); }
-    .off-dur { font-weight: 800; color: var(--off); }
-    .hide { display: none; }
-
-    .leg-done td { text-decoration: line-through; color: var(--strike); }
-    .progress { font-weight: 800; margin-left: 8px; color: var(--green); }
-  </style>
+  <link rel="stylesheet" href="/static/pairings.css" />
 </head>
 <body>
   <div class="wrap">
     <div class="card">
       <h1>Pairings</h1>
 
-      <div class="sub" id="status-line" data-lastpull="{{ last_pull_local_iso or '' }}">
-        <span class="chip">Looking through <strong>{{ looking_through }}</strong></span>
-        <span class="chip">Last pull: <strong id="last-pull">{{ last_pull_local }}</strong></span>
-        <span class="chip">Next refresh: <strong id="next-refresh">{{ next_pull_local }} ({{ tz_label }})</strong></span>
+      <div class="sub" id="status-line">
+        <span class="chip">Looking through <strong id="looking-through">—</strong></span>
+        <span class="chip">Last pull: <strong id="last-pull">—</strong></span>
+        <span class="chip">Next refresh: <strong id="next-refresh">—</strong></span>
       </div>
 
       <div class="controls">
-        <form method="post" action="/calendar/refresh">
+        <form onsubmit="window.dwManualRefresh(); return false;">
           <button class="btn" type="submit">Pull / Refresh</button>
         </form>
 
@@ -83,20 +26,12 @@
           Auto-refresh:
           <select id="refresh-mins" class="toggle">
             <option value="1">1 min</option>
-            <option value="5">5 mins</option>
+            <option value="5" selected>5 mins</option>
             <option value="10">10 mins</option>
             <option value="15">15 mins</option>
             <option value="30">30 mins</option>
           </select>
         </label>
-
-        <button id="toggle-only" class="toggle" data-on="{{ 1 if only_reports else 0 }}">
-          Only with report: <strong id="toggle-only-state">{{ 'ON' if only_reports else 'OFF' }}</strong>
-        </button>
-
-        <button id="toggle-clock" class="toggle" data-clock="{{ '24' if is_24h else '12' }}">
-          Clock: <strong id="toggle-clock-state">{{ '24h' if is_24h else '12h' }}</strong>
-        </button>
       </div>
 
       <table id="pairings">
@@ -108,97 +43,13 @@
             <th>Days / Legs / Hotel</th>
           </tr>
         </thead>
-        <tbody>
-        {% for row in rows %}
-          {% if row.kind == 'pairing' %}
-          <tr class="summary" data-idx="{{ loop.index0 }}" data-has-report="{{ 1 if row.display.report_str else 0 }}">
-            <td>
-              <strong>{{ row.pairing_id }}</strong>
-              <span class="pill">{{ row.days|length }} day</span>
-              {% if row.in_progress %}<span class="progress">(In progress)</span>{% endif %}
-            </td>
-            <td>{{ row.display.report_str }}</td>
-            <td>{{ row.display.release_str }}</td>
-            <td class="muted">click to expand days</td>
-          </tr>
-
-          <tr class="details hide" data-idx="{{ loop.index0 }}">
-            <td colspan="4">
-              <div class="daysbox">
-                {% for day in row.days %}
-                  <div class="day">
-                    <div class="dayhdr">
-                      Day {{ loop.index }}
-                      {% if day.report %}&middot; Report {{ day.report|e }}{% endif %}
-                      {% if day.release %}&middot; Release {{ day.release|e }}{% endif %}
-                      {% if day.hotel %}&middot; {{ day.hotel|e }}{% endif %}
-                    </div>
-                    {% if day.legs and day.legs|length %}
-                      <table class="legs">
-                        <thead>
-                          <tr>
-                            <th>Flight</th>
-                            <th>Route</th>
-                            <th>Block Times</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                        {% for leg in day.legs %}
-                          <tr class="leg-row {% if leg.done %}leg-done{% endif %}" data-has-report="{{ 1 if day.report else 0 }}">
-                            <td>{{ leg.flight or '' }}</td>
-                            <td>{{ leg.dep }}–{{ leg.arr }}</td>
-                            <td>
-                              {{ leg.dep_time_str or leg.dep_time or '' }}
-                              &nbsp;→&nbsp;
-                              {{ leg.arr_time_str or leg.arr_time or '' }}
-                            </td>
-                          </tr>
-                        {% endfor %}
-                        </tbody>
-                      </table>
-                    {% else %}
-                      <div class="muted">No legs parsed.</div>
-                    {% endif %}
-                  </div>
-                {% endfor %}
-              </div>
-            </td>
-          </tr>
-
-          {% elif row.kind == 'off' %}
-          <tr class="off">
-            <td><span class="off-label">OFF</span></td>
-            <td class="muted"></td>
-            <td class="muted"></td>
-            <td><span class="off-dur">{{ row.display.off_dur }}</span></td>
-          </tr>
-          {% endif %}
-        {% endfor %}
-        </tbody>
+        <tbody id="pairings-body"><!-- filled by JS --></tbody>
       </table>
     </div>
   </div>
 
-  <!-- Server data as pure JSON (safe for Jinja + JS) -->
-  <script id="dw-boot" type="application/json">
-  {{ {
-    "refreshMinutes": refresh_minutes|int,
-    "onlyReports": (1 if only_reports else 0),
-    "clockMode": ("24" if is_24h else "12"),
-    "tz": tz_label
-  } | tojson }}
-  </script>
-
-  <!-- Loader: parse JSON into window.DW_BOOT -->
-  <script>
-    (function () {
-      var el = document.getElementById("dw-boot");
-      try { window.DW_BOOT = JSON.parse(el.textContent); }
-      catch (e) { console.error("DW_BOOT JSON parse error", e); window.DW_BOOT = {}; }
-    })();
-  </script>
-
-  <!-- External page script -->
+  <!-- Viewer-only boot config as JSON -->
+  <script id="dw-boot" type="application/json">{{ dw_boot_json | safe }}</script>
   <script src="/static/pairings.js" defer></script>
 </body>
 </html>
