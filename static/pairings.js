@@ -109,22 +109,34 @@
     state.tickTimer = setInterval(tickStatusLine, 1000);
   }
 
-  function tickStatusLine() {
+    function tickStatusLine() {
     // last pull precise
     if (state.lastPullIso) {
-      const s = preciseAgo(new Date(state.lastPullIso));
-      setText('#last-pull', s);
+        const s = preciseAgo(new Date(state.lastPullIso));
+        setText('#last-pull', s);
     }
+
     // next refresh countdown
     const etaEl = qs('#next-refresh-eta');
-    if (etaEl) {
-      if (!state.nextRefreshIso) { etaEl.textContent = ''; return; }
-      const diff = Math.max(0, Math.floor((new Date(state.nextRefreshIso).getTime() - Date.now()) / 1000));
-      const m = Math.floor(diff / 60);
-      const s = diff % 60;
-      etaEl.textContent = diff > 0 ? `in ${m}m ${s}s` : '(refreshing…)';
+    if (!etaEl) return;
+
+    if (!state.nextRefreshIso) { etaEl.textContent = ''; return; }
+
+    const diff = Math.floor((new Date(state.nextRefreshIso).getTime() - Date.now()) / 1000);
+    const clamped = Math.max(0, diff);
+    const m = Math.floor(clamped / 60);
+    const s = clamped % 60;
+    etaEl.textContent = clamped > 0 ? `in ${m}m ${s}s` : '(refreshing…)';
+
+    // When we hit zero, trigger a one-shot re-render to pick up the new schedule
+        if (diff <= 0) {
+            const now = Date.now();
+            if (!state._zeroKick || now - state._zeroKick > 4000) { // throttle 4s
+            state._zeroKick = now;
+            renderOnce();
+            }
+        }
     }
-  }
 
   // Click-to-toggle details (delegated)
   document.addEventListener('click', (ev) => {

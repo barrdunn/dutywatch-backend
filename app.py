@@ -30,7 +30,8 @@ class State:
     refresh_seconds: int = int(os.getenv("REFRESH_SECONDS", "300"))  # default 5 min
     poll_task: Optional[asyncio.Task] = None
     version: int = 0
-    sse_queue: "asyncio.Queue[str]" = asyncio.Queue()
+    sse_queue: "asyncio.Queue[dict]" = asyncio.Queue()
+    shutdown_event: asyncio.Event = asyncio.Event()
 
 state = State()
 
@@ -382,29 +383,49 @@ def fetch_current_to_next_eom() -> List[Dict[str, Any]]:
 def _now_utc() -> dt.datetime:
     return dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc)
 
+async def _emit(event_type: str, payload: dict | None = None):
+    """Place an event on the SSE queue."""
+    try:
+        await state.sse_queue.put({"type": event_type, "payload": payload or {}, "version": state.version})
+    except Exception:
+        pass
+
 async def pull_and_update_once() -> bool:
     try:
         events = await run_in_threadpool(fetch_current_to_next_eom)
         meta = await run_in_threadpool(read_cache_meta)
+
+        # Detect substantive changes to events list
         changed = json.dumps(meta.get("events", []), sort_keys=True) != json.dumps(events, sort_keys=True)
+
+        # Write meta + schedule next
         meta["events"] = events
         meta["last_pull_utc"] = _now_utc().isoformat()
         meta.setdefault("refresh_minutes", max(1, state.refresh_seconds // 60))
         mins = int(meta.get("refresh_minutes", 5))
         meta["next_run_utc"] = (_now_utc() + dt.timedelta(minutes=mins)).replace(microsecond=0).isoformat()
         await run_in_threadpool(write_cache_meta, meta)
+
+        # Bump version only when data changed
         if changed:
             state.version += 1
-            await state.sse_queue.put(json.dumps({"type": "pairings_update", "version": state.version}))
+
+        # Always tell clients to refresh status (prevents "(refreshing…)" hang)
+        await _emit("change", {"changed": changed})
+
         return changed
     except Exception as e:
         print(f"[pull] error: {e}")
         return False
 
 async def poller_loop():
-    while True:
+    while not state.shutdown_event.is_set():
         await pull_and_update_once()
-        await asyncio.sleep(max(5, state.refresh_seconds))
+        # Sleep in small chunks so shutdowns are responsive
+        remaining = max(5, state.refresh_seconds)
+        while remaining > 0 and not state.shutdown_event.is_set():
+            await asyncio.sleep(min(1, remaining))
+            remaining -= 1
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -413,6 +434,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        state.shutdown_event.set()
         if state.poll_task:
             state.poll_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -421,6 +443,10 @@ async def lifespan(app: FastAPI):
 app.router.lifespan_context = lifespan
 
 # ---------- Routes ----------
+@app.get("/health")
+def health():
+    return {"ok": True}
+
 @app.get("/", response_class=HTMLResponse)
 @app.get("/calendar/pairings", response_class=HTMLResponse)
 async def pairings_page(request: Request):
@@ -459,12 +485,10 @@ async def api_pairings(
     nr_local = dt.datetime.fromisoformat(nr_iso.replace("Z", "+00:00")).astimezone(LOCAL_TZ) if nr_iso else None
     now_local = dt.datetime.now(LOCAL_TZ)
 
-    last_pull_local = human_ago_lp = human_ago_precise(lp_local)
-    # keep your existing human_ago text if you want; we’ll send both
+    last_pull_local = human_ago_precise(lp_local)
     last_pull_human_simple = human_ago(lp_local)
 
     next_refresh_local_clock = nr_local.strftime("%I:%M %p").lstrip("0") if nr_local else ""
-    # countdown seconds to next
     seconds_to_next = max(0, int((nr_local - now_local).total_seconds())) if nr_local else 0
 
     looking_end = end_of_next_month_local()
@@ -473,7 +497,7 @@ async def api_pairings(
     return {
         "looking_through": looking_through,
         "last_pull_local": last_pull_local,                 # "3m 12s ago"
-        "last_pull_local_simple": last_pull_human_simple,   # your old rounded text
+        "last_pull_local_simple": last_pull_human_simple,   # rounded text
         "last_pull_local_iso": lp_local.isoformat() if lp_local else "",
         "next_pull_local": next_refresh_local_clock,        # "11:15 PM"
         "next_pull_local_iso": nr_local.isoformat() if nr_local else "",
@@ -509,8 +533,8 @@ async def api_set_refresh_seconds(payload: Dict[str, Any]):
     meta["next_run_utc"] = (_now_utc() + dt.timedelta(minutes=meta["refresh_minutes"])).replace(microsecond=0).isoformat()
     await run_in_threadpool(write_cache_meta, meta)
 
-    # tell clients to refresh their status line
-    await state.sse_queue.put(json.dumps({"type": "schedule_update", "version": state.version}))
+    # tell clients schedule changed (updates Next refresh + countdown)
+    await _emit("schedule_update", {"refresh_seconds": secs})
     return {"ok": True, "refresh_seconds": state.refresh_seconds}
 
 @app.post("/api/refresh")
@@ -521,8 +545,12 @@ async def api_refresh():
 @app.get("/api/events")
 async def sse_events():
     async def event_stream():
+        # initial hello
         yield f"event: hello\ndata: {json.dumps({'version': state.version})}\n\n"
-        while True:
+        # stream events
+        while not state.shutdown_event.is_set():
             msg = await state.sse_queue.get()
-            yield f"event: change\ndata: {msg}\n\n"
+            # pass through event type to the client (default to 'change')
+            evt_type = msg.get("type", "change")
+            yield f"event: {evt_type}\ndata: {json.dumps(msg)}\n\n"
     return StreamingResponse(event_stream(), media_type="text/event-stream")
