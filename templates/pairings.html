@@ -59,7 +59,6 @@
     .off-dur { font-weight: 800; color: var(--off); }
     .hide { display: none; }
 
-    /* strikethrough for completed legs */
     .leg-done td { text-decoration: line-through; color: var(--strike); }
     .progress { font-weight: 800; margin-left: 8px; color: var(--green); }
   </style>
@@ -180,30 +179,26 @@
     </div>
   </div>
 
-<!-- Server data as pure JSON (no JS to parse here) -->
-<script id="dw-boot" type="application/json">
-{{ {
-  "refreshMinutes": refresh_minutes|int,
-  "onlyReports": (true if only_reports else false),  // use booleans for sanity
-  "clockMode": ("24" if is_24h else "12"),
-  "tz": tz_label
-} | tojson }}
-</script>
+  <!-- Server data as pure JSON (safe for Jinja + JS) -->
+  <script id="dw-boot" type="application/json">
+  {{ {
+    "refreshMinutes": refresh_minutes|int,
+    "onlyReports": (only_reports == 1),
+    "clockMode": ("24" if is_24h else "12"),
+    "tz": tz_label
+  } | tojson }}
+  </script>
 
-<!-- Your app script; read & parse after DOM is ready -->
-<script>
-  (function () {
-    const el = document.getElementById('dw-boot');
-    try {
-      window.DW_BOOT = JSON.parse(el.textContent);
-    } catch (e) {
-      console.error('Failed to parse DW_BOOT JSON', e);
-      window.DW_BOOT = {};
-    }
-  })();
-</script>
+  <!-- Loader: parse JSON into window.DW_BOOT -->
+  <script>
+    (function () {
+      var el = document.getElementById("dw-boot");
+      try { window.DW_BOOT = JSON.parse(el.textContent); }
+      catch (e) { console.error("DW_BOOT JSON parse error", e); window.DW_BOOT = {}; }
+    })();
+  </script>
 
-<script src="/static/pairings.js" defer></script>
-
+  <!-- External page script -->
+  <script src="/static/pairings.js" defer></script>
 </body>
 </html>

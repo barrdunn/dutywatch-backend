@@ -1,12 +1,11 @@
 // === DutyWatch Pairings page script ===
-
 (function () {
-  const CT = 'America/Chicago';
+  const CT_TZ = 'America/Chicago';
 
-  // Boot params from server
+  // Boot params from server (via JSON block)
   const BOOT = (window.DW_BOOT || {});
   const DEFAULT_MINUTES = Number(BOOT.refreshMinutes || 30);
-  const ONLY_INIT = Number(BOOT.onlyReports || 0) === 1;
+  const ONLY_INIT = (BOOT.onlyReports === true) || (Number(BOOT.onlyReports) === 1);
   const CLOCK_INIT = String(BOOT.clockMode || '12');
 
   // Elements
@@ -21,11 +20,17 @@
 
   // ===== Helpers =====
   function fmtTimeCT(d) {
-    return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: CT });
+    try {
+      return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: CT_TZ });
+    } catch {
+      // Fallback if TZ unsupported
+      return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
+    }
   }
   function minutesAgo(iso) {
     if (!iso) return null;
     const t = new Date(iso);
+    if (isNaN(t.getTime())) return null;
     const now = new Date();
     const ms = now - t;
     return Math.max(0, Math.round(ms / 60000));
@@ -39,8 +44,7 @@
   // ===== Live "Last pull" =====
   const lastPullISO = statusEl?.dataset?.lastpull || '';
   function tickRelative() {
-    if (!lastPullSpan) return;
-    if (!lastPullISO) return;
+    if (!lastPullSpan || !lastPullISO) return;
     const mins = minutesAgo(lastPullISO);
     if (mins == null) return;
     lastPullSpan.textContent = mins === 0 ? 'just now' : `${mins} min${mins === 1 ? '' : 's'} ago`;
@@ -69,25 +73,25 @@
     const minutes = getRefreshMinutes();
     localStorage.setItem(REF_KEY, String(minutes));
 
-    // Update URL param so server paints consistent "Next refresh"
+    // Keep URL param in sync (lets server render "Next refresh" consistently)
     const withParam = setQueryParam(window.location.href, 'refresh_minutes', minutes);
     if (withParam !== window.location.href) {
       history.replaceState(null, '', withParam);
     }
 
-    // Compute and display the next refresh time (client view)
+    // Compute and display the next refresh time (client-side view)
     const now = new Date();
     const nextAt = new Date(now.getTime() + minutes * 60000);
     if (nextRefreshSpan) {
       nextRefreshSpan.textContent = `${fmtTimeCT(nextAt)} (CT)`;
     }
 
-    // Every N minutes → POST /calendar/refresh then reload
+    // Every N minutes → POST /calendar/refresh then reload to show new data
     loopTimer = setInterval(async () => {
       try {
         await fetch('/calendar/refresh', { method: 'POST' });
-      } catch (e) {
-        // ignore; reload will retry
+      } catch (_) {
+        // ignore network hiccups; reload will retry
       } finally {
         const url = setQueryParam(window.location.href, 'refresh_minutes', minutes);
         window.location.href = url;
@@ -102,7 +106,7 @@
       const minutes = Number(refreshSelect.value);
       if (![1, 5, 10, 15, 30].includes(minutes)) return;
       try {
-        // Persist server-side (optional but keeps server-side header aligned)
+        // Persist server-side (keeps server header aligned)
         await fetch('/settings/refresh', {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -110,7 +114,7 @@
         });
       } catch (_) {}
       localStorage.setItem(REF_KEY, String(minutes));
-      scheduleLoop(); // reschedule & update "Next refresh"
+      scheduleLoop(); // reschedule + update "Next refresh"
     });
   }
 
