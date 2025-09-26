@@ -1,72 +1,132 @@
 (function () {
   const cfg = safeParseJSON(document.getElementById('dw-boot')?.textContent) || {};
-  const apiBase = cfg.apiBase || '';
-
-  window.dwManualRefresh = async function () {
-    try { await fetch(apiBase + '/api/refresh', { method: 'POST' }); }
-    catch (e) { console.error(e); }
+  let state = {
+    apiBase: cfg.apiBase || '',
+    clockMode: (cfg.clockMode || '24'),   // '12' | '24'
+    refreshMinutes: cfg.refreshMinutes || 5,
+    lastPullIso: null,
+    nextRefreshIso: null,
+    tickTimer: null,
   };
 
+  // Manual refresh
+  window.dwManualRefresh = async function () {
+    try {
+      await fetch(state.apiBase + '/api/refresh', { method: 'POST' });
+      // UI will update via SSE; but also fall back:
+      await renderOnce();
+    } catch (e) { console.error(e); }
+  };
+
+  // Controls
   const refreshSel = document.getElementById('refresh-mins');
   if (refreshSel) {
-    refreshSel.value = String(cfg.refreshMinutes || 5);
+    refreshSel.value = String(state.refreshMinutes);
     refreshSel.addEventListener('change', async () => {
       const minutes = parseInt(refreshSel.value, 10);
+      state.refreshMinutes = minutes;
       try {
-        await fetch(apiBase + '/api/settings/refresh-seconds', {
+        await fetch(state.apiBase + '/api/settings/refresh-seconds', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ seconds: minutes * 60 }),
         });
       } catch (e) { console.error(e); }
+      // reflect new schedule immediately
+      await renderOnce();
+    });
+  }
+
+  const clockSel = document.getElementById('clock-mode');
+  if (clockSel) {
+    clockSel.value = state.clockMode;
+    clockSel.addEventListener('change', async () => {
+      state.clockMode = clockSel.value;
+      await renderOnce(); // ask backend to format legs accordingly
     });
   }
 
   // First paint
   renderOnce();
 
-  // Live updates via SSE; fallback to timer if SSE fails
+  // SSE for live updates
   try {
-    const es = new EventSource(apiBase + '/api/events');
-    es.addEventListener('hello', () => {/* initial */});
+    const es = new EventSource(state.apiBase + '/api/events');
+    es.addEventListener('hello', () => {});
     es.addEventListener('change', async () => { await renderOnce(); });
-    es.onerror = () => { /* will rely on fallback below */ };
+    es.addEventListener('schedule_update', async () => { await renderOnce(); });
+    es.onerror = () => {};
   } catch {
-    setInterval(renderOnce, (cfg.refreshMinutes || 5) * 60 * 1000);
+    setInterval(renderOnce, (state.refreshMinutes || 5) * 60 * 1000);
   }
 
   async function renderOnce() {
+    // stop any ticking; we’ll restart with new timestamps
+    if (state.tickTimer) { clearInterval(state.tickTimer); state.tickTimer = null; }
+
+    const query = new URLSearchParams({
+      is_24h: state.clockMode === '24' ? '1' : '0',
+      only_reports: '1',
+    }).toString();
+
     let data;
     try {
-      const res = await fetch(apiBase + '/api/pairings', { cache: 'no-store' });
+      const res = await fetch(`${state.apiBase}/api/pairings?${query}`, { cache: 'no-store' });
       data = await res.json();
     } catch (e) {
       console.error('Failed to fetch /api/pairings', e);
       return;
     }
+
+    // header/status
     setText('#looking-through', data.looking_through ?? '—');
     setText('#last-pull', data.last_pull_local ?? '—');
+
+    // Wall clock + remember ISO stamps for ticking
     setText('#next-refresh', data.next_pull_local && data.tz_label
       ? `${data.next_pull_local} (${data.tz_label})` : '—');
 
+    state.lastPullIso = data.last_pull_local_iso || null;
+    state.nextRefreshIso = data.next_pull_local_iso || null;
+
+    // render table
     const tbody = qs('#pairings-body');
     tbody.innerHTML = (data.rows || []).map(renderRowHTML).join('');
 
-    // Collapse all by default
+    // collapse all by default
     for (const tr of tbody.querySelectorAll('tr.summary')) {
       tr.classList.remove('open');
       const det = tr.nextElementSibling;
       if (det && det.classList.contains('details')) det.style.display = 'none';
     }
-
-    // Optionally auto-open in-progress pairings
+    // auto-open in-progress
     for (const tr of tbody.querySelectorAll('tr.summary')) {
-      const inProg = /\(In progress\)/.test(tr.innerHTML);
-      if (inProg) toggleRow(tr, true);
+      if (/\(In progress\)/.test(tr.innerHTML)) toggleRow(tr, true);
+    }
+
+    // (Re)start 1s ticker for “last pull” and “next in …”
+    tickStatusLine();
+    state.tickTimer = setInterval(tickStatusLine, 1000);
+  }
+
+  function tickStatusLine() {
+    // last pull precise
+    if (state.lastPullIso) {
+      const s = preciseAgo(new Date(state.lastPullIso));
+      setText('#last-pull', s);
+    }
+    // next refresh countdown
+    const etaEl = qs('#next-refresh-eta');
+    if (etaEl) {
+      if (!state.nextRefreshIso) { etaEl.textContent = ''; return; }
+      const diff = Math.max(0, Math.floor((new Date(state.nextRefreshIso).getTime() - Date.now()) / 1000));
+      const m = Math.floor(diff / 60);
+      const s = diff % 60;
+      etaEl.textContent = diff > 0 ? `in ${m}m ${s}s` : '(refreshing…)';
     }
   }
 
-  // Event delegation: click summary to toggle its details row
+  // Click-to-toggle details (delegated)
   document.addEventListener('click', (ev) => {
     const tr = ev.target.closest('tr.summary');
     if (!tr) return;
@@ -81,6 +141,7 @@
     }
   }
 
+  // Rendering helpers
   function renderRowHTML(row) {
     if (row.kind === 'off') {
       return `
@@ -137,6 +198,13 @@
   }
 
   // utils
+  function preciseAgo(then) {
+    const d = Math.max(0, Math.floor((Date.now() - then.getTime()) / 1000));
+    const m = Math.floor(d / 60), s = d % 60;
+    if (m && s) return `${m}m ${s}s ago`;
+    if (m) return `${m}m ago`;
+    return `${s}s ago`;
+  }
   function qs(sel) { return document.querySelector(sel); }
   function setText(sel, v) { const el = qs(sel); if (el) el.textContent = v; }
   function esc(s) {

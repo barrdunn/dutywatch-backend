@@ -106,6 +106,22 @@ def human_dur(td: dt.timedelta) -> str:
         return f"{d}d {h}h"
     return f"{total_h}h"
 
+def human_ago_precise(from_dt: Optional[dt.datetime]) -> str:
+    if not from_dt:
+        return "never"
+    now = dt.datetime.now(LOCAL_TZ)
+    delta = now - from_dt
+    if delta.total_seconds() < 0:
+        delta = dt.timedelta(0)
+    s = int(delta.total_seconds())
+    m = s // 60
+    s = s % 60
+    if m and s:
+        return f"{m}m {s}s ago"
+    if m:
+        return f"{m}m ago"
+    return f"{s}s ago"
+
 def human_ago(from_dt: Optional[dt.datetime]) -> str:
     if not from_dt:
         return "never"
@@ -435,21 +451,33 @@ async def api_pairings(
     month_events = filter_events_to_month(events, y, m)
     rows = await run_in_threadpool(build_pairing_rows, month_events, bool(is_24h), bool(only_reports))
 
+    # times
     lp_iso = meta.get("last_pull_utc")
-    lp_local = dt.datetime.fromisoformat(lp_iso.replace("Z", "+00:00")).astimezone(LOCAL_TZ) if lp_iso else None
-    last_pull_local = human_ago(lp_local)
+    nr_iso = meta.get("next_run_utc")
 
-    nr = meta.get("next_run_utc")
-    nxt_local = dt.datetime.fromisoformat(nr.replace("Z", "+00:00")).astimezone(LOCAL_TZ) if nr else next_refresh_at_local(int(meta.get("refresh_minutes", 5)))
-    next_refresh_local = nxt_local.strftime("%I:%M %p").lstrip("0")
+    lp_local = dt.datetime.fromisoformat(lp_iso.replace("Z", "+00:00")).astimezone(LOCAL_TZ) if lp_iso else None
+    nr_local = dt.datetime.fromisoformat(nr_iso.replace("Z", "+00:00")).astimezone(LOCAL_TZ) if nr_iso else None
+    now_local = dt.datetime.now(LOCAL_TZ)
+
+    last_pull_local = human_ago_lp = human_ago_precise(lp_local)
+    # keep your existing human_ago text if you want; we’ll send both
+    last_pull_human_simple = human_ago(lp_local)
+
+    next_refresh_local_clock = nr_local.strftime("%I:%M %p").lstrip("0") if nr_local else ""
+    # countdown seconds to next
+    seconds_to_next = max(0, int((nr_local - now_local).total_seconds())) if nr_local else 0
 
     looking_end = end_of_next_month_local()
     looking_through = f"Today – {looking_end.strftime('%b %d (%a)')}"
 
     return {
         "looking_through": looking_through,
-        "last_pull_local": last_pull_local,
-        "next_pull_local": next_refresh_local,
+        "last_pull_local": last_pull_local,                 # "3m 12s ago"
+        "last_pull_local_simple": last_pull_human_simple,   # your old rounded text
+        "last_pull_local_iso": lp_local.isoformat() if lp_local else "",
+        "next_pull_local": next_refresh_local_clock,        # "11:15 PM"
+        "next_pull_local_iso": nr_local.isoformat() if nr_local else "",
+        "seconds_to_next": seconds_to_next,
         "tz_label": "CT",
         "rows": rows,
         "version": state.version,
@@ -480,6 +508,9 @@ async def api_set_refresh_seconds(payload: Dict[str, Any]):
     meta["refresh_minutes"] = max(1, secs // 60)
     meta["next_run_utc"] = (_now_utc() + dt.timedelta(minutes=meta["refresh_minutes"])).replace(microsecond=0).isoformat()
     await run_in_threadpool(write_cache_meta, meta)
+
+    # tell clients to refresh their status line
+    await state.sse_queue.put(json.dumps({"type": "schedule_update", "version": state.version}))
     return {"ok": True, "refresh_seconds": state.refresh_seconds}
 
 @app.post("/api/refresh")
