@@ -23,7 +23,6 @@
     try {
       return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: CT_TZ });
     } catch {
-      // Fallback if TZ unsupported
       return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
     }
   }
@@ -50,7 +49,9 @@
     lastPullSpan.textContent = mins === 0 ? 'just now' : `${mins} min${mins === 1 ? '' : 's'} ago`;
   }
 
-  // ===== Auto-refresh scheduling =====
+  // ===== Auto-reload scheduling (UI only) =====
+  // The server refreshes itself in the background on the saved cadence.
+  // The page just reloads to show the latest data.
   const REF_KEY = 'dw_refresh_minutes';
   function getRefreshMinutes() {
     const saved = Number(localStorage.getItem(REF_KEY)) || 0;
@@ -65,7 +66,7 @@
 
   let loopTimer = null;
 
-  function scheduleLoop() {
+  async function scheduleLoop() {
     if (loopTimer) {
       clearInterval(loopTimer);
       loopTimer = null;
@@ -73,29 +74,23 @@
     const minutes = getRefreshMinutes();
     localStorage.setItem(REF_KEY, String(minutes));
 
-    // Keep URL param in sync (lets server render "Next refresh" consistently)
+    // Keep URL param in sync (lets server render consistent UI)
     const withParam = setQueryParam(window.location.href, 'refresh_minutes', minutes);
     if (withParam !== window.location.href) {
       history.replaceState(null, '', withParam);
     }
 
-    // Compute and display the next refresh time (client-side view)
+    // Update "Next refresh" display on the page (client-side hint)
     const now = new Date();
     const nextAt = new Date(now.getTime() + minutes * 60000);
     if (nextRefreshSpan) {
       nextRefreshSpan.textContent = `${fmtTimeCT(nextAt)} (CT)`;
     }
 
-    // Every N minutes → POST /calendar/refresh then reload to show new data
-    loopTimer = setInterval(async () => {
-      try {
-        await fetch('/calendar/refresh', { method: 'POST' });
-      } catch (_) {
-        // ignore network hiccups; reload will retry
-      } finally {
-        const url = setQueryParam(window.location.href, 'refresh_minutes', minutes);
-        window.location.href = url;
-      }
+    // Reload the page every N minutes to reflect fresh server data
+    loopTimer = setInterval(() => {
+      const url = setQueryParam(window.location.href, 'refresh_minutes', minutes);
+      window.location.href = url;
     }, minutes * 60000);
   }
 
@@ -106,7 +101,7 @@
       const minutes = Number(refreshSelect.value);
       if (![1, 5, 10, 15, 30].includes(minutes)) return;
       try {
-        // Persist server-side (keeps server header aligned)
+        // Persist server-side schedule
         await fetch('/settings/refresh', {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -114,7 +109,7 @@
         });
       } catch (_) {}
       localStorage.setItem(REF_KEY, String(minutes));
-      scheduleLoop(); // reschedule + update "Next refresh"
+      scheduleLoop(); // reschedule & update label
     });
   }
 
@@ -154,14 +149,13 @@
     });
   }
 
-  // ===== Clock toggle (label only; display stays as rendered) =====
+  // ===== Clock toggle (label only) =====
   if (clkBtn && clkState) {
     clkBtn.addEventListener('click', () => {
       const cur = clkBtn.getAttribute('data-clock') || CLOCK_INIT;
       const next = cur === '12' ? '24' : '12';
       clkBtn.setAttribute('data-clock', next);
       clkState.textContent = next === '24' ? '24h' : '12h';
-      // If you later want server-side reformat, reload with ?is_24h=1 here.
     });
   }
 

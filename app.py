@@ -5,6 +5,7 @@ DutyWatch FastAPI — Pairings view with OFF gaps (local time, dark UI)
 from __future__ import annotations
 
 import os
+import asyncio
 import datetime as dt
 import json
 import re
@@ -448,15 +449,79 @@ def fetch_current_to_next_eom() -> List[Dict[str, Any]]:
     hours = int((end - now).total_seconds() // 3600) + 1
     return cal.fetch_upcoming_events(hours_ahead=hours)
 
+# -------------------------- Background refresher (server-driven) --------------------------
+
+_REFRESHER_TASK: asyncio.Task | None = None
+_REFRESHER_NUDGE: asyncio.Event | None = None
+
+def _now_utc() -> dt.datetime:
+    return dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc)
+
+def _next_run_from(meta: Dict[str, Any]) -> dt.datetime:
+    mins = int(meta.get("refresh_minutes", 30))
+    lp_iso = meta.get("last_pull_utc")
+    base = _now_utc() if not lp_iso else dt.datetime.fromisoformat(lp_iso.replace("Z", "+00:00"))
+    base = base.replace(tzinfo=dt.timezone.utc)
+    return (base + dt.timedelta(minutes=mins)).replace(microsecond=0)
+
+async def _refresh_daemon():
+    global _REFRESHER_NUDGE
+    _REFRESHER_NUDGE = asyncio.Event()
+    while True:
+        meta = read_cache_meta()
+        meta.setdefault("refresh_minutes", 30)
+        nxt = _next_run_from(meta)
+        meta["next_run_utc"] = nxt.isoformat()
+        write_cache_meta(meta)
+
+        timeout = max(1.0, (nxt - _now_utc()).total_seconds())
+        try:
+            await asyncio.wait_for(_REFRESHER_NUDGE.wait(), timeout=timeout)
+            _REFRESHER_NUDGE.clear()
+            continue
+        except asyncio.TimeoutError:
+            pass
+
+        try:
+            events = fetch_current_to_next_eom()
+            meta = read_cache_meta()
+            meta["events"] = events
+            meta["last_pull_utc"] = _now_utc().isoformat()
+            meta.setdefault("refresh_minutes", 30)
+            meta["next_run_utc"] = _next_run_from(meta).isoformat()
+            write_cache_meta(meta)
+        except Exception:
+            await asyncio.sleep(5)
+
 # -------------------------- Routes --------------------------
 
 @app.on_event("startup")
 async def on_startup():
     init_db()
+    global _REFRESHER_TASK
+    if _REFRESHER_TASK is None:
+        _REFRESHER_TASK = asyncio.create_task(_refresh_daemon())
 
 @app.get("/health")
 def health():
     return {"ok": True}
+
+@app.get("/schedule/status")
+def schedule_status():
+    meta = read_cache_meta()
+    lp_iso = meta.get("last_pull_utc")
+    nr_iso = meta.get("next_run_utc")
+    lp_local = dt.datetime.fromisoformat(lp_iso.replace("Z", "+00:00")).astimezone(LOCAL_TZ) if lp_iso else None
+    nr_local = dt.datetime.fromisoformat(nr_iso.replace("Z", "+00:00")).astimezone(LOCAL_TZ) if nr_iso else None
+    def fmt_local(d: Optional[dt.datetime]) -> str:
+        if not d: return ""
+        return d.strftime("%-I:%M %p") if os.name != "nt" else d.strftime("%I:%M %p").lstrip("0")
+    return {
+        "ok": True,
+        "refresh_minutes": int(meta.get("refresh_minutes", 30)),
+        "last_pull_local": lp_local.isoformat() if lp_local else "",
+        "next_refresh_local": fmt_local(nr_local),
+    }
 
 @app.post("/calendar/refresh")
 def calendar_refresh(request: Request):
@@ -467,6 +532,7 @@ def calendar_refresh(request: Request):
         meta["last_pull_utc"] = dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc).isoformat()
         if "refresh_minutes" not in meta:
             meta["refresh_minutes"] = 30
+        meta["next_run_utc"] = _next_run_from(meta).isoformat()
         write_cache_meta(meta)
     except Exception as e:
         return JSONResponse(status_code=500, content={"ok": False, "error": f"{type(e).__name__}: {e}"})
@@ -486,9 +552,11 @@ def settings_refresh(minutes: int = Form(...)):
         return JSONResponse(status_code=400, content={"ok": False, "error": "invalid minutes"})
     meta = read_cache_meta()
     meta["refresh_minutes"] = minutes
+    meta["next_run_utc"] = _next_run_from(meta).isoformat()
     write_cache_meta(meta)
-    nxt = next_refresh_at_local(minutes)
-    # %-I is not portable on Windows; lstrip leading zero as fallback
+    if _REFRESHER_NUDGE:
+        _REFRESHER_NUDGE.set()
+    nxt = dt.datetime.fromisoformat(meta["next_run_utc"]).astimezone(LOCAL_TZ)
     nxt_str = nxt.strftime("%-I:%M %p") if os.name != "nt" else nxt.strftime("%I:%M %p").lstrip("0")
     return {"ok": True, "refresh_minutes": minutes, "next_refresh_local": nxt_str}
 
@@ -499,6 +567,7 @@ def pairings_page(
     month: Optional[int] = Query(default=None, ge=1, le=12),
     only_reports: int = Query(default=1),
     is_24h: int = Query(default=0),
+    refresh_minutes: Optional[int] = Query(default=None),  # client may pass; UI stays in sync
 ):
     # Read meta and events
     meta = read_cache_meta()
@@ -511,6 +580,7 @@ def pairings_page(
             meta["last_pull_utc"] = dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc).isoformat()
             if "refresh_minutes" not in meta:
                 meta["refresh_minutes"] = 30
+            meta["next_run_utc"] = _next_run_from(meta).isoformat()
             write_cache_meta(meta)
         except Exception as e:
             return JSONResponse(status_code=500, content={"ok": False, "error": f"{type(e).__name__}: {e}"})
@@ -526,8 +596,17 @@ def pairings_page(
         except Exception:
             pass
 
-    refresh_minutes = int(meta.get("refresh_minutes", 30))
-    nxt = next_refresh_at_local(refresh_minutes)
+    # Use saved refresh minutes, but respect query if present
+    refresh_minutes_saved = int(meta.get("refresh_minutes", 30))
+    if refresh_minutes and refresh_minutes in {1,5,10,15,30}:
+        refresh_minutes_saved = refresh_minutes
+
+    # Next refresh from server schedule when available
+    nr = meta.get("next_run_utc")
+    if nr:
+        nxt = dt.datetime.fromisoformat(nr.replace("Z", "+00:00")).astimezone(LOCAL_TZ)
+    else:
+        nxt = next_refresh_at_local(refresh_minutes_saved)
     next_pull_local_str = nxt.strftime("%-I:%M %p") if os.name != "nt" else nxt.strftime("%I:%M %p").lstrip("0")
 
     # Looking through: Today → end of next month (always shows out through next month)
@@ -552,7 +631,7 @@ def pairings_page(
             "last_pull_local": last_pull_local_str,
             "last_pull_local_iso": last_pull_dt_local.isoformat() if last_pull_dt_local else "",
             "next_pull_local": next_pull_local_str,
-            "refresh_minutes": refresh_minutes,
+            "refresh_minutes": refresh_minutes_saved,
             "tz_label": "CT",
         },
     )

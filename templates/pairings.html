@@ -183,7 +183,7 @@
   <script id="dw-boot" type="application/json">
   {{ {
     "refreshMinutes": refresh_minutes|int,
-    "onlyReports": (only_reports == 1),
+    "onlyReports": (1 if only_reports else 0),
     "clockMode": ("24" if is_24h else "12"),
     "tz": tz_label
   } | tojson }}
