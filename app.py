@@ -29,7 +29,7 @@ PAIRINGS_DIR = BASE_DIR / "public" / "pairings"
 
 app = FastAPI(title="DutyWatch Backend (Viewer-Only)")
 
-# Static
+# Serve static front-end
 app.mount("/pairings", StaticFiles(directory=PAIRINGS_DIR, html=True), name="pairings")
 
 @app.get("/pairings", include_in_schema=False)
@@ -257,21 +257,6 @@ def _window_state(report_local: Optional[dt.datetime]) -> Dict[str, Any]:
         "seconds_until_report": max(0, int((report_local - now_local).total_seconds())) if now_local < report_local else 0,
     }
 
-# ---------------- Helpers ----------------
-def _json_error(status: int, message: str, **extra):
-    payload = {"error": message}
-    if extra:
-        payload.update(extra)
-    return JSONResponse(status_code=status, content(payload))
-
-def content(obj):
-    # ensure everything is JSON serializable
-    try:
-        json.dumps(obj)
-        return obj
-    except Exception:
-        return {"_string": str(obj)}
-
 # ---------------- API Routes ----------------
 @app.get("/health")
 def health():
@@ -285,8 +270,6 @@ async def api_pairings(
     is_24h: int = Query(default=0),
 ):
     try:
-        debug_notes: List[str] = []
-
         meta = await run_in_threadpool(read_cache_meta)
         events = normalize_cached_events(meta)
 
@@ -310,16 +293,10 @@ async def api_pairings(
 
         try:
             month_events = [e for e in events if start_utc <= safe_start(e) < end_utc]
-        except Exception as e:
-            debug_notes.append(f"month_filter_error:{type(e).__name__}")
+        except Exception:
             month_events = events
 
-        try:
-            rows = await run_in_threadpool(build_pairing_rows, month_events, bool(is_24h), bool(only_reports))
-        except Exception as e:
-            logger.exception("build_pairing_rows error")
-            debug_notes.append(f"build_rows_error:{type(e).__name__}")
-            rows = []
+        rows = await run_in_threadpool(build_pairing_rows, month_events, bool(is_24h), bool(only_reports))
 
         # ack enrichment
         enriched: List[Dict[str, Any]] = []
@@ -327,23 +304,20 @@ async def api_pairings(
             if r.get("kind") != "pairing":
                 enriched.append(r)
                 continue
-            try:
-                pairing_id = str(r.get("pairing_id") or "")
-                report_iso = r.get("report_local_iso") or ""
-                report_local = to_local(iso_to_dt(report_iso)) if report_iso else None
-                win = _window_state(report_local)
-                ackid = _ack_id(pairing_id, report_iso)
-                state = _read_ack_state(ackid)
-                r["ack"] = {
-                    "ack_id": ackid,
-                    "window_open": bool(win["window_open"]),
-                    "acknowledged": (state == "ack"),
-                    "seconds_until_open": win["seconds_until_open"],
-                    "seconds_until_report": win["seconds_until_report"],
-                    "report_local_iso": report_iso,
-                }
-            except Exception as e:
-                debug_notes.append(f"ack_enrich_error:{type(e).__name__}")
+            pairing_id = str(r.get("pairing_id") or "")
+            report_iso = r.get("report_local_iso") or ""
+            report_local = to_local(iso_to_dt(report_iso)) if report_iso else None
+            win = _window_state(report_local)
+            ackid = _ack_id(pairing_id, report_iso)
+            state = _read_ack_state(ackid)
+            r["ack"] = {
+                "ack_id": ackid,
+                "window_open": bool(win["window_open"]),
+                "acknowledged": (state == "ack"),
+                "seconds_until_open": win["seconds_until_open"],
+                "seconds_until_report": win["seconds_until_report"],
+                "report_local_iso": report_iso,
+            }
             enriched.append(r)
 
         # meta display
@@ -377,19 +351,13 @@ async def api_pairings(
             "month": m,
             "refresh_minutes": int(meta.get("refresh_minutes", max(1, state.refresh_seconds // 60))),
             "ack_policy": ACK_POLICY,
-            "debug": ";".join(debug_notes) if debug_notes else "",
         }
     except Exception as e:
-        # Never let this endpoint return HTML "Internal Server Error" — return JSON instead.
         tb = traceback.format_exc(limit=12)
         logger.error("api_pairings failed: %s\n%s", e, tb)
         return JSONResponse(
             status_code=500,
-            content={
-                "error": "pairings_failed",
-                "message": str(e),
-                "trace": tb,
-            },
+            content={"error": "pairings_failed", "message": str(e), "trace": tb},
         )
 
 @app.get("/api/ack/plan")
@@ -455,34 +423,3 @@ async def sse_events():
             evt_type = msg.get("type", "change")
             yield f"event: {evt_type}\ndata: {json.dumps(msg)}\n\n"
     return StreamingResponse(event_stream(), media_type="text/event-stream")
-
-# ---------------- Debug helpers ----------------
-@app.get("/api/debug/meta")
-async def api_debug_meta():
-    """Quick peek at cache + counts."""
-    meta = await run_in_threadpool(read_cache_meta)
-    events = normalize_cached_events(meta)
-    return {
-        "events_count": len(events),
-        "has_last_pull_utc": bool(meta.get("last_pull_utc")),
-        "has_next_run_utc": bool(meta.get("next_run_utc")),
-        "refresh_minutes": meta.get("refresh_minutes"),
-        "sample_event_keys": list(events[0].keys()) if events else [],
-    }
-
-@app.get("/api/debug/sample")
-async def api_debug_sample(n: int = 3):
-    """Return first N raw events (truncated) to inspect shape safely."""
-    meta = await run_in_threadpool(read_cache_meta)
-    events = normalize_cached_events(meta)
-    out = []
-    for ev in events[:max(0, min(n, 20))]:
-        out.append({
-            "uid": ev.get("uid"),
-            "summary": ev.get("summary"),
-            "start_utc": ev.get("start_utc"),
-            "end_utc": ev.get("end_utc"),
-            "location": ev.get("location"),
-            "has_description": bool(ev.get("description")),
-        })
-    return {"count": len(out), "items": out}
