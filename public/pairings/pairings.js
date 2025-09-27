@@ -1,23 +1,23 @@
 (function () {
   const cfg = safeParseJSON(document.getElementById('dw-boot')?.textContent) || {};
   const apiBase = cfg.apiBase || '';
+  const HOME_BASE = (cfg.baseAirport || 'DFW').toUpperCase();
+
   const state = {
     lastPullIso: null,
     nextRefreshIso: null,
-    clockMode: cfg.clockMode === '24' ? 24 : 12, // default 12h (can be replaced by /api/config)
+    clockMode: cfg.clockMode === '24' ? 24 : 12,
     onlyReports: cfg.onlyReports !== false,
-    homeBase: (cfg.baseAirport || 'DFW').toUpperCase(),
     _zeroKick: 0,
   };
 
-  // Optional: hydrate front-end defaults from server config
-  bootstrapFromConfig();
-
+  // Public action
   window.dwManualRefresh = async function () {
     try { await fetch(apiBase + '/api/refresh', { method: 'POST' }); }
     catch (e) { console.error(e); }
   };
 
+  // Controls
   const refreshSel = document.getElementById('refresh-mins');
   if (refreshSel) {
     if (cfg.refreshMinutes) refreshSel.value = String(cfg.refreshMinutes);
@@ -38,12 +38,14 @@
     clockSel.value = String(state.clockMode);
     clockSel.addEventListener('change', async () => {
       state.clockMode = parseInt(clockSel.value, 10) === 12 ? 12 : 24;
-      await renderOnce();
+      await renderOnce();  // re-render with new time format
     });
   }
 
+  // First paint
   renderOnce();
 
+  // SSE
   try {
     const es = new EventSource(apiBase + '/api/events');
     es.addEventListener('hello', () => {});
@@ -51,36 +53,79 @@
     es.addEventListener('schedule_update', async () => { await renderOnce(); });
   } catch {}
 
+  // Status ticker
   setInterval(tickStatusLine, 1000);
 
-  document.addEventListener('click', (e) => {
+  // Global click handlers
+  document.addEventListener('click', async (e) => {
+    // Expand/collapse pairing rows
     const sum = e.target.closest('tr.summary');
-    if (!sum) return;
-    sum.classList.toggle('open');
+    if (sum && !e.target.closest('[data-ck]')) { // ignore clicks on checkbox
+      sum.classList.toggle('open');
+      const details = sum.nextElementSibling;
+      if (!details || !details.classList.contains('details')) return;
+      const open = sum.classList.contains('open');
+      details.querySelectorAll('.day .legs').forEach(tbl => {
+        tbl.style.display = open ? 'table' : 'none';
+      });
+      details.querySelectorAll('.day .helper').forEach(h => {
+        h.textContent = open ? 'click to hide legs' : 'click to show legs';
+      });
+      return;
+    }
 
-    const details = sum.nextElementSibling;
-    if (!details || !details.classList.contains('details')) return;
-    const open = sum.classList.contains('open');
-    details.querySelectorAll('.day .legs').forEach(tbl => {
-      tbl.style.display = open ? 'table' : 'none';
-    });
-    details.querySelectorAll('.day .helper').forEach(h => {
-      h.textContent = open ? 'click to hide legs' : 'click to show legs';
-    });
+    // Day header toggles its legs
+    const hdr = e.target.closest('.dayhdr');
+    if (hdr) {
+      const day = hdr.closest('.day');
+      const legs = day?.querySelector('.legs');
+      if (!legs) return;
+      const shown = legs.style.display !== 'none';
+      legs.style.display = shown ? 'none' : 'table';
+      const helper = day.querySelector('.helper');
+      if (helper) helper.textContent = shown ? 'click to show legs' : 'click to hide legs';
+      return;
+    }
+
+    // Check-in checkbox behavior
+    const ckBtn = e.target.closest('[data-ck]');
+    if (ckBtn) {
+      const stateAttr = ckBtn.getAttribute('data-ck');
+      const pairingId = ckBtn.getAttribute('data-pairing') || '';
+      const reportIso = ckBtn.getAttribute('data-report') || '';
+
+      if (stateAttr === 'off') {
+        // Show plan modal when window is not open
+        await openPlan(pairingId, reportIso);
+        return;
+      }
+
+      if (stateAttr === 'pending') {
+        // Acknowledge immediately
+        try {
+          await fetch(`${apiBase}/api/ack/acknowledge`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pairing_id: pairingId, report_local_iso: reportIso }),
+          });
+        } catch (err) {
+          console.error('ack failed', err);
+        }
+        await renderOnce();
+        return;
+      }
+
+      // 'ok' -> do nothing
+      return;
+    }
+
+    // Plan modal close buttons
+    if (e.target.id === 'plan-close-1' || e.target.id === 'plan-close-2') {
+      showModal(false);
+    }
   });
 
-  async function bootstrapFromConfig() {
-    try {
-      const res = await fetch(`${apiBase}/api/config`, { cache: 'no-store' });
-      if (!res.ok) return;
-      const data = await res.json();
-      // fill UI defaults
-      if (data.default_refresh_minutes && refreshSel) {
-        refreshSel.value = String(data.default_refresh_minutes);
-      }
-    } catch {}
-  }
-
+  // Core render
   async function renderOnce() {
     const params = new URLSearchParams({
       is_24h: String(state.clockMode === 24 ? 1 : 0),
@@ -103,7 +148,7 @@
       refreshSel.value = String(data.refresh_minutes);
     }
 
-    // SOURCE OF TRUTH: show the exact label the backend used to fetch
+    // header label from API (single source of truth)
     const label = (data.window && data.window.label) || data.looking_through || '—';
     setText('#looking-through', label);
     setText('#last-pull', data.last_pull_local ?? '—');
@@ -115,22 +160,26 @@
     if (nextEl) nextEl.innerHTML = `${esc(base)} <span id="next-refresh-eta"></span>`;
 
     const tbody = qs('#pairings-body');
-    tbody.innerHTML = (data.rows || []).map(row => renderRowHTML(row)).join('');
+    tbody.innerHTML = (data.rows || []).map(row => renderRowHTML(row, HOME_BASE)).join('');
   }
 
+  // Helpers for start airport / out-of-base pill
   function firstDepartureAirport(row) {
     const days = row?.days || [];
     for (const d of days) {
       const legs = d?.legs || [];
-      if (legs.length && legs[0].dep) return String(legs[0].dep).toUpperCase();
+      if (legs.length && legs[0].dep) {
+        return String(legs[0].dep).toUpperCase();
+      }
     }
     return null;
   }
 
-  function renderRowHTML(row) {
+  function renderRowHTML(row, homeBase) {
     if (row.kind === 'off') {
       return `
         <tr class="off">
+          <td></td>
           <td><span class="off-label">OFF</span></td>
           <td class="muted"></td>
           <td class="muted"></td>
@@ -142,13 +191,16 @@
     const inProg = row.in_progress ? `<span class="progress">(In progress)</span>` : '';
 
     const startDep = firstDepartureAirport(row);
-    const showOOB = !!(startDep && startDep !== state.homeBase);
+    const showOOB = !!(startDep && startDep !== homeBase);
     const oobPill = showOOB ? `<span class="pill pill-red">${esc(startDep)}</span>` : '';
+
+    const checkCell = renderCheckCell(row);
 
     const details = (row.days || []).map((day, i) => renderDayHTML(day, i)).join('');
 
     return `
       <tr class="summary">
+        ${checkCell}
         <td class="sum-first">
           <strong>${esc(row.pairing_id || '')}</strong>
           <span class="pill">${daysCount} day</span>
@@ -160,10 +212,35 @@
         <td class="muted">click to expand days</td>
       </tr>
       <tr class="details">
-        <td colspan="4">
+        <td colspan="5">
           <div class="daysbox">${details}</div>
         </td>
       </tr>`;
+  }
+
+  function renderCheckCell(row) {
+    const ack = row.ack || {};
+    const acknowledged = !!ack.acknowledged;
+    const windowOpen = !!ack.window_open;
+    const stateAttr = acknowledged ? 'ok' : (windowOpen ? 'pending' : 'off');
+
+    const ariaChecked = acknowledged ? 'true' : 'false';
+    const ariaDisabled = acknowledged ? 'true' : 'false';
+
+    return `
+      <td class="ck ${stateAttr}">
+        <button class="ckbtn"
+                type="button"
+                role="checkbox"
+                aria-checked="${ariaChecked}"
+                aria-disabled="${ariaDisabled}"
+                title="${stateAttr === 'ok' ? 'Acknowledged' : (stateAttr === 'pending' ? 'Click to acknowledge now' : 'Click to view reminder plan')}"
+                data-ck="${stateAttr}"
+                data-pairing="${esc(row.pairing_id || '')}"
+                data-report="${esc((ack && ack.report_local_iso) || '')}">
+          <span class="ckbox" aria-hidden="true"></span>
+        </button>
+      </td>`;
   }
 
   function renderDayHTML(day, idx) {
@@ -196,13 +273,40 @@
       </div>`;
   }
 
+  async function openPlan(pairingId, reportIso) {
+    try {
+      const res = await fetch(`${apiBase}/api/ack/plan?pairing_id=${encodeURIComponent(pairingId)}&report_local_iso=${encodeURIComponent(reportIso)}`);
+      const data = await res.json();
+      const rows = (data.attempts||[]).map(a => {
+        const when = new Date(a.at_iso).toLocaleString();
+        const type = a.kind.toUpperCase();
+        const det = a.label || '';
+        return `<tr><td>${esc(when)}</td><td>${esc(type)}</td><td>${esc(det)}</td></tr>`;
+      }).join('');
+      qs('#plan-rows').innerHTML = rows || `<tr><td colspan="3" class="muted">No upcoming attempts.</td></tr>`;
+      qs('#plan-meta').textContent = `Policy: push at T-${data.policy.window_open_hours}h and T-${data.policy.second_push_at_hours}h; calls from T-${data.policy.call_start_hours}h every ${data.policy.call_interval_minutes}m (2 rings/attempt)`;
+      showModal(true);
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  function showModal(show) {
+    const m = qs('#plan-modal');
+    if (!m) return;
+    m.classList.toggle('hidden', !show);
+  }
+
+  // Status line tick
   function tickStatusLine() {
     if (state.lastPullIso) {
       const ago = preciseAgo(new Date(state.lastPullIso));
       setText('#last-pull', ago);
     }
+
     const etaEl = qs('#next-refresh-eta');
     if (!etaEl || !state.nextRefreshIso) return;
+
     const diff = Math.floor((new Date(state.nextRefreshIso).getTime() - Date.now()) / 1000);
     const left = Math.max(0, diff);
     if (left > 0) {
@@ -218,6 +322,7 @@
     }
   }
 
+  // utils
   function qs(sel) { return document.querySelector(sel); }
   function setText(sel, v) { const el = qs(sel); if (el) el.textContent = v; }
   function esc(s) {
@@ -225,10 +330,10 @@
       ({'&':'&amp;','<':'&#x3E;','"':'&quot;',"'":'&#39;','/':'&#x2F;','`':'&#x60;','=':'&#x3D;'}[ch])
     );
   }
-  function safeParseJSON(s) { try { return JSON.parse(s || '{}'); } catch { return null; } }
   function preciseAgo(d){
     const sec = Math.max(0, Math.floor((Date.now() - d.getTime())/1000));
     const m = Math.floor(sec/60), s = sec%60;
     return m ? `${m}m ${s}s ago` : `${s}s ago`;
   }
+  function safeParseJSON(s) { try { return JSON.parse(s || '{}'); } catch { return null; } }
 })();
