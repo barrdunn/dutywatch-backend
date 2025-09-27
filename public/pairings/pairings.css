@@ -65,6 +65,9 @@ th { color:var(--muted); font-weight:600; text-align:left; border-bottom:1px sol
 tr.summary, tr.summary td { cursor: pointer; }
 .dayhdr { cursor: pointer; }
 
+/* first column (checkbox) width */
+th:first-child, td.ck { width: 36px; }
+
 /* =========================
    Full-width capsule rows
    ========================= */
@@ -156,11 +159,7 @@ tr.details > td { position:relative; z-index:1; }
 /* =========================
    Check-in checkbox (left column)
    ========================= */
-.ck{
-  display:flex;
-  align-items:center;
-  justify-content:center;
-}
+.ck{ display:flex; align-items:center; justify-content:center; }
 
 .ckbox{
   width: 18px;

@@ -58,9 +58,9 @@
 
   // Global click handlers
   document.addEventListener('click', async (e) => {
-    // Expand/collapse pairing rows
+    // Expand/collapse pairing rows (ignore clicks on checkbox)
     const sum = e.target.closest('tr.summary');
-    if (sum && !e.target.closest('[data-ck]')) { // ignore clicks on checkbox
+    if (sum && !e.target.closest('[data-ck]')) {
       sum.classList.toggle('open');
       const details = sum.nextElementSibling;
       if (!details || !details.classList.contains('details')) return;
@@ -195,7 +195,6 @@
     const oobPill = showOOB ? `<span class="pill pill-red">${esc(startDep)}</span>` : '';
 
     const checkCell = renderCheckCell(row);
-
     const details = (row.days || []).map((day, i) => renderDayHTML(day, i)).join('');
 
     return `
