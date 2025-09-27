@@ -1,35 +1,38 @@
 from __future__ import annotations
 
-import os
 import asyncio
 import datetime as dt
 import json
-import hashlib
 import logging
 import time
-import traceback
-from typing import Any, Dict, List, Optional, Tuple
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, Query, HTTPException, Body
+from fastapi import FastAPI, Query, HTTPException
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
-from zoneinfo import ZoneInfo
 
 import cal_client as cal
 from cache_meta import read_cache_meta, write_cache_meta, normalize_cached_events
 from rows import build_pairing_rows, end_of_next_month_local
-from db import get_db, init_db
+from db import init_db
+
+# ---- central settings (single source of truth) ----
+from config import (
+    TIMEZONE,
+    VIEW_WINDOW_MODE,
+    DEFAULT_REFRESH_MINUTES,
+    REFRESH_SECONDS,
+)
 
 # ---------------- Paths / Static ----------------
 BASE_DIR = Path(__file__).parent.resolve()
 PAIRINGS_DIR = BASE_DIR / "public" / "pairings"
 
 app = FastAPI(title="DutyWatch Backend (Viewer-Only)")
-
-# Serve static front-end
 app.mount("/pairings", StaticFiles(directory=PAIRINGS_DIR, html=True), name="pairings")
 
 @app.get("/pairings", include_in_schema=False)
@@ -40,32 +43,27 @@ def pairings_index_direct():
 def root_index():
     return FileResponse(PAIRINGS_DIR / "index.html")
 
-# ---------------- Logging + middleware ----------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-)
+# ---------------- Logging ----------------
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
 logger = logging.getLogger("dutywatch")
-logger.setLevel(logging.INFO)
 
 @app.middleware("http")
 async def timing_and_errors(request, call_next):
     start = time.time()
     try:
-        resp = await call_next(request)
-        return resp
+        return await call_next(request)
     except Exception:
         logger.exception("Unhandled error on %s %s", request.method, request.url.path)
         raise
     finally:
-        dur_ms = int((time.time() - start) * 1000)
-        logger.info("%s %s -> %dms", request.method, request.url.path, dur_ms)
+        dur = int((time.time() - start) * 1000)
+        logger.info("%s %s -> %dms", request.method, request.url.path, dur)
 
 # ---------------- Config / Time ----------------
-LOCAL_TZ = ZoneInfo(os.getenv("LOCAL_TZ", "America/Chicago"))
+LOCAL_TZ = ZoneInfo(TIMEZONE)
 
 class State:
-    refresh_seconds: int = int(os.getenv("REFRESH_SECONDS", "1800"))  # default 30 min
+    refresh_seconds: int = REFRESH_SECONDS
     poll_task: Optional[asyncio.Task] = None
     version: int = 0
     sse_queue: "asyncio.Queue[dict]" = asyncio.Queue()
@@ -93,6 +91,11 @@ def to_local(d: Optional[dt.datetime]) -> Optional[dt.datetime]:
         d = d.replace(tzinfo=dt.timezone.utc)
     return d.astimezone(LOCAL_TZ)
 
+def to_utc(d: dt.datetime) -> dt.datetime:
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=LOCAL_TZ)
+    return d.astimezone(dt.timezone.utc)
+
 def human_ago_precise(from_dt: Optional[dt.datetime]) -> str:
     if not from_dt:
         return "never"
@@ -107,14 +110,13 @@ def human_ago_precise(from_dt: Optional[dt.datetime]) -> str:
         return f"{m}m {s}s ago"
     if m:
         return f"{m}m ago"
-    return f"{s}s ago"  # <-- fixed: no stray brace
+    return f"{s}s ago"
 
 def human_ago(from_dt: Optional[dt.datetime]) -> str:
     if not from_dt:
         return "never"
     now = dt.datetime.now(LOCAL_TZ)
-    delta = now - from_dt
-    secs = int(delta.total_seconds())
+    secs = int((now - from_dt).total_seconds())
     if secs < 60:
         return "just now"
     mins = secs // 60
@@ -126,14 +128,38 @@ def human_ago(from_dt: Optional[dt.datetime]) -> str:
     days = hours // 24
     return f"{days} day{'s' if days != 1 else ''} ago"
 
-# ---------------- Calendar fetch ----------------
-def fetch_current_to_next_eom() -> List[Dict[str, Any]]:
-    now = dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc)
-    y, m = now.year, now.month
-    end = dt.datetime(y + (1 if m >= 11 else 0), ((m + 1) % 12) + 1, 1, tzinfo=dt.timezone.utc)
+# ---------------- Viewing window (SOT) ----------------
+def compute_window_bounds_local() -> Tuple[dt.datetime, dt.datetime, str]:
+    """
+    Computes the viewing window in LOCAL time from VIEW_WINDOW_MODE.
+    Returns (start_local, end_local, label).
+    """
+    mode = VIEW_WINDOW_MODE
+    now_local = dt.datetime.now(LOCAL_TZ)
+
+    if mode == "TODAY_TO_END_OF_NEXT_MONTH":
+        start_local = now_local
+        end_local = end_of_next_month_local()
+        label = f"Today – {end_local.strftime('%b %d (%a)')}"
+        return start_local, end_local, label
+
+    # Fallback to default
+    start_local = now_local
+    end_local = end_of_next_month_local()
+    label = f"Today – {end_local.strftime('%b %d (%a)')}"
+    return start_local, end_local, label
+
+def window_bounds_utc() -> Tuple[dt.datetime, dt.datetime, dt.datetime, dt.datetime, str]:
+    """Return (start_utc, end_utc, start_local, end_local, label)."""
+    start_local, end_local, label = compute_window_bounds_local()
+    return to_utc(start_local), to_utc(end_local), start_local, end_local, label
+
+# ---------------- Calendar fetch (uses window SOT) ----------------
+def fetch_for_window() -> List[Dict[str, Any]]:
+    start_utc, end_utc, _, _, _ = window_bounds_utc()
     if hasattr(cal, "fetch_events_between"):
-        return cal.fetch_events_between(now.isoformat(), end.isoformat())
-    hours = int((end - now).total_seconds() // 3600) + 1
+        return cal.fetch_events_between(start_utc.isoformat(), end_utc.isoformat())
+    hours = int((end_utc - start_utc).total_seconds() // 3600) + 1
     return cal.fetch_upcoming_events(hours_ahead=hours)
 
 # ---------------- SSE + Poller ----------------
@@ -154,7 +180,7 @@ def _next_from_meta(meta: Dict[str, Any]) -> dt.datetime:
 
 async def pull_and_update_once() -> bool:
     try:
-        events = await run_in_threadpool(fetch_current_to_next_eom)
+        events = await run_in_threadpool(fetch_for_window)
         meta = await run_in_threadpool(read_cache_meta)
 
         changed = json.dumps(meta.get("events", []), sort_keys=True) != json.dumps(events, sort_keys=True)
@@ -162,7 +188,7 @@ async def pull_and_update_once() -> bool:
         meta["events"] = events
         meta["last_pull_utc"] = _now_utc().isoformat()
         meta.setdefault("refresh_minutes", max(1, state.refresh_seconds // 60))
-        mins = int(meta.get("refresh_minutes", 30))
+        mins = int(meta.get("refresh_minutes", DEFAULT_REFRESH_MINUTES))
         meta["next_run_utc"] = (_now_utc() + dt.timedelta(minutes=mins)).replace(microsecond=0).isoformat()
         await run_in_threadpool(write_cache_meta, meta)
 
@@ -203,67 +229,25 @@ async def lifespan(app: FastAPI):
 
 app.router.lifespan_context = lifespan
 
-# ---------------- Ack / Check-in policy (simulation only) ----------------
-ACK_POLICY = {
-    "window_open_hours": 12,      # initial push at T-12h
-    "second_push_at_hours": 6,    # second push at T-6h
-    "call_start_hours": 3,        # start calls at T-3h
-    "call_interval_minutes": 15,  # every 15 min
-    "calls_per_attempt": 2,       # ring twice per attempt
-}
-
-def _ack_id(pairing_id: str, report_local_iso: str) -> str:
-    base = f"{pairing_id}|{report_local_iso}"
-    return hashlib.sha256(base.encode("utf-8")).hexdigest()[:16]
-
-def _read_ack_state(ack_id: str) -> Optional[str]:
-    with get_db() as c:
-        row = c.execute("SELECT state FROM acks WHERE ack_id=?", (ack_id,)).fetchone()
-        return row["state"] if row else None
-
-def _write_ack_state(ack_id: str, state_val: str, deadline_utc: Optional[str] = None):
-    now_iso = _now_utc().isoformat()
-    with get_db() as c:
-        cur = c.execute("SELECT 1 FROM acks WHERE ack_id=?", (ack_id,)).fetchone()
-        if cur:
-            c.execute("UPDATE acks SET state=?, last_update_utc=? WHERE ack_id=?", (state_val, now_iso, ack_id))
-        else:
-            c.execute(
-                "INSERT INTO acks(ack_id, event_uid, deadline_utc, state, last_update_utc) VALUES (?,?,?,?,?)",
-                (ack_id, "", deadline_utc or "", state_val, now_iso),
-            )
-
-def _plan_attempts(report_local: dt.datetime) -> List[Dict[str, Any]]:
-    p = ACK_POLICY
-    items: List[Dict[str, Any]] = []
-    items.append({"kind":"push","label":"Initial push","at_iso":(report_local - dt.timedelta(hours=p["window_open_hours"])).isoformat(),"meta":{}})
-    items.append({"kind":"push","label":"Second push","at_iso":(report_local - dt.timedelta(hours=p["second_push_at_hours"])).isoformat(),"meta":{}})
-    t = report_local - dt.timedelta(hours=p["call_start_hours"])
-    while t < report_local:
-        items.append({"kind":"call","label":"Call attempt (ring 1/2)","at_iso":t.isoformat(),"meta":{"ring":1}})
-        items.append({"kind":"call","label":"Call attempt (ring 2/2)","at_iso":(t + dt.timedelta(minutes=1)).isoformat(),"meta":{"ring":2}})
-        t = t + dt.timedelta(minutes=p["call_interval_minutes"])
-    items.sort(key=lambda x: x["at_iso"])
-    return items
-
-def _window_state(report_local: Optional[dt.datetime]) -> Dict[str, Any]:
-    now_local = dt.datetime.now(LOCAL_TZ)
-    if not report_local:
-        return {"window_open": False, "seconds_until_open": None, "seconds_until_report": None}
-    open_at = report_local - dt.timedelta(hours=ACK_POLICY["window_open_hours"])
-    return {
-        "window_open": open_at <= now_local <= report_local,
-        "seconds_until_open": max(0, int((open_at - now_local).total_seconds())) if now_local < open_at else 0,
-        "seconds_until_report": max(0, int((report_local - now_local).total_seconds())) if now_local < report_local else 0,
-    }
-
 # ---------------- API Routes ----------------
-@app.get("/health")
-def health():
-    return {"ok": True}
+@app.get("/api/config")
+def api_config():
+    from config import TIMEZONE as TZ, VIEW_WINDOW_MODE as MODE, DEFAULT_REFRESH_MINUTES as REF_MINS
+    start_utc, end_utc, start_local, end_local, label = window_bounds_utc()
+    return {
+        "timezone": TZ,
+        "window_mode": MODE,
+        "window": {
+            "start_local_iso": start_local.isoformat(),
+            "end_local_iso": end_local.isoformat(),
+            "label": label,
+        },
+        "default_refresh_minutes": REF_MINS,
+    }
 
 @app.get("/api/pairings")
 async def api_pairings(
+    # kept for compatibility; window is authoritative
     year: Optional[int] = Query(default=None, ge=1970, le=2100),
     month: Optional[int] = Query(default=None, ge=1, le=12),
     only_reports: int = Query(default=1),
@@ -273,11 +257,8 @@ async def api_pairings(
         meta = await run_in_threadpool(read_cache_meta)
         events = normalize_cached_events(meta)
 
-        # Month window
-        def month_bounds(y: int, m: int) -> Tuple[dt.datetime, dt.datetime]:
-            start = dt.datetime(y, m, 1, tzinfo=dt.timezone.utc)
-            end = dt.datetime(y + (m // 12), (m % 12) + 1, 1, tzinfo=dt.timezone.utc)
-            return start, end
+        # EXACT window used for fetching and display
+        start_utc, end_utc, start_local, end_local, window_label = window_bounds_utc()
 
         UTC_MIN = dt.datetime.min.replace(tzinfo=dt.timezone.utc)
         def safe_start(ev: Dict[str, Any]) -> dt.datetime:
@@ -287,40 +268,9 @@ async def api_pairings(
             except Exception:
                 return UTC_MIN
 
-        now_local = dt.datetime.now(LOCAL_TZ)
-        y, m = (year or now_local.year, month or now_local.month)
-        start_utc, end_utc = month_bounds(y, m)
+        window_events = [e for e in events if start_utc <= safe_start(e) < end_utc]
+        rows = await run_in_threadpool(build_pairing_rows, window_events, bool(is_24h), bool(only_reports))
 
-        try:
-            month_events = [e for e in events if start_utc <= safe_start(e) < end_utc]
-        except Exception:
-            month_events = events
-
-        rows = await run_in_threadpool(build_pairing_rows, month_events, bool(is_24h), bool(only_reports))
-
-        # ack enrichment
-        enriched: List[Dict[str, Any]] = []
-        for r in rows:
-            if r.get("kind") != "pairing":
-                enriched.append(r)
-                continue
-            pairing_id = str(r.get("pairing_id") or "")
-            report_iso = r.get("report_local_iso") or ""
-            report_local = to_local(iso_to_dt(report_iso)) if report_iso else None
-            win = _window_state(report_local)
-            ackid = _ack_id(pairing_id, report_iso)
-            ack_state = _read_ack_state(ackid)
-            r["ack"] = {
-                "ack_id": ackid,
-                "window_open": bool(win["window_open"]),
-                "acknowledged": (ack_state == "ack"),
-                "seconds_until_open": win["seconds_until_open"],
-                "seconds_until_report": win["seconds_until_report"],
-                "report_local_iso": report_iso,
-            }
-            enriched.append(r)
-
-        # meta display
         lp_iso = meta.get("last_pull_utc")
         nr_iso = meta.get("next_run_utc")
 
@@ -333,11 +283,15 @@ async def api_pairings(
         next_refresh_local_clock = nr_local.strftime("%I:%M %p").lstrip("0") if nr_local else ""
         seconds_to_next = max(0, int((nr_local - dt.datetime.now(LOCAL_TZ)).total_seconds())) if nr_local else 0
 
-        looking_end = end_of_next_month_local()
-        looking_through = f"Today – {looking_end.strftime('%b %d (%a)')}"
+        window_obj = {
+            "start_local_iso": start_local.isoformat(),
+            "end_local_iso": end_local.isoformat(),
+            "label": window_label,
+        }
 
         return {
-            "looking_through": looking_through,
+            "window": window_obj,                    # <-- source of truth the UI shows
+            "looking_through": window_label,         # legacy field
             "last_pull_local": last_pull_local,
             "last_pull_local_simple": last_pull_human_simple,
             "last_pull_local_iso": lp_local.isoformat() if lp_local else "",
@@ -345,40 +299,13 @@ async def api_pairings(
             "next_pull_local_iso": nr_local.isoformat() if nr_local else "",
             "seconds_to_next": seconds_to_next,
             "tz_label": "CT",
-            "rows": enriched,
+            "rows": rows,
             "version": state.version,
-            "year": y,
-            "month": m,
             "refresh_minutes": int(meta.get("refresh_minutes", max(1, state.refresh_seconds // 60))),
-            "ack_policy": ACK_POLICY,
         }
     except Exception as e:
-        tb = traceback.format_exc(limit=12)
-        logger.error("api_pairings failed: %s\n%s", e, tb)
-        return JSONResponse(
-            status_code=500,
-            content={"error": "pairings_failed", "message": str(e), "trace": tb},
-        )
-
-@app.get("/api/ack/plan")
-def api_ack_plan(pairing_id: str, report_local_iso: str):
-    report_local = to_local(iso_to_dt(report_local_iso))
-    if not report_local:
-        raise HTTPException(400, "Invalid report_local_iso")
-    attempts = _plan_attempts(report_local)
-    return {"pairing_id": pairing_id, "report_local_iso": report_local_iso, "attempts": attempts, "policy": ACK_POLICY}
-
-@app.post("/api/ack/acknowledge")
-def api_ack_acknowledge(payload: Dict[str, Any] = Body(...)):
-    pairing_id = str(payload.get("pairing_id") or "")
-    report_local_iso = str(payload.get("report_local_iso") or "")
-    if not pairing_id or not report_local_iso:
-        raise HTTPException(400, "pairing_id and report_local_iso required")
-    ackid = _ack_id(pairing_id, report_local_iso)
-    report_local = to_local(iso_to_dt(report_local_iso))
-    deadline_utc = report_local.astimezone(dt.timezone.utc).isoformat() if report_local else None
-    _write_ack_state(ackid, "ack", deadline_utc)
-    return {"ok": True, "ack_id": ackid}
+        logger.exception("api_pairings failed: %s", e)
+        return JSONResponse(status_code=500, content={"error":"pairings_failed","message":str(e)})
 
 @app.get("/api/status")
 async def api_status():
@@ -391,11 +318,8 @@ async def api_status():
 
 @app.post("/api/settings/refresh-seconds")
 async def api_set_refresh_seconds(payload: Dict[str, Any]):
-    try:
-        secs = int(payload.get("seconds"))
-        if secs < 15 or secs > 21600:
-            raise ValueError
-    except Exception:
+    secs = int(payload.get("seconds", 0))
+    if secs < 15 or secs > 21600:
         raise HTTPException(status_code=400, detail="seconds must be 15..21600")
     state.refresh_seconds = secs
 
@@ -417,9 +341,9 @@ async def api_refresh():
 @app.get("/api/events")
 async def sse_events():
     async def event_stream():
-      yield f"event: hello\ndata: {{\"version\": {state.version}}}\n\n"
-      while not state.shutdown_event.is_set():
-          msg = await state.sse_queue.get()
-          evt_type = msg.get("type", "change")
-          yield f"event: {evt_type}\ndata: {json.dumps(msg)}\n\n"
+        yield f"event: hello\ndata: {{\"version\": {state.version}}}\n\n"
+        while not state.shutdown_event.is_set():
+            msg = await state.sse_queue.get()
+            evt_type = msg.get("type", "change")
+            yield f"event: {evt_type}\ndata: {json.dumps(msg)}\n\n"
     return StreamingResponse(event_stream(), media_type="text/event-stream")
