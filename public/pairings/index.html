@@ -46,19 +46,18 @@
       <table id="pairings">
         <thead>
           <tr>
-            <th style="width:36px">✓</th> <!-- new check-in column -->
+            <th style="width:36px">✓</th>
             <th>Pairing / OFF</th>
             <th>Report</th>
             <th>Release</th>
             <th>Days / Legs / Hotel</th>
           </tr>
         </thead>
-        <tbody id="pairings-body"><!-- filled by JS --></tbody>
+        <tbody id="pairings-body"></tbody>
       </table>
     </div>
   </div>
 
-  <!-- Static boot config for the viewer-only frontend -->
   <script id="dw-boot" type="application/json">{
     "clockMode":"12",
     "onlyReports": true,
@@ -68,7 +67,6 @@
     "baseAirport": "DFW"
   }</script>
 
-  <!-- Plan modal -->
   <div id="plan-modal" class="modal hidden" role="dialog" aria-modal="true" aria-label="Check-in & Reminder Plan">
     <div class="modal-card">
       <div class="modal-header">

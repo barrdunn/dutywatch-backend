@@ -101,7 +101,7 @@ def human_ago(from_dt: Optional[dt.datetime]) -> str:
         return f"{mins} min{'s' if mins != 1 else ''} ago"
     hours = mins // 60
     if hours < 24:
-        return f"{hours} hour{'s' if mins != 1 else ''} ago"
+        return f"{hours} hour{'s' if hours != 1 else ''} ago"
     days = hours // 24
     return f"{days} day{'s' if days != 1 else ''} ago"
 
@@ -188,11 +188,11 @@ app.router.lifespan_context = lifespan
 
 # ---------------- Ack / Check-in policy (simulation) ----------------
 ACK_POLICY = {
-    "window_open_hours": 12,        # open check-in window 12h before report
-    "second_push_at_hours": 6,      # another push at 6h before report (if no ack)
-    "call_start_hours": 3,          # start calls at 3h before report (if no ack)
-    "call_interval_minutes": 15,    # call every 15 minutes
-    "calls_per_attempt": 2          # 2 rings per attempt to bypass DND
+    "window_open_hours": 12,
+    "second_push_at_hours": 6,
+    "call_start_hours": 3,
+    "call_interval_minutes": 15,
+    "calls_per_attempt": 2,
 }
 
 def _ack_id(pairing_id: str, report_local_iso: str) -> str:
@@ -217,14 +217,10 @@ def _write_ack_state(ack_id: str, state_val: str, deadline_utc: Optional[str] = 
             )
 
 def _plan_attempts(report_local: dt.datetime) -> List[Dict[str, Any]]:
-    """Return simulated push/call attempts from window open until report (LOCAL_TZ)."""
     p = ACK_POLICY
     at: List[Dict[str, Any]] = []
-    # Push @ 12h
     at.append({"kind":"push","label":"Initial push","at_iso":(report_local - dt.timedelta(hours=p["window_open_hours"])).isoformat(),"meta":{}})
-    # Push @ 6h
     at.append({"kind":"push","label":"Second push","at_iso":(report_local - dt.timedelta(hours=p["second_push_at_hours"])).isoformat(),"meta":{}})
-    # Calls every 15m from 3h, two rings per attempt (ring 2 one minute after ring 1)
     t = report_local - dt.timedelta(hours=p["call_start_hours"])
     while t < report_local:
         at.append({"kind":"call","label":"Call attempt (ring 1/2)","at_iso":t.isoformat(),"meta":{"ring":1}})
@@ -265,12 +261,20 @@ async def api_pairings(
         end = dt.datetime(y + (m // 12), (m % 12) + 1, 1, tzinfo=dt.timezone.utc)
         return start, end
 
+    # ---- FIX: use UTC-aware minimum when an event has no/invalid start time
+    UTC_MIN = dt.datetime.min.replace(tzinfo=dt.timezone.utc)
+
+    def start_utc_of(ev: Dict[str, Any]) -> dt.datetime:
+        s = iso_to_dt(ev.get("start_utc"))
+        if not s:
+            return UTC_MIN
+        return s if s.tzinfo else s.replace(tzinfo=dt.timezone.utc)
+
     now_local = dt.datetime.now(LOCAL_TZ)
     y, m = (year or now_local.year, month or now_local.month)
     start_utc, end_utc = month_bounds(y, m)
-    month_events = [e for e in events
-                    if (iso_to_dt(e.get("start_utc")) or dt.datetime.min) >= start_utc
-                    and (iso_to_dt(e.get("start_utc")) or dt.datetime.min) < end_utc]
+
+    month_events = [e for e in events if start_utc <= start_utc_of(e) < end_utc]
 
     rows = await run_in_threadpool(build_pairing_rows, month_events, bool(is_24h), bool(only_reports))
 
@@ -330,7 +334,6 @@ async def api_pairings(
 
 @app.get("/api/ack/plan")
 def api_ack_plan(pairing_id: str, report_local_iso: str):
-    """Return simulated future attempts (push + calls) for this pairing/report."""
     report_local = to_local(iso_to_dt(report_local_iso))
     if not report_local:
         raise HTTPException(400, "Invalid report_local_iso")
