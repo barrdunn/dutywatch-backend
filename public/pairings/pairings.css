@@ -24,6 +24,10 @@
   --ck-off: #62717f;
   --ck-pending: #ffd166;
   --ck-ok: #57e389;
+
+  /* OFF row capsule bg/border */
+  --off-bg: rgba(255, 174, 96, 0.10);
+  --off-border: rgba(255, 174, 96, 0.35);
 }
 
 * { box-sizing: border-box; }
@@ -61,9 +65,9 @@ table { width: 100%; border-collapse: separate; border-spacing: 0 10px; } /* ver
 th, td { padding: 10px 12px; }
 th { color: var(--muted); font-weight: 600; text-align: left; border-bottom: 1px solid var(--border); }
 
-/* ------------------------------
-   FULL-WIDTH CAPSULE FOR SUMMARY
-   ------------------------------ */
+/* ---------------------------------
+   FULL-WIDTH CAPSULE: SUMMARY ROWS
+   --------------------------------- */
 tr.summary { position: relative; }                 /* anchor overlay */
 tr.summary::before {
   content: "";
@@ -76,8 +80,6 @@ tr.summary::before {
   z-index: 0;
 }
 tr.summary:hover::before { background: var(--pairing-bg-hover); }
-
-/* ensure cell content sits above the capsule and has no borders of its own */
 tr.summary td {
   position: relative;
   z-index: 1;
@@ -85,12 +87,31 @@ tr.summary td {
   border: 0 !important;
 }
 
-/* details & OFF rows */
+/* ---------------------------------
+   FULL-WIDTH CAPSULE: OFF ROWS
+   --------------------------------- */
+tr.off { position: relative; }
+tr.off::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--off-bg);
+  border: 1px solid var(--off-border);
+  border-radius: 12px;
+  pointer-events: none;
+  z-index: 0;
+}
+tr.off td {
+  position: relative;
+  z-index: 1;
+  background: transparent !important;
+  border: 0 !important;
+}
+.off-label, .off-dur { font-weight: 800; color: var(--off); }
+
+/* details (expandable) */
 tr.details { background: var(--row-alt); border: 1px dashed var(--border); display: none; }
 tr.summary.open + tr.details { display: table-row; }
-
-tr.off { background: var(--row); border: 1px solid var(--border); }
-.off-label, .off-dur { font-weight: 800; color: var(--off); }
 
 /* pills */
 .pill {
@@ -104,14 +125,12 @@ tr.off { background: var(--row); border: 1px solid var(--border); }
   padding: 3px 8px;
   border-radius: 999px;
   margin-left: 8px;
-  white-space: nowrap;          /* keep “2 day” in one capsule */
+  white-space: nowrap;
 }
 .pill-red { background: var(--red); color: #130606; margin-left: 8px; }
 
-/* small decorative dot */
 .dot { width: 6px; height: 6px; border-radius: 999px; background: #7ee2a1; display:inline-block; margin-right:4px; }
 
-/* progress tag text */
 .progress { font-weight: 800; margin-left: 8px; color: var(--green); }
 
 /* day blocks (inside details row) */
@@ -120,12 +139,12 @@ tr.off { background: var(--row); border: 1px solid var(--border); }
 
 .dayhdr {
   background: rgba(73, 179, 124, 0.14);
-  border: 0;                   /* no green border */
+  border: 0;
   border-radius: 10px;
   padding: 8px 10px;
   margin-left: 24px;           /* indent under pairing */
   display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
-  font-weight: 600;            /* lighter than pairing title */
+  font-weight: 600;
 }
 .dayhdr .daytitle { font-weight: 600; }
 .dayhdr .helper { margin-left: auto; font-weight: 500; color: var(--muted); }
