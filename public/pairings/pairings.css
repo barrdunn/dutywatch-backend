@@ -1,18 +1,23 @@
 :root {
   color-scheme: dark;
+
   --bg: #0b0f14;
   --card: #121821;
   --muted: #9fb0c0;
   --text: #e8edf2;
   --accent: #6fb1ff;
+
   --row: #0f141b;
   --row-alt: #0d1219;
   --border: #1e2a38;
+
   --green: #98f5a7;
   --off: #ffae60;
+
   --pairing-bg: rgba(51, 127, 86, 0.16);
   --pairing-bg-hover: rgba(61, 153, 106, 0.26);
   --pairing-border: rgba(73, 179, 124, 0.35);
+
   --strike: #84a1b7;
   --chip: #182231;
   --red: #ff6b6b;
@@ -21,40 +26,95 @@
   --ck-off: #62717f;
   --ck-pending: #ffd166;
   --ck-ok: #57e389;
-  --ck-bg: #0b1219;
 }
+
+* { box-sizing: border-box; }
 
 body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu,
+        Cantarell, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
 }
+
 .wrap { max-width: 1100px; margin: 28px auto; padding: 0 16px; }
-.card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 16px; box-shadow: 0 6px 18px rgba(0,0,0,0.25); }
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.25);
+}
+
 h1 { margin: 0 0 8px; font-size: 22px; }
 
-.sub { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin: 8px 0 16px; }
-.chip { background: var(--chip); border: 1px solid var(--border); border-radius: 999px; padding: 4px 10px; color: var(--muted); font-weight: 600; }
+.sub {
+  display:flex; flex-wrap:wrap; gap:8px; align-items:center;
+  margin: 8px 0 16px;
+}
+
+.chip {
+  background: var(--chip);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 10px;
+  color: var(--muted);
+  font-weight: 600;
+}
 
 .controls { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
 .controls form { display: inline-flex; gap: 8px; align-items: center; }
-.btn { background: var(--accent); color: #031323; border: none; border-radius: 10px; padding: 8px 12px; font-weight: 600; cursor: pointer; }
-.toggle { background: transparent; color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 6px 10px; cursor: pointer; }
+
+.btn {
+  background: var(--accent);
+  color: #031323;
+  border: none;
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.toggle {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
 select.toggle { padding: 6px 10px; }
 
-table { width: 100%; border-collapse: separate; border-spacing: 0 10px; }
-th, td { padding: 10px 12px; }
-th { color: var(--muted); font-weight: 600; text-align: left; border-bottom: 1px solid var(--border); }
+/* ------- Table ------- */
 
-/* Make the green summary capsule span ALL columns via cell backgrounds */
-tr.summary { cursor: pointer; }
+table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0 10px;   /* row gaps as “cards” */
+  table-layout: fixed;      /* make row backgrounds span evenly */
+}
+
+th, td { padding: 10px 12px; }
+th {
+  color: var(--muted);
+  font-weight: 600;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Summary rows as full-width rounded capsules:
+   paint EACH cell so the background spans all columns. */
+tr.summary { cursor: pointer; background: transparent; border: 0; }
+tr.summary:hover { background: transparent; }
+
 tr.summary td {
   background: var(--pairing-bg);
   border-top: 1px solid var(--pairing-border);
   border-bottom: 1px solid var(--pairing-border);
 }
-tr.summary:hover td { background: var(--pairing-bg-hover); }
+
 tr.summary td:first-child {
   border-left: 1px solid var(--pairing-border);
   border-radius: 12px 0 0 12px;
@@ -64,42 +124,51 @@ tr.summary td:last-child  {
   border-radius: 0 12px 12px 0;
 }
 
-tr.details { background: var(--row-alt); border: 1px dashed var(--border); }
-tr.off { background: var(--row); border: 1px solid var(--border); }
-.off-label { font-weight: 800; color: var(--off); }
-.off-dur { font-weight: 800; color: var(--off); }
+tr.summary:hover td { background: var(--pairing-bg-hover); }
 
+/* Details container row (expands under summary) */
+tr.details { background: var(--row-alt); border: 1px dashed var(--border); }
+tr.details td[colspan] { padding: 0; }
+
+/* OFF rows */
+tr.off { background: var(--row); border: 1px solid var(--border); }
+.off-label, .off-dur { font-weight: 800; color: var(--off); }
+
+/* Pills */
 .pill {
   font-size: 12px;
   font-weight: 700;
   color: #021216;
   background: var(--green);
-  display: inline-block;
-  padding: 4px 10px;
-  border-radius: 999px;      /* <-- pill shape */
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  line-height: 1;
+  border-radius: 999px; /* pill shape */
   margin-left: 8px;
-  white-space: nowrap;       /* keep "2 day" on one line */
 }
 .pill-red { background: var(--red); color: #130606; margin-left: 8px; }
 
 .muted { color: var(--muted); }
 
+/* Days & legs */
 .daysbox { padding: 6px 10px 10px; border-radius: 10px; }
 
 .day { margin: 8px 0 14px; }
 .dayhdr {
   background: rgba(73, 179, 124, 0.14);
-  border: 0;
-  border-radius: 10px;
+  border: 0;               /* no green border */
+  border-radius: 10px;     /* rounded */
   padding: 8px 10px;
-  margin-left: 24px;         /* indent under pairing */
+  margin-left: 24px;       /* indentation from pairing */
   display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
-  font-weight: 600;          /* lighter than pairing title */
+  font-weight: 600;        /* lighter than pairing title */
 }
 .dayhdr .daytitle { font-weight: 600; }
 .dayhdr .helper { margin-left: auto; font-weight: 500; color: var(--muted); }
 
 .dot { width: 6px; height: 6px; border-radius: 999px; background: #7ee2a1; display:inline-block; margin-right: 4px; }
+
 .legs-wrap { margin: 6px 0 0 44px; } /* legs further indented under day */
 
 .legs { width: 100%; border-collapse: collapse; }
@@ -110,10 +179,12 @@ tr.off { background: var(--row); border: 1px solid var(--border); }
 
 .progress { font-weight: 800; margin-left: 8px; color: var(--green); }
 
+/* Collapse behavior — details hidden until the summary has .open */
 tr.details { display: none; }
 tr.summary.open + tr.details { display: table-row; }
 
-/* modal */
+/* ------- Modal (Check-in Plan) ------- */
+
 .modal { position: fixed; inset: 0; background: rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; padding: 16px; }
 .modal-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; max-width: 720px; width: 100%; }
 .modal-header, .modal-footer { padding: 12px 14px; border-bottom: 1px solid var(--border); display:flex; align-items:center; }
@@ -125,8 +196,7 @@ tr.summary.open + tr.details { display: table-row; }
 .plan-table th, .plan-table td { border-bottom: 1px solid var(--border); padding: 8px 10px; }
 .plan-meta { margin-bottom: 8px; }
 
-/* check icon cell */
-th:first-child, td.ck { width: 36px; }
+/* Check-in indicator cell (left-most column) */
 .ck { display:flex; align-items:center; justify-content:center; }
 .ck .dot { width:10px; height:10px; margin:0; border-radius:999px; }
 .ck.off .dot { background: var(--ck-off); }
