@@ -57,8 +57,7 @@
   // ---- Summary row toggle ----
   document.addEventListener('click', (e) => {
     const sum = e.target.closest('tr.summary');
-    // ignore clicks on check-in box (we handle those separately)
-    if (!sum || e.target.closest('.ck')) return;
+    if (!sum || e.target.closest('.ck')) return; // ignore ck clicks
     sum.classList.toggle('open');
 
     const details = sum.nextElementSibling;
@@ -95,16 +94,14 @@
 
     const mode = btn.dataset.mode; // "out" | "pending" | "ok"
     if (mode === 'out') {
-      // window not open -> show plan
       openPlanModal({ pairing_id: pairingId, report_local_iso: reportIso });
       return;
     }
     if (mode === 'ok') {
-      // already acknowledged -> show plan (optional)
       openPlanModal({ pairing_id: pairingId, report_local_iso: reportIso });
       return;
     }
-    // pending -> acknowledge then refresh
+    // pending -> acknowledge
     try {
       await fetchJSON(apiBase + '/api/ack/acknowledge', {
         method: 'POST',
@@ -114,7 +111,6 @@
       await renderOnce();
     } catch (err) {
       console.error('ack error', err);
-      // still show plan modal for context
       openPlanModal({ pairing_id: pairingId, report_local_iso: reportIso });
     }
   });
@@ -164,7 +160,8 @@
       const res = await fetch(`${apiBase}/api/pairings?${params.toString()}`, { cache: 'no-store' });
       if (!res.ok) {
         const text = await res.text();
-        throw new Error(`HTTP ${res.status}: ${text.slice(0, 140)}`);
+        console.error('pairings error body:', text);
+        throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
       }
       data = await res.json();
     } catch (e) {
@@ -175,6 +172,7 @@
     state.lastPullIso    = data.last_pull_local_iso || null;
     state.nextRefreshIso = data.next_pull_local_iso || null;
 
+    const refreshSel = document.getElementById('refresh-mins');
     if (refreshSel && data.refresh_minutes) {
       refreshSel.value = String(data.refresh_minutes);
     }

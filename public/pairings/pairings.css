@@ -104,9 +104,9 @@ tr.summary.open + tr.details { display: table-row; }
   font-weight: 900;
   user-select: none;
 }
-.ck--out    { color: var(--ck-off); }
-.ck--pending{ color: var(--ck-pending); cursor: pointer; }
-.ck--ok     { color: var(--ck-ok); }
+.ck--out    { color: #62717f; }
+.ck--pending{ color: #ffd166; cursor: pointer; }
+.ck--ok     { color: #57e389; }
 
 /* ------ Modal ------ */
 .modal {
