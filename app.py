@@ -4,19 +4,21 @@ import os
 import asyncio
 import datetime as dt
 import json
-import re
+import hashlib
 from typing import Any, Dict, List, Optional, Tuple
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
-from fastapi import FastAPI, Query, Request, HTTPException
-from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
+from fastapi import FastAPI, Query, HTTPException, Body
+from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from zoneinfo import ZoneInfo
 
-from db import init_db, read_events_cache, overwrite_events_cache
 import cal_client as cal
+from db import init_db, read_events_cache, overwrite_events_cache, get_db
+from rows import build_pairing_rows, end_of_next_month_local  # unchanged behavior for rows
+from cache_meta import read_cache_meta, write_cache_meta, normalize_cached_events
 
 # ---------------- Paths / Static ----------------
 BASE_DIR = Path(__file__).parent.resolve()
@@ -32,7 +34,7 @@ app.mount("/pairings", StaticFiles(directory=PAIRINGS_DIR, html=True), name="pai
 def pairings_index_direct():
     return FileResponse(PAIRINGS_DIR / "index.html")
 
-# Optionally make it the root page too (comment out if undesired)
+# Make it the root page
 @app.get("/", include_in_schema=False)
 def root_index():
     return FileResponse(PAIRINGS_DIR / "index.html")
@@ -40,7 +42,6 @@ def root_index():
 
 # ---------------- Config / Time ----------------
 LOCAL_TZ = ZoneInfo(os.getenv("LOCAL_TZ", "America/Chicago"))
-ROLLING_SCOPE = "rolling"
 
 class State:
     refresh_seconds: int = int(os.getenv("REFRESH_SECONDS", "1800"))  # default 30 min
@@ -54,24 +55,6 @@ state = State()
 
 def _now_utc() -> dt.datetime:
     return dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc)
-
-
-# ---------------- Time helpers ----------------
-def month_bounds(year: int, month: int) -> Tuple[dt.datetime, dt.datetime]:
-    start = dt.datetime(year, month, 1, tzinfo=dt.timezone.utc)
-    end = dt.datetime(year + (month // 12), (month % 12) + 1, 1, tzinfo=dt.timezone.utc)
-    return start, end
-
-def end_of_next_month_local() -> dt.datetime:
-    now_local = dt.datetime.now(LOCAL_TZ)
-    y, m = now_local.year, now_local.month
-    first_next = dt.datetime(y + (1 if m == 12 else 0), (m % 12) + 1, 1, tzinfo=LOCAL_TZ)
-    y2, m2 = (
-        first_next.year + (1 if first_next.month == 12 else 0),
-        (first_next.month % 12) + 1,
-    )
-    first_after_next = dt.datetime(y2, m2, 1, tzinfo=LOCAL_TZ)
-    return (first_after_next - dt.timedelta(seconds=1)).replace(microsecond=0)
 
 def iso_to_dt(s: Optional[str]) -> Optional[dt.datetime]:
     if not s:
@@ -88,43 +71,6 @@ def to_local(d: Optional[dt.datetime]) -> Optional[dt.datetime]:
     if d.tzinfo is None:
         d = d.replace(tzinfo=dt.timezone.utc)
     return d.astimezone(LOCAL_TZ)
-
-def pick_default_month(events: List[Dict[str, Any]]) -> Tuple[int, int]:
-    today = dt.datetime.now(LOCAL_TZ).date()
-
-    def start_local_date(e) -> Optional[dt.date]:
-        s = to_local(iso_to_dt(e.get("start_utc")))
-        return s.date() if s else None
-
-    events_sorted = sorted(
-        (e for e in events if start_local_date(e)),
-        key=lambda e: start_local_date(e),  # type: ignore[arg-type]
-    )
-    for e in events_sorted:
-        d = start_local_date(e)
-        if d and d >= today:
-            return d.year, d.month
-
-    now = dt.datetime.now(LOCAL_TZ)
-    return now.year, now.month
-
-
-def filter_events_to_month(events: List[Dict[str, Any]], year: int, month: int) -> List[Dict[str, Any]]:
-    start_utc, end_utc = month_bounds(year, month)
-    out: List[Dict[str, Any]] = []
-    for e in events:
-        s = iso_to_dt(e.get("start_utc"))
-        if s and (start_utc <= s < end_utc):
-            out.append(e)
-    return out
-
-def human_dur(td: dt.timedelta) -> str:
-    total_h = max(0, int(td.total_seconds() // 3600))
-    if total_h >= 48:
-        d = total_h // 24
-        h = total_h % 24
-        return f"{d}d {h}h"
-    return f"{total_h}h"
 
 def human_ago_precise(from_dt: Optional[dt.datetime]) -> str:
     if not from_dt:
@@ -158,234 +104,6 @@ def human_ago(from_dt: Optional[dt.datetime]) -> str:
         return f"{hours} hour{'s' if hours != 1 else ''} ago"
     days = hours // 24
     return f"{days} day{'s' if days != 1 else ''} ago"
-
-
-# ---------------- Cache helpers ----------------
-def normalize_cached_events(raw) -> List[Dict[str, Any]]:
-    if raw is None:
-        return []
-    if isinstance(raw, list):
-        return raw
-    if isinstance(raw, str):
-        try:
-            data = json.loads(raw)
-        except Exception:
-            return []
-        if isinstance(data, list):
-            return data
-        if isinstance(data, dict) and isinstance(data.get("events"), list):
-            return data["events"]
-        return []
-    if isinstance(raw, dict) and isinstance(raw.get("events"), list):
-        return raw["events"]
-    return []
-
-def read_cache_meta() -> Dict[str, Any]:
-    raw = read_events_cache(ROLLING_SCOPE)
-    if isinstance(raw, dict):
-        return raw
-    if isinstance(raw, list):
-        return {"events": raw}
-    if isinstance(raw, str):
-        try:
-            data = json.loads(raw)
-            if isinstance(data, list):
-                return {"events": data}
-            if isinstance(data, dict):
-                return data
-        except Exception:
-            pass
-    return {"events": []}
-
-def write_cache_meta(meta: Dict[str, Any]) -> None:
-    if "events" not in meta or not isinstance(meta["events"], list):
-        meta["events"] = []
-    overwrite_events_cache(ROLLING_SCOPE, meta)
-
-
-# ---------------- Parsing helpers (regex-only) ----------------
-REPORT_RE = re.compile(r"\bReport:\s*(\d{3,4})L?\b", re.IGNORECASE)
-LEG_RE = re.compile(r"\b(\d{3,4})\s+([A-Z]{3})-([A-Z]{3})\s+(\d{3,4})-(\d{3,4})\b")
-HOTEL_RE = re.compile(
-    r"(Westin|Element|Embassy|Marriott|Hilton|Hyatt|Holiday|Sheraton|Aloft|Courtyard)[^\n]*",
-    re.IGNORECASE,
-)
-
-def ensure_hhmm(s: str) -> str:
-    return s if len(s) == 4 else s.zfill(4)
-
-def minutes_from_hhmm(hhmm: str) -> int:
-    hhmm = ensure_hhmm(hhmm)
-    return int(hhmm[:2]) * 60 + int(hhmm[2:])
-
-def hhmm_from_minutes(total: int) -> str:
-    total = total % (24 * 60)
-    h = total // 60
-    m = total % 60
-    return f"{h:02d}{m:02d}"
-
-def to_12h(hhmm: str) -> str:
-    hhmm = ensure_hhmm(hhmm)
-    h = int(hhmm[:2])
-    m = hhmm[2:]
-    ampm = "AM" if h < 12 else "PM"
-    h12 = h % 12 or 12
-    return f"{h12}:{m} {ampm}"
-
-def time_display(hhmm: Optional[str], is_24h: bool) -> str:
-    if not hhmm:
-        return ""
-    if is_24h:
-        return ensure_hhmm(hhmm)
-    return to_12h(hhmm)
-
-def parse_with_regex(text: str) -> Dict[str, Any]:
-    out: Dict[str, Any] = {"days": []}
-    m = REPORT_RE.search(text or "")
-    report = ensure_hhmm(m.group(1)) if m else None
-
-    legs = []
-    for m in LEG_RE.finditer(text or ""):
-        num, dep, arr, t_dep, t_arr = m.groups()
-        legs.append(
-            {
-                "flight": f"FFT{num}",
-                "dep": dep,
-                "arr": arr,
-                "dep_time": ensure_hhmm(t_dep),
-                "arr_time": ensure_hhmm(t_arr),
-            }
-        )
-
-    hotel = None
-    hm = HOTEL_RE.search(text or "")
-    if hm:
-        hotel = hm.group(0).strip()
-
-    if report or legs or hotel:
-        release = None
-        if legs:
-            last_arr = legs[-1]["arr_time"]
-            release = hhmm_from_minutes(minutes_from_hhmm(last_arr) + 15)
-        out["days"].append(
-            {
-                "report": report,
-                "legs": legs,
-                "release": release,
-                "hotel": hotel,
-            }
-        )
-    return out
-
-def parse_pairing_days(description: Optional[str]) -> Dict[str, Any]:
-    """LLM removed: always regex."""
-    return parse_with_regex(description or "")
-
-
-# ---------------- Pairing rows + OFF rows ----------------
-def grouping_key(e: Dict[str, Any]) -> str:
-    pid = (e.get("summary") or "").strip()
-    if pid:
-        return pid
-    uid = (e.get("uid") or "")[:8]
-    return f"PAIR-{uid}"
-
-def build_pairing_rows(
-    events: List[Dict[str, Any]],
-    is_24h: bool,
-    only_reports: bool,
-) -> List[Dict[str, Any]]:
-    groups: Dict[str, List[Dict[str, Any]]] = {}
-    for e in events:
-        groups.setdefault(grouping_key(e), []).append(e)
-
-    pairings: List[Dict[str, Any]] = []
-
-    for pairing_id, evs in groups.items():
-        evs_sorted = sorted(evs, key=lambda x: iso_to_dt(x.get("start_utc")) or dt.datetime.min)
-
-        parsed_days: List[Dict[str, Any]] = []
-        for e in evs_sorted:
-            parsed = parse_pairing_days(e.get("description"))
-            days = parsed.get("days") or []
-            if only_reports:
-                days = [d for d in days if d.get("report")]
-            for d in days:
-                for leg in d.get("legs", []):
-                    if not str(leg.get("flight", "")).startswith("FFT"):
-                        nums = re.findall(r"\d{3,4}", str(leg.get("flight", ""))) or []
-                        if nums:
-                            leg["flight"] = f"FFT{nums[0]}"
-                    leg["dep_time_str"] = time_display(leg.get("dep_time"), is_24h)
-                    leg["arr_time_str"] = time_display(leg.get("arr_time"), is_24h)
-            parsed_days.extend(days)
-
-        first_evt_local = to_local(iso_to_dt(evs_sorted[0].get("start_utc"))) if evs_sorted else None
-        first_report_hhmm = parsed_days[0].get("report") if parsed_days else None
-        last_release_hhmm = parsed_days[-1].get("release") if parsed_days else None
-
-        def combine_local(date_obj: Optional[dt.date], hhmm: Optional[str]) -> Optional[dt.datetime]:
-            if not date_obj or not hhmm:
-                return None
-            return dt.datetime(date_obj.year, date_obj.month, date_obj.day, int(hhmm[:2]), int(hhmm[2:]), tzinfo=LOCAL_TZ)
-
-        start_anchor_date = first_evt_local.date() if first_evt_local else None
-        end_anchor_date = (start_anchor_date + dt.timedelta(days=max(len(parsed_days) - 1, 0))) if start_anchor_date else None
-
-        pairing_report_local = combine_local(start_anchor_date, first_report_hhmm) or first_evt_local
-        pairing_release_local = combine_local(end_anchor_date, last_release_hhmm) or (to_local(iso_to_dt(evs_sorted[-1].get("end_utc"))) if evs_sorted else None)
-
-        if pairing_report_local and pairing_release_local and pairing_release_local < pairing_report_local:
-            pairing_release_local += dt.timedelta(days=1)
-
-        now_local = dt.datetime.now(LOCAL_TZ)
-        in_progress = bool(pairing_report_local and pairing_release_local and pairing_report_local <= now_local <= pairing_release_local)
-
-        days_with_flags: List[Dict[str, Any]] = []
-        for idx, d in enumerate(parsed_days, start=1):
-            anchor_date = start_anchor_date + dt.timedelta(days=idx - 1) if start_anchor_date else None
-            legs = d.get("legs", [])
-            for leg in legs:
-                dep_dt = arr_dt = None
-                if anchor_date:
-                    if leg.get("dep_time"):
-                        dep_dt = dt.datetime(anchor_date.year, anchor_date.month, anchor_date.day, int(leg["dep_time"][:2]), int(leg["dep_time"][2:]), tzinfo=LOCAL_TZ)
-                    if leg.get("arr_time"):
-                        arr_dt = dt.datetime(anchor_date.year, anchor_date.month, anchor_date.day, int(leg["arr_time"][:2]), int(leg["arr_time"][2:]), tzinfo=LOCAL_TZ)
-                        if dep_dt and arr_dt and arr_dt < dep_dt:
-                            arr_dt += dt.timedelta(days=1)
-                leg["done"] = bool(arr_dt and now_local >= arr_dt)
-            days_with_flags.append({**d, "day_index": idx})
-
-        def dword(d: Optional[dt.datetime]) -> str:
-            return d.strftime("%a %b %d") if d else ""
-
-        report_disp = f"{dword(pairing_report_local)} {time_display(pairing_report_local.strftime('%H%M'), is_24h)}".strip() if pairing_report_local else ""
-        release_disp = f"{dword(pairing_release_local)} {time_display(pairing_release_local.strftime('%H%M'), is_24h)}".strip() if pairing_release_local else ""
-
-        pairings.append(
-            {
-                "kind": "pairing",
-                "pairing_id": pairing_id,
-                "in_progress": int(in_progress),
-                "report_local_iso": pairing_report_local.isoformat() if pairing_report_local else None,
-                "release_local_iso": pairing_release_local.isoformat() if pairing_release_local else None,
-                "display": {"report_str": report_disp, "release_str": release_disp},
-                "days": days_with_flags,
-            }
-        )
-
-    pairings.sort(key=lambda r: r.get("report_local_iso") or "")
-
-    rows: List[Dict[str, Any]] = []
-    for i, p in enumerate(pairings):
-        rows.append(p)
-        if i + 1 < len(pairings):
-            release = iso_to_dt(p.get("release_local_iso"))
-            nxt_report = iso_to_dt(pairings[i + 1].get("report_local_iso"))
-            gap = (nxt_report - release) if (release and nxt_report) else dt.timedelta(0)
-            rows.append({"kind": "off", "display": {"off_dur": human_dur(gap if gap.total_seconds() >= 0 else dt.timedelta(0))}})
-    return rows
 
 
 # ---------------- Calendar fetch ----------------
@@ -432,7 +150,6 @@ async def pull_and_update_once() -> bool:
         if changed:
             state.version += 1
 
-        # Always emit so UI can update countdown/status
         await _emit("change", {"changed": changed})
         return changed
     except Exception as e:
@@ -468,6 +185,76 @@ async def lifespan(app: FastAPI):
 app.router.lifespan_context = lifespan
 
 
+# ---------------- Ack / Check-in policy (simulation) ----------------
+# Default policy (can be made configurable later)
+ACK_POLICY = {
+    "window_open_hours": 12,        # open check-in window 12h before report
+    "second_push_at_hours": 6,      # another push at 6h before report (if no ack)
+    "call_start_hours": 3,          # start calls at 3h before report (if no ack)
+    "call_interval_minutes": 15,    # call every 15 minutes
+    "calls_per_attempt": 2          # ring twice per attempt to bypass DND
+}
+
+def _ack_id(pairing_id: str, report_local_iso: str) -> str:
+    base = f"{pairing_id}|{report_local_iso}"
+    return hashlib.sha256(base.encode("utf-8")).hexdigest()[:16]
+
+def _read_ack_state(ack_id: str) -> str:
+    # states: "ack" | "snoozed" | "noop" | None (no record yet)
+    with get_db() as c:
+        row = c.execute("SELECT state FROM acks WHERE ack_id=?", (ack_id,)).fetchone()
+        return row["state"] if row else None
+
+def _write_ack_state(ack_id: str, state_val: str, deadline_utc: Optional[str] = None):
+    now_iso = _now_utc().isoformat()
+    with get_db() as c:
+        cur = c.execute("SELECT 1 FROM acks WHERE ack_id=?", (ack_id,)).fetchone()
+        if cur:
+            c.execute(
+                "UPDATE acks SET state=?, last_update_utc=? WHERE ack_id=?",
+                (state_val, now_iso, ack_id),
+            )
+        else:
+            c.execute(
+                "INSERT INTO acks(ack_id, event_uid, deadline_utc, state, last_update_utc) VALUES (?,?,?,?,?)",
+                (ack_id, "", deadline_utc or "", state_val, now_iso),
+            )
+
+def _plan_attempts(report_local: dt.datetime) -> List[Dict[str, Any]]:
+    """
+    Compute the schedule of simulated attempts (pushes and calls) in LOCAL_TZ.
+    Returns [{kind:'push'|'call', at_iso, label, meta:{...}}, ...] sorted by time.
+    """
+    p = ACK_POLICY
+    at = []
+    # Push @ 12h before
+    at.append({"kind": "push", "label": "Initial push", "at_iso": (report_local - dt.timedelta(hours=p["window_open_hours"])).isoformat(), "meta": {}})
+    # Push @ 6h before
+    at.append({"kind": "push", "label": "Second push", "at_iso": (report_local - dt.timedelta(hours=p["second_push_at_hours"])).isoformat(), "meta": {}})
+    # Calls every N minutes starting at 3h before, 2 per attempt
+    start = report_local - dt.timedelta(hours=p["call_start_hours"])
+    t = start
+    while t < report_local:
+        at.append({"kind": "call", "label": "Call attempt (ring 1/2)", "at_iso": t.isoformat(), "meta": {"rings": 1}})
+        at2 = t + dt.timedelta(minutes=1)  # second ring a minute later to simulate “two times”
+        at.append({"kind": "call", "label": "Call attempt (ring 2/2)", "at_iso": at2.isoformat(), "meta": {"rings": 2}})
+        t = t + dt.timedelta(minutes=p["call_interval_minutes"])
+    # sort (defensive)
+    at.sort(key=lambda x: x["at_iso"])
+    return at
+
+def _window_state(report_local: Optional[dt.datetime]) -> Dict[str, Any]:
+    now_local = dt.datetime.now(LOCAL_TZ)
+    if not report_local:
+        return {"window_open": False, "seconds_until_open": None, "seconds_until_report": None}
+    open_at = report_local - dt.timedelta(hours=ACK_POLICY["window_open_hours"])
+    return {
+        "window_open": open_at <= now_local <= report_local,
+        "seconds_until_open": max(0, int((open_at - now_local).total_seconds())) if now_local < open_at else 0,
+        "seconds_until_report": max(0, int((report_local - now_local).total_seconds())) if now_local < report_local else 0,
+    }
+
+
 # ---------------- API Routes ----------------
 @app.get("/health")
 def health():
@@ -482,22 +269,58 @@ async def api_pairings(
 ):
     meta = await run_in_threadpool(read_cache_meta)
     events = normalize_cached_events(meta)
-    y, m = (year, month) if (year and month) else pick_default_month(events)
-    month_events = filter_events_to_month(events, y, m)
+
+    # Filter to requested month (default: current local month)
+    def month_bounds(y: int, m: int) -> Tuple[dt.datetime, dt.datetime]:
+        start = dt.datetime(y, m, 1, tzinfo=dt.timezone.utc)
+        end = dt.datetime(y + (m // 12), (m % 12) + 1, 1, tzinfo=dt.timezone.utc)
+        return start, end
+
+    now_local = dt.datetime.now(LOCAL_TZ)
+    y, m = (year or now_local.year, month or now_local.month)
+    start_utc, end_utc = month_bounds(y, m)
+    month_events = [e for e in events
+                    if (iso_to_dt(e.get("start_utc")) or dt.datetime.min) >= start_utc
+                    and (iso_to_dt(e.get("start_utc")) or dt.datetime.min) < end_utc]
+
     rows = await run_in_threadpool(build_pairing_rows, month_events, bool(is_24h), bool(only_reports))
+
+    # ---- Attach check-in status to pairing rows ----
+    enriched_rows: List[Dict[str, Any]] = []
+    for r in rows:
+        if r.get("kind") != "pairing":
+            enriched_rows.append(r)
+            continue
+
+        pairing_id = str(r.get("pairing_id") or "")
+        report_iso = r.get("report_local_iso")
+        report_local = to_local(iso_to_dt(report_iso)) if report_iso else None
+
+        win = _window_state(report_local)
+        ack_id = _ack_id(pairing_id, report_iso or "")
+        state = _read_ack_state(ack_id)
+        acknowledged = (state == "ack")
+
+        r["ack"] = {
+            "ack_id": ack_id,
+            "window_open": win["window_open"],
+            "acknowledged": acknowledged,
+            "seconds_until_open": win["seconds_until_open"],
+            "seconds_until_report": win["seconds_until_report"],
+        }
+        enriched_rows.append(r)
 
     lp_iso = meta.get("last_pull_utc")
     nr_iso = meta.get("next_run_utc")
 
-    lp_local = dt.datetime.fromisoformat(lp_iso.replace("Z", "+00:00")).astimezone(LOCAL_TZ) if lp_iso else None
-    nr_local = dt.datetime.fromisoformat(nr_iso.replace("Z", "+00:00")).astimezone(LOCAL_TZ) if nr_iso else None
-    now_local = dt.datetime.now(LOCAL_TZ)
+    lp_local = to_local(iso_to_dt(lp_iso)) if lp_iso else None
+    nr_local = to_local(iso_to_dt(nr_iso)) if nr_iso else None
 
     last_pull_local = human_ago_precise(lp_local)
     last_pull_human_simple = human_ago(lp_local)
 
     next_refresh_local_clock = nr_local.strftime("%I:%M %p").lstrip("0") if nr_local else ""
-    seconds_to_next = max(0, int((nr_local - now_local).total_seconds())) if nr_local else 0
+    seconds_to_next = max(0, int((nr_local - dt.datetime.now(LOCAL_TZ)).total_seconds())) if nr_local else 0
 
     looking_end = end_of_next_month_local()
     looking_through = f"Today – {looking_end.strftime('%b %d (%a)')}"
@@ -511,12 +334,37 @@ async def api_pairings(
         "next_pull_local_iso": nr_local.isoformat() if nr_local else "",
         "seconds_to_next": seconds_to_next,
         "tz_label": "CT",
-        "rows": rows,
+        "rows": enriched_rows,
         "version": state.version,
         "year": y,
         "month": m,
         "refresh_minutes": int(meta.get("refresh_minutes", max(1, state.refresh_seconds // 60))),
+        "ack_policy": ACK_POLICY,
     }
+
+@app.get("/api/ack/plan")
+def api_ack_plan(pairing_id: str, report_local_iso: str):
+    """Return the simulated schedule of future attempts for this pairing/report."""
+    report_local = to_local(iso_to_dt(report_local_iso))
+    if not report_local:
+        raise HTTPException(400, "Invalid report_local_iso")
+    attempts = _plan_attempts(report_local)
+    return {"pairing_id": pairing_id, "report_local_iso": report_local_iso, "attempts": attempts, "policy": ACK_POLICY}
+
+@app.post("/api/ack/acknowledge")
+def api_ack_acknowledge(payload: Dict[str, Any] = Body(...)):
+    pairing_id = str(payload.get("pairing_id") or "")
+    report_local_iso = str(payload.get("report_local_iso") or "")
+    if not pairing_id or not report_local_iso:
+        raise HTTPException(400, "pairing_id and report_local_iso required")
+
+    ack_id = _ack_id(pairing_id, report_local_iso)
+    # Optionally store a "deadline" = report time in UTC
+    report_local = to_local(iso_to_dt(report_local_iso))
+    deadline_utc = report_local.astimezone(dt.timezone.utc).isoformat() if report_local else None
+
+    _write_ack_state(ack_id, "ack", deadline_utc)
+    return {"ok": True, "ack_id": ack_id}
 
 @app.get("/api/status")
 async def api_status():
