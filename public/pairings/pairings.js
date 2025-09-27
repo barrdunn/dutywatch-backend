@@ -122,7 +122,19 @@
     // Plan modal close buttons
     if (e.target.id === 'plan-close-1' || e.target.id === 'plan-close-2') {
       showModal(false);
+      return;
     }
+
+    // Click on backdrop closes
+    if (e.target.classList.contains('modal')) {
+      showModal(false);
+      return;
+    }
+  });
+
+  // ESC key closes modal
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') showModal(false);
   });
 
   // Core render
@@ -294,6 +306,7 @@
     const m = qs('#plan-modal');
     if (!m) return;
     m.classList.toggle('hidden', !show);
+    document.body.classList.toggle('modal-open', show);
   }
 
   // Status line tick

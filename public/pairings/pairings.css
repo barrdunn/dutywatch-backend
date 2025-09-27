@@ -207,13 +207,42 @@ tr.details > td { position:relative; z-index:1; }
   opacity: .9;
 }
 
-/* modal */
-.modal{ position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; padding:16px; }
-.modal-card{ background:var(--card); border:1px solid var(--border); border-radius:12px; max-width:720px; width:100%; }
-.modal-header,.modal-footer{ padding:12px 14px; border-bottom:1px solid var(--border); display:flex; align-items:center; }
+/* =========================
+   Modal (overlay plan)
+   ========================= */
+body.modal-open { overflow: hidden; }
+
+.modal{
+  position:fixed;
+  inset:0;
+  z-index:10000;                /* ensure above table + pseudo elements */
+  background:rgba(0,0,0,.55);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:16px;
+}
+
+.modal-card{
+  background:var(--card);
+  border:1px solid var(--border);
+  border-radius:12px;
+  width:calc(100% - 32px);
+  max-width:720px;
+  max-height:85vh;             /* scroll inside card if long */
+  overflow:auto;
+  box-shadow:0 20px 60px rgba(0,0,0,.6);
+}
+
+.modal-header,.modal-footer{
+  padding:12px 14px;
+  border-bottom:1px solid var(--border);
+  display:flex; align-items:center;
+}
 .modal-footer{ border-top:1px solid var(--border); border-bottom:0; justify-content:flex-end; }
 .modal-header h2{ margin:0; font-size:18px; }
 .modal-close{ margin-left:auto; background:transparent; border:0; color:var(--text); font-size:20px; cursor:pointer; }
+
 .modal-content{ padding:14px; }
 .plan-table{ width:100%; border-collapse:collapse; }
 .plan-table th,.plan-table td{ border-bottom:1px solid var(--border); padding:8px 10px; }
