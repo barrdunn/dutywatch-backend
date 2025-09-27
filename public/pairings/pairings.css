@@ -1,28 +1,26 @@
 :root {
   color-scheme: dark;
 
+  /* palette */
   --bg: #0b0f14;
   --card: #121821;
-  --muted: #9fb0c0;
-  --text: #e8edf2;
-  --accent: #6fb1ff;
-
   --row: #0f141b;
   --row-alt: #0d1219;
   --border: #1e2a38;
+  --text: #e8edf2;
+  --muted: #9fb0c0;
+  --accent: #6fb1ff;
+  --strike: #84a1b7;
 
+  --pairing-bg: rgba(51,127,86,0.16);
+  --pairing-bg-hover: rgba(61,153,106,0.26);
+  --pairing-border: rgba(73,179,124,0.35);
   --green: #98f5a7;
   --off: #ffae60;
-
-  --pairing-bg: rgba(51, 127, 86, 0.16);
-  --pairing-bg-hover: rgba(61, 153, 106, 0.26);
-  --pairing-border: rgba(73, 179, 124, 0.35);
-
-  --strike: #84a1b7;
   --chip: #182231;
   --red: #ff6b6b;
 
-  /* check-in states */
+  /* check-in */
   --ck-off: #62717f;
   --ck-pending: #ffd166;
   --ck-ok: #57e389;
@@ -34,8 +32,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu,
-        Cantarell, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
 }
 
 .wrap { max-width: 1100px; margin: 28px auto; padding: 0 16px; }
@@ -50,147 +47,105 @@ body {
 
 h1 { margin: 0 0 8px; font-size: 22px; }
 
-.sub {
-  display:flex; flex-wrap:wrap; gap:8px; align-items:center;
-  margin: 8px 0 16px;
-}
+/* chips / controls */
+.sub { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin: 8px 0 16px; }
+.chip { background: var(--chip); border: 1px solid var(--border); border-radius: 999px; padding: 4px 10px; color: var(--muted); font-weight: 600; }
 
-.chip {
-  background: var(--chip);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 4px 10px;
-  color: var(--muted);
-  font-weight: 600;
-}
+.controls { display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin-bottom:14px; }
+.controls form { display:inline-flex; gap:8px; align-items:center; }
+.btn { background: var(--accent); color:#031323; border:0; border-radius:10px; padding:8px 12px; font-weight:600; cursor:pointer; }
+.toggle, select.toggle { background: transparent; color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 6px 10px; cursor: pointer; }
 
-.controls { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
-.controls form { display: inline-flex; gap: 8px; align-items: center; }
-
-.btn {
-  background: var(--accent);
-  color: #031323;
-  border: none;
-  border-radius: 10px;
-  padding: 8px 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.toggle {
-  background: transparent;
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 6px 10px;
-  cursor: pointer;
-}
-select.toggle { padding: 6px 10px; }
-
-/* ------- Table ------- */
-
-table {
-  width: 100%;
-  border-collapse: separate;
-  border-spacing: 0 10px;   /* row gaps as “cards” */
-  table-layout: fixed;      /* make columns keep their widths */
-}
-
+/* table layout */
+table { width: 100%; border-collapse: separate; border-spacing: 0 10px; } /* vertical gaps only */
 th, td { padding: 10px 12px; }
-th {
-  color: var(--muted);
-  font-weight: 600;
-  text-align: left;
-  border-bottom: 1px solid var(--border);
+th { color: var(--muted); font-weight: 600; text-align: left; border-bottom: 1px solid var(--border); }
+
+/* ------------------------------
+   FULL-WIDTH CAPSULE FOR SUMMARY
+   ------------------------------ */
+tr.summary { position: relative; }                 /* anchor overlay */
+tr.summary::before {
+  content: "";
+  position: absolute;
+  inset: 0;                                       /* span the entire row */
+  background: var(--pairing-bg);
+  border: 1px solid var(--pairing-border);
+  border-radius: 12px;
+  pointer-events: none;                           /* keep cells clickable */
+  z-index: 0;
 }
+tr.summary:hover::before { background: var(--pairing-bg-hover); }
 
-/* Give the last column plenty of width so the capsule reaches the edge */
-th:last-child, td:last-child { width: 40%; }
-
-/* Summary rows as a single-looking capsule across all columns:
-   paint EVERY cell, and round only the first/last to create a continuous bar. */
-tr.summary { cursor: pointer; background: transparent; border: 0; }
-tr.summary:hover { background: transparent; }
-
+/* ensure cell content sits above the capsule and has no borders of its own */
 tr.summary td {
-  background: var(--pairing-bg) !important;     /* ensure last column is painted */
-  border-top: 1px solid var(--pairing-border);
-  border-bottom: 1px solid var(--pairing-border);
+  position: relative;
+  z-index: 1;
+  background: transparent !important;
+  border: 0 !important;
 }
 
-/* lead & tail radii so the row reads like one capsule */
-tr.summary td:first-child {
-  border-left: 1px solid var(--pairing-border);
-  border-radius: 12px 0 0 12px;
-}
-tr.summary td:last-child  {
-  border-right: 1px solid var(--pairing-border);
-  border-radius: 0 12px 12px 0;
-}
+/* details & OFF rows */
+tr.details { background: var(--row-alt); border: 1px dashed var(--border); display: none; }
+tr.summary.open + tr.details { display: table-row; }
 
-/* hover state across the whole bar */
-tr.summary:hover td { background: var(--pairing-bg-hover) !important; }
-
-/* Details container row (expands under summary) */
-tr.details { background: var(--row-alt); border: 1px dashed var(--border); }
-tr.details td[colspan] { padding: 0; }
-
-/* OFF rows */
 tr.off { background: var(--row); border: 1px solid var(--border); }
 .off-label, .off-dur { font-weight: 800; color: var(--off); }
 
-/* Pills (no-wrap so “2 day” doesn’t stack) */
+/* pills */
 .pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: 12px;
   font-weight: 700;
   color: #021216;
   background: var(--green);
-  display: inline-flex;
-  align-items: center;
-  padding: 4px 10px;
-  line-height: 1;
-  border-radius: 999px;      /* pill shape */
+  padding: 3px 8px;
+  border-radius: 999px;
   margin-left: 8px;
-  white-space: nowrap;       /* <- prevents line break (fixes circle look) */
+  white-space: nowrap;          /* keep “2 day” in one capsule */
 }
 .pill-red { background: var(--red); color: #130606; margin-left: 8px; }
 
-.muted { color: var(--muted); }
+/* small decorative dot */
+.dot { width: 6px; height: 6px; border-radius: 999px; background: #7ee2a1; display:inline-block; margin-right:4px; }
 
-/* Days & legs */
+/* progress tag text */
+.progress { font-weight: 800; margin-left: 8px; color: var(--green); }
+
+/* day blocks (inside details row) */
 .daysbox { padding: 6px 10px 10px; border-radius: 10px; }
-
 .day { margin: 8px 0 14px; }
+
 .dayhdr {
   background: rgba(73, 179, 124, 0.14);
-  border: 0;
+  border: 0;                   /* no green border */
   border-radius: 10px;
   padding: 8px 10px;
-  margin-left: 24px;       /* indentation from pairing */
+  margin-left: 24px;           /* indent under pairing */
   display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
-  font-weight: 600;        /* lighter than pairing title */
+  font-weight: 600;            /* lighter than pairing title */
 }
 .dayhdr .daytitle { font-weight: 600; }
 .dayhdr .helper { margin-left: auto; font-weight: 500; color: var(--muted); }
 
-.dot { width: 6px; height: 6px; border-radius: 999px; background: #7ee2a1; display:inline-block; margin-right: 4px; }
-
-.legs-wrap { margin: 6px 0 0 44px; } /* legs further indented under day */
-
+/* legs under each day */
+.legs-wrap { margin: 6px 0 0 44px; }              /* deeper indent */
 .legs { width: 100%; border-collapse: collapse; }
 .legs th, .legs td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
 .legs th { color: var(--muted); font-size: 12px; }
-
 .leg-done td { text-decoration: line-through; color: var(--strike); }
 
-.progress { font-weight: 800; margin-left: 8px; color: var(--green); }
+/* check-in indicator cell */
+.ck { display:flex; align-items:center; justify-content:center; }
+.ck .dot { width:10px; height:10px; margin:0; }
+.ck.off .dot { background: var(--ck-off); }
+.ck.pending .dot { background: var(--ck-pending); }
+.ck.ok .dot { background: var(--ck-ok); }
+.ck button { background: transparent; border: 0; color: var(--muted); cursor: pointer; }
 
-/* Collapse behavior — details hidden until the summary has .open */
-tr.details { display: none; }
-tr.summary.open + tr.details { display: table-row; }
-
-/* ------- Modal (Check-in Plan) ------- */
-
+/* modal (plan dialog) */
 .modal { position: fixed; inset: 0; background: rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; padding: 16px; }
 .modal-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; max-width: 720px; width: 100%; }
 .modal-header, .modal-footer { padding: 12px 14px; border-bottom: 1px solid var(--border); display:flex; align-items:center; }
@@ -202,10 +157,6 @@ tr.summary.open + tr.details { display: table-row; }
 .plan-table th, .plan-table td { border-bottom: 1px solid var(--border); padding: 8px 10px; }
 .plan-meta { margin-bottom: 8px; }
 
-/* Check-in indicator cell (left-most column) */
-.ck { display:flex; align-items:center; justify-content:center; }
-.ck .dot { width:10px; height:10px; margin:0; border-radius:999px; }
-.ck.off .dot { background: var(--ck-off); }
-.ck.pending .dot { background: var(--ck-pending); }
-.ck.ok .dot { background: var(--ck-ok); }
-.ck button { background: transparent; border: 0; color: var(--muted); cursor: pointer; }
+/* utilities */
+.muted { color: var(--muted); }
+.hidden { display: none !important; }
