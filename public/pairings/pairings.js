@@ -12,35 +12,20 @@
     _zeroKick: 0,
   };
 
-  // API helpers for ack
-  const API = {
-    ackPlan(pairing_id, report_local_iso){
-      const q = new URLSearchParams({ pairing_id, report_local_iso }).toString();
-      return fetch(`${apiBase}/api/ack/plan?${q}`).then(r=>r.json());
-    },
-    acknowledge(pairing_id, report_local_iso){
-      return fetch(`${apiBase}/api/ack/acknowledge`, {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ pairing_id, report_local_iso })
-      }).then(r=>r.json());
-    }
-  };
-
   // ---- Public actions ----
   window.dwManualRefresh = async function () {
-    try { await fetch(apiBase + '/api/refresh', { method: 'POST' }); }
+    try { await fetchJSON(apiBase + '/api/refresh', { method: 'POST' }); }
     catch (e) { console.error(e); }
   };
 
-  // ---- Controls wiring ----
+  // ---- Controls ----
   const refreshSel = document.getElementById('refresh-mins');
   if (refreshSel) {
     if (cfg.refreshMinutes) refreshSel.value = String(cfg.refreshMinutes);
     refreshSel.addEventListener('change', async () => {
       const minutes = parseInt(refreshSel.value, 10);
       try {
-        await fetch(apiBase + '/api/settings/refresh-seconds', {
+        await fetchJSON(apiBase + '/api/settings/refresh-seconds', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ seconds: minutes * 60 }),
@@ -58,25 +43,22 @@
     });
   }
 
-  // ---- First paint ----
-  renderOnce();
-
-  // ---- SSE hookup with fallbacks ----
+  // ---- SSE hookup ----
   try {
     const es = new EventSource(apiBase + '/api/events');
-    es.addEventListener('hello', () => {/* initial */});
+    es.addEventListener('hello', () => {});
     es.addEventListener('change', async () => { await renderOnce(); });
     es.addEventListener('schedule_update', async () => { await renderOnce(); });
-    es.onerror = () => { /* passive */ };
   } catch {}
 
-  // ---- 1s ticker for mm:ss + countdown & zero-kick ----
+  // ---- 1s ticker ----
   setInterval(tickStatusLine, 1000);
 
-  // ---- Global click handlers ----
+  // ---- Summary row toggle ----
   document.addEventListener('click', (e) => {
     const sum = e.target.closest('tr.summary');
-    if (!sum) return;
+    // ignore clicks on check-in box (we handle those separately)
+    if (!sum || e.target.closest('.ck')) return;
     sum.classList.toggle('open');
 
     const details = sum.nextElementSibling;
@@ -90,6 +72,7 @@
     });
   });
 
+  // ---- Day toggle ----
   document.addEventListener('click', (e) => {
     const hdr = e.target.closest('.dayhdr');
     if (!hdr) return;
@@ -102,28 +85,72 @@
     if (helper) helper.textContent = shown ? 'click to show legs' : 'click to hide legs';
   });
 
-  // ---- Modal controls ----
-  const modal = document.getElementById('plan-modal');
-  const planRows = document.getElementById('plan-rows');
-  const planMeta = document.getElementById('plan-meta');
-  const close1 = document.getElementById('plan-close-1');
-  const close2 = document.getElementById('plan-close-2');
-  function openPlan(pairing_id, report_iso){
-    modal.classList.remove('hidden');
-    planRows.innerHTML = '';
-    planMeta.textContent = 'Loading plan…';
-    API.ackPlan(pairing_id, report_iso).then(data => {
-      planMeta.textContent = `Pairing ${pairing_id} • Report ${new Date(report_iso).toLocaleString()}`;
-      planRows.innerHTML = (data.attempts || []).map(at => {
-        const when = new Date(at.at_iso).toLocaleString();
-        const typ = at.kind === 'call' ? 'Call' : 'Push';
-        return `<tr><td>${esc(when)}</td><td>${esc(typ)}</td><td>${esc(at.label || '')}</td></tr>`;
-      }).join('');
-    }).catch(()=>{ planMeta.textContent = 'Failed to load plan.'; });
+  // ---- Check-in icon interactions ----
+  document.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.ck');
+    if (!btn) return;
+
+    const pairingId = btn.dataset.pairingId;
+    const reportIso = btn.dataset.reportIso;
+
+    const mode = btn.dataset.mode; // "out" | "pending" | "ok"
+    if (mode === 'out') {
+      // window not open -> show plan
+      openPlanModal({ pairing_id: pairingId, report_local_iso: reportIso });
+      return;
+    }
+    if (mode === 'ok') {
+      // already acknowledged -> show plan (optional)
+      openPlanModal({ pairing_id: pairingId, report_local_iso: reportIso });
+      return;
+    }
+    // pending -> acknowledge then refresh
+    try {
+      await fetchJSON(apiBase + '/api/ack/acknowledge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pairing_id: pairingId, report_local_iso: reportIso }),
+      });
+      await renderOnce();
+    } catch (err) {
+      console.error('ack error', err);
+      // still show plan modal for context
+      openPlanModal({ pairing_id: pairingId, report_local_iso: reportIso });
+    }
+  });
+
+  // ---- Modal wiring ----
+  const modal = qs('#plan-modal');
+  const planClose1 = qs('#plan-close-1');
+  const planClose2 = qs('#plan-close-2');
+  [planClose1, planClose2].forEach(el => el && el.addEventListener('click', closePlanModal));
+  modal?.addEventListener('click', (e) => { if (e.target === modal) closePlanModal(); });
+
+  async function openPlanModal({ pairing_id, report_local_iso }) {
+    const metaEl = qs('#plan-meta');
+    const rowsEl = qs('#plan-rows');
+    if (!metaEl || !rowsEl) return;
+
+    metaEl.textContent = 'Loading…';
+    rowsEl.innerHTML = '';
+    modal?.classList.remove('hidden');
+
+    try {
+      const data = await fetchJSON(`${apiBase}/api/ack/plan?pairing_id=${encodeURIComponent(pairing_id)}&report_local_iso=${encodeURIComponent(report_local_iso)}`);
+      metaEl.textContent = `Pairing ${pairing_id} · Report ${report_local_iso}`;
+      rowsEl.innerHTML = (data.attempts || []).map(a => {
+        const when = new Date(a.at_iso);
+        return `<tr><td>${esc(when.toLocaleString())}</td><td>${esc(a.kind)}</td><td>${esc(a.label)}</td></tr>`;
+      }).join('') || `<tr><td colspan="3" class="muted">No attempts.</td></tr>`;
+    } catch (e) {
+      metaEl.textContent = 'Failed to load plan';
+      rowsEl.innerHTML = `<tr><td colspan="3" class="muted">${esc(String(e))}</td></tr>`;
+    }
   }
-  function closePlan(){ modal.classList.add('hidden'); }
-  close1?.addEventListener('click', closePlan);
-  close2?.addEventListener('click', closePlan);
+
+  function closePlanModal() {
+    modal?.classList.add('hidden');
+  }
 
   // ---- Core render ----
   async function renderOnce() {
@@ -135,6 +162,10 @@
     let data;
     try {
       const res = await fetch(`${apiBase}/api/pairings?${params.toString()}`, { cache: 'no-store' });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`HTTP ${res.status}: ${text.slice(0, 140)}`);
+      }
       data = await res.json();
     } catch (e) {
       console.error('Failed to fetch /api/pairings', e);
@@ -177,7 +208,7 @@
     if (row.kind === 'off') {
       return `
         <tr class="off">
-          <td class="checkcell"></td>
+          <td></td>
           <td><span class="off-label">OFF</span></td>
           <td class="muted"></td>
           <td class="muted"></td>
@@ -187,28 +218,35 @@
 
     const daysCount = row.days ? row.days.length : 0;
     const inProg = row.in_progress ? `<span class="progress">(In progress)</span>` : '';
+
+    // Out-of-base pill
     const startDep = firstDepartureAirport(row);
     const showOOB = !!(startDep && startDep !== homeBase);
     const oobPill = showOOB ? `<span class="pill pill-red">${esc(startDep)}</span>` : '';
 
-    // NEW: check icon state from server
+    // Check-in icon state
     const ack = row.ack || {};
-    const isAck = !!ack.acknowledged;
-    const inWindow = !!ack.window_open;
-    const iconCls = isAck ? 'check-icon done' : (inWindow ? 'check-icon pending' : 'check-icon');
-    const iconText = isAck ? '✓' : '•';
-
-    const onClick = isAck
-      ? `openPlan('${js(row.pairing_id)}','${js(row.report_local_iso||'')}');event.stopPropagation();`
-      : (inWindow
-          ? `ackNow('${js(row.pairing_id)}','${js(row.report_local_iso||'')}');event.stopPropagation();`
-          : `openPlan('${js(row.pairing_id)}','${js(row.report_local_iso||'')}');event.stopPropagation();`);
+    let ckClass = 'ck ck--out';
+    let ckLabel = '•';
+    let ckMode = 'out';
+    if (ack.acknowledged) {
+      ckClass = 'ck ck--ok'; ckLabel = '✓'; ckMode = 'ok';
+    } else if (ack.window_open) {
+      ckClass = 'ck ck--pending'; ckLabel = '!'; ckMode = 'pending';
+    } else {
+      ckClass = 'ck ck--out'; ckLabel = '•'; ckMode = 'out';
+    }
 
     const details = (row.days || []).map((day, i) => renderDayHTML(day, i)).join('');
 
     return `
       <tr class="summary">
-        <td class="checkcell"><span class="${iconCls}" onclick="${onClick}" title="Check-in">${iconText}</span></td>
+        <td>
+          <span class="${ckClass}" title="${ckMode === 'out' ? 'Window not open — click to view plan' : (ckMode === 'pending' ? 'Click to acknowledge' : 'Acknowledged')}"
+                data-mode="${ckMode}" data-pairing-id="${esc(row.pairing_id || '')}" data-report-iso="${esc(ack.report_local_iso || row.report_local_iso || '')}">
+            ${ckLabel}
+          </span>
+        </td>
         <td class="sum-first">
           <strong>${esc(row.pairing_id || '')}</strong>
           <span class="pill">${daysCount} day</span>
@@ -220,8 +258,7 @@
         <td class="muted">click to expand days</td>
       </tr>
       <tr class="details">
-        <td class="checkcell"></td>
-        <td colspan="4">
+        <td colspan="5">
           <div class="daysbox">${details}</div>
         </td>
       </tr>`;
@@ -257,16 +294,7 @@
       </div>`;
   }
 
-  // ---- actions bound from inline handlers ----
-  window.openPlan = openPlan;
-  window.ackNow = async function(pairing_id, report_iso){
-    try {
-      await API.acknowledge(pairing_id, report_iso);
-      await renderOnce();
-    } catch(e){ console.error(e); }
-  };
-
-  // ---- Live status ticker ----
+  // ---- Status ticker ----
   function tickStatusLine() {
     if (state.lastPullIso) {
       const ago = preciseAgo(new Date(state.lastPullIso));
@@ -293,17 +321,27 @@
 
   // ---- utils ----
   function qs(sel) { return document.querySelector(sel); }
+  async function fetchJSON(url, opts) {
+    const res = await fetch(url, opts);
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
+    }
+    return res.json();
+  }
   function setText(sel, v) { const el = qs(sel); if (el) el.textContent = v; }
   function esc(s) {
     return String(s).replace(/[&<>"'`=\/]/g, (ch) =>
       ({'&':'&amp;','<':'&lt;','>':'&#x3E;','"':'&quot;',"'":'&#39;','/':'&#x2F;','`':'&#x60;','=':'&#x3D;'}[ch])
     );
   }
-  function js(s){ return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
   function preciseAgo(d){
     const sec = Math.max(0, Math.floor((Date.now() - d.getTime())/1000));
     const m = Math.floor(sec/60), s = sec%60;
     return m ? `${m}m ${s}s ago` : `${s}s ago`;
   }
   function safeParseJSON(s) { try { return JSON.parse(s || '{}'); } catch { return null; } }
+
+  // ---- First paint ----
+  renderOnce();
 })();

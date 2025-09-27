@@ -5,6 +5,8 @@ import asyncio
 import datetime as dt
 import json
 import hashlib
+import logging
+import time
 from typing import Any, Dict, List, Optional, Tuple
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
@@ -18,7 +20,7 @@ from zoneinfo import ZoneInfo
 import cal_client as cal
 from cache_meta import read_cache_meta, write_cache_meta, normalize_cached_events
 from rows import build_pairing_rows, end_of_next_month_local
-from db import get_db, init_db  # for ack state + boot DB
+from db import get_db, init_db
 
 # ---------------- Paths / Static ----------------
 BASE_DIR = Path(__file__).parent.resolve()
@@ -26,19 +28,37 @@ PAIRINGS_DIR = BASE_DIR / "public" / "pairings"
 
 app = FastAPI(title="DutyWatch Backend (Viewer-Only)")
 
-# Serve the pairings folder at /pairings (serves index.html at /pairings/)
+# Static
 app.mount("/pairings", StaticFiles(directory=PAIRINGS_DIR, html=True), name="pairings")
 
-# Also serve /pairings (no trailing slash) directly without redirect
 @app.get("/pairings", include_in_schema=False)
 def pairings_index_direct():
     return FileResponse(PAIRINGS_DIR / "index.html")
 
-# Optionally make it the root page too (comment out if undesired)
 @app.get("/", include_in_schema=False)
 def root_index():
     return FileResponse(PAIRINGS_DIR / "index.html")
 
+# ---------------- Logging + middleware ----------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
+logger = logging.getLogger("dutywatch")
+logger.setLevel(logging.INFO)
+
+@app.middleware("http")
+async def timing_and_errors(request, call_next):
+    start = time.time()
+    try:
+        resp = await call_next(request)
+        return resp
+    except Exception:
+        logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+        raise
+    finally:
+        dur_ms = int((time.time() - start) * 1000)
+        logger.info("%s %s -> %dms", request.method, request.url.path, dur_ms)
 
 # ---------------- Config / Time ----------------
 LOCAL_TZ = ZoneInfo(os.getenv("LOCAL_TZ", "America/Chicago"))
@@ -105,7 +125,6 @@ def human_ago(from_dt: Optional[dt.datetime]) -> str:
     days = hours // 24
     return f"{days} day{'s' if days != 1 else ''} ago"
 
-
 # ---------------- Calendar fetch ----------------
 def fetch_current_to_next_eom() -> List[Dict[str, Any]]:
     now = dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc)
@@ -115,7 +134,6 @@ def fetch_current_to_next_eom() -> List[Dict[str, Any]]:
         return cal.fetch_events_between(now.isoformat(), end.isoformat())
     hours = int((end - now).total_seconds() // 3600) + 1
     return cal.fetch_upcoming_events(hours_ahead=hours)
-
 
 # ---------------- SSE + Poller ----------------
 async def _emit(event_type: str, payload: dict | None = None):
@@ -140,7 +158,6 @@ async def pull_and_update_once() -> bool:
 
         changed = json.dumps(meta.get("events", []), sort_keys=True) != json.dumps(events, sort_keys=True)
 
-        # update meta
         meta["events"] = events
         meta["last_pull_utc"] = _now_utc().isoformat()
         meta.setdefault("refresh_minutes", max(1, state.refresh_seconds // 60))
@@ -154,7 +171,7 @@ async def pull_and_update_once() -> bool:
         await _emit("change", {"changed": changed})
         return changed
     except Exception as e:
-        print(f"[pull] error: {e}")
+        logger.exception("[pull] error: %s", e)
         return False
 
 async def poller_loop():
@@ -185,14 +202,13 @@ async def lifespan(app: FastAPI):
 
 app.router.lifespan_context = lifespan
 
-
-# ---------------- Ack / Check-in policy (simulation) ----------------
+# ---------------- Ack / Check-in policy (simulation only) ----------------
 ACK_POLICY = {
-    "window_open_hours": 12,
-    "second_push_at_hours": 6,
-    "call_start_hours": 3,
-    "call_interval_minutes": 15,
-    "calls_per_attempt": 2,
+    "window_open_hours": 12,      # initial push at T-12h
+    "second_push_at_hours": 6,    # second push at T-6h
+    "call_start_hours": 3,        # start calls at T-3h
+    "call_interval_minutes": 15,  # every 15 min
+    "calls_per_attempt": 2,       # ring twice per attempt (DND bypass)
 }
 
 def _ack_id(pairing_id: str, report_local_iso: str) -> str:
@@ -218,16 +234,16 @@ def _write_ack_state(ack_id: str, state_val: str, deadline_utc: Optional[str] = 
 
 def _plan_attempts(report_local: dt.datetime) -> List[Dict[str, Any]]:
     p = ACK_POLICY
-    at: List[Dict[str, Any]] = []
-    at.append({"kind":"push","label":"Initial push","at_iso":(report_local - dt.timedelta(hours=p["window_open_hours"])).isoformat(),"meta":{}})
-    at.append({"kind":"push","label":"Second push","at_iso":(report_local - dt.timedelta(hours=p["second_push_at_hours"])).isoformat(),"meta":{}})
+    items: List[Dict[str, Any]] = []
+    items.append({"kind":"push","label":"Initial push","at_iso":(report_local - dt.timedelta(hours=p["window_open_hours"])).isoformat(),"meta":{}})
+    items.append({"kind":"push","label":"Second push","at_iso":(report_local - dt.timedelta(hours=p["second_push_at_hours"])).isoformat(),"meta":{}})
     t = report_local - dt.timedelta(hours=p["call_start_hours"])
     while t < report_local:
-        at.append({"kind":"call","label":"Call attempt (ring 1/2)","at_iso":t.isoformat(),"meta":{"ring":1}})
-        at.append({"kind":"call","label":"Call attempt (ring 2/2)","at_iso":(t + dt.timedelta(minutes=1)).isoformat(),"meta":{"ring":2}})
+        items.append({"kind":"call","label":"Call attempt (ring 1/2)","at_iso":t.isoformat(),"meta":{"ring":1}})
+        items.append({"kind":"call","label":"Call attempt (ring 2/2)","at_iso":(t + dt.timedelta(minutes=1)).isoformat(),"meta":{"ring":2}})
         t = t + dt.timedelta(minutes=p["call_interval_minutes"])
-    at.sort(key=lambda x: x["at_iso"])
-    return at
+    items.sort(key=lambda x: x["at_iso"])
+    return items
 
 def _window_state(report_local: Optional[dt.datetime]) -> Dict[str, Any]:
     now_local = dt.datetime.now(LOCAL_TZ)
@@ -239,7 +255,6 @@ def _window_state(report_local: Optional[dt.datetime]) -> Dict[str, Any]:
         "seconds_until_open": max(0, int((open_at - now_local).total_seconds())) if now_local < open_at else 0,
         "seconds_until_report": max(0, int((report_local - now_local).total_seconds())) if now_local < report_local else 0,
     }
-
 
 # ---------------- API Routes ----------------
 @app.get("/health")
@@ -253,51 +268,64 @@ async def api_pairings(
     only_reports: int = Query(default=1),
     is_24h: int = Query(default=0),
 ):
+    debug_notes: List[str] = []
+
     meta = await run_in_threadpool(read_cache_meta)
     events = normalize_cached_events(meta)
 
+    # Month window
     def month_bounds(y: int, m: int) -> Tuple[dt.datetime, dt.datetime]:
         start = dt.datetime(y, m, 1, tzinfo=dt.timezone.utc)
         end = dt.datetime(y + (m // 12), (m % 12) + 1, 1, tzinfo=dt.timezone.utc)
         return start, end
 
-    # ---- FIX: use UTC-aware minimum when an event has no/invalid start time
     UTC_MIN = dt.datetime.min.replace(tzinfo=dt.timezone.utc)
-
-    def start_utc_of(ev: Dict[str, Any]) -> dt.datetime:
+    def safe_start(ev: Dict[str, Any]) -> dt.datetime:
         s = iso_to_dt(ev.get("start_utc"))
-        if not s:
+        try:
+            return s if (s and s.tzinfo) else (s or UTC_MIN).replace(tzinfo=dt.timezone.utc)
+        except Exception:
             return UTC_MIN
-        return s if s.tzinfo else s.replace(tzinfo=dt.timezone.utc)
 
     now_local = dt.datetime.now(LOCAL_TZ)
     y, m = (year or now_local.year, month or now_local.month)
     start_utc, end_utc = month_bounds(y, m)
 
-    month_events = [e for e in events if start_utc <= start_utc_of(e) < end_utc]
+    try:
+        month_events = [e for e in events if start_utc <= safe_start(e) < end_utc]
+    except Exception as e:
+        debug_notes.append(f"month_filter_error:{type(e).__name__}")
+        month_events = events
 
-    rows = await run_in_threadpool(build_pairing_rows, month_events, bool(is_24h), bool(only_reports))
+    try:
+        rows = await run_in_threadpool(build_pairing_rows, month_events, bool(is_24h), bool(only_reports))
+    except Exception as e:
+        logger.exception("build_pairing_rows error")
+        debug_notes.append(f"build_rows_error:{type(e).__name__}")
+        rows = []
 
-    # Attach ack/check-in info to pairing rows
     enriched: List[Dict[str, Any]] = []
     for r in rows:
         if r.get("kind") != "pairing":
             enriched.append(r)
             continue
-        pairing_id = str(r.get("pairing_id") or "")
-        report_iso = r.get("report_local_iso") or ""
-        report_local = to_local(iso_to_dt(report_iso)) if report_iso else None
-
-        win = _window_state(report_local)
-        ackid = _ack_id(pairing_id, report_iso)
-        state = _read_ack_state(ackid)
-        r["ack"] = {
-            "ack_id": ackid,
-            "window_open": bool(win["window_open"]),
-            "acknowledged": (state == "ack"),
-            "seconds_until_open": win["seconds_until_open"],
-            "seconds_until_report": win["seconds_until_report"],
-        }
+        try:
+            pairing_id = str(r.get("pairing_id") or "")
+            report_iso = r.get("report_local_iso") or ""
+            report_local = to_local(iso_to_dt(report_iso)) if report_iso else None
+            win = _window_state(report_local)
+            ackid = _ack_id(pairing_id, report_iso)
+            state = _read_ack_state(ackid)
+            r["ack"] = {
+                "ack_id": ackid,
+                "window_open": bool(win["window_open"]),
+                "acknowledged": (state == "ack"),
+                "seconds_until_open": win["seconds_until_open"],
+                "seconds_until_report": win["seconds_until_report"],
+                "report_local_iso": report_iso,
+            }
+        except Exception as e:
+            debug_notes.append(f"ack_enrich_error:{type(e).__name__}")
         enriched.append(r)
 
     lp_iso = meta.get("last_pull_utc")
@@ -330,6 +358,7 @@ async def api_pairings(
         "month": m,
         "refresh_minutes": int(meta.get("refresh_minutes", max(1, state.refresh_seconds // 60))),
         "ack_policy": ACK_POLICY,
+        "debug": ";".join(debug_notes) if debug_notes else "",
     }
 
 @app.get("/api/ack/plan")
