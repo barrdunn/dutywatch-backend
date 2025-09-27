@@ -89,7 +89,6 @@ tr.off::before {
   position: absolute;
   inset: 0;
   background: var(--row);          /* darker blue background */
-  border: 1px solid var(--border); /* subtle outline */
   border-radius: 12px;             /* rounded corners */
   pointer-events: none;
   z-index: 0;
