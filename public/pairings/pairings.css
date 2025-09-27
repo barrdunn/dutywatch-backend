@@ -93,7 +93,7 @@ table {
   width: 100%;
   border-collapse: separate;
   border-spacing: 0 10px;   /* row gaps as “cards” */
-  table-layout: fixed;      /* make row backgrounds span evenly */
+  table-layout: fixed;      /* make columns keep their widths */
 }
 
 th, td { padding: 10px 12px; }
@@ -104,17 +104,21 @@ th {
   border-bottom: 1px solid var(--border);
 }
 
-/* Summary rows as full-width rounded capsules:
-   paint EACH cell so the background spans all columns. */
+/* Give the last column plenty of width so the capsule reaches the edge */
+th:last-child, td:last-child { width: 40%; }
+
+/* Summary rows as a single-looking capsule across all columns:
+   paint EVERY cell, and round only the first/last to create a continuous bar. */
 tr.summary { cursor: pointer; background: transparent; border: 0; }
 tr.summary:hover { background: transparent; }
 
 tr.summary td {
-  background: var(--pairing-bg);
+  background: var(--pairing-bg) !important;     /* ensure last column is painted */
   border-top: 1px solid var(--pairing-border);
   border-bottom: 1px solid var(--pairing-border);
 }
 
+/* lead & tail radii so the row reads like one capsule */
 tr.summary td:first-child {
   border-left: 1px solid var(--pairing-border);
   border-radius: 12px 0 0 12px;
@@ -124,7 +128,8 @@ tr.summary td:last-child  {
   border-radius: 0 12px 12px 0;
 }
 
-tr.summary:hover td { background: var(--pairing-bg-hover); }
+/* hover state across the whole bar */
+tr.summary:hover td { background: var(--pairing-bg-hover) !important; }
 
 /* Details container row (expands under summary) */
 tr.details { background: var(--row-alt); border: 1px dashed var(--border); }
@@ -134,7 +139,7 @@ tr.details td[colspan] { padding: 0; }
 tr.off { background: var(--row); border: 1px solid var(--border); }
 .off-label, .off-dur { font-weight: 800; color: var(--off); }
 
-/* Pills */
+/* Pills (no-wrap so “2 day” doesn’t stack) */
 .pill {
   font-size: 12px;
   font-weight: 700;
@@ -142,10 +147,11 @@ tr.off { background: var(--row); border: 1px solid var(--border); }
   background: var(--green);
   display: inline-flex;
   align-items: center;
-  padding: 3px 10px;
+  padding: 4px 10px;
   line-height: 1;
-  border-radius: 999px; /* pill shape */
+  border-radius: 999px;      /* pill shape */
   margin-left: 8px;
+  white-space: nowrap;       /* <- prevents line break (fixes circle look) */
 }
 .pill-red { background: var(--red); color: #130606; margin-left: 8px; }
 
@@ -157,8 +163,8 @@ tr.off { background: var(--row); border: 1px solid var(--border); }
 .day { margin: 8px 0 14px; }
 .dayhdr {
   background: rgba(73, 179, 124, 0.14);
-  border: 0;               /* no green border */
-  border-radius: 10px;     /* rounded */
+  border: 0;
+  border-radius: 10px;
   padding: 8px 10px;
   margin-left: 24px;       /* indentation from pairing */
   display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
