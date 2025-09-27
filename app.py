@@ -16,9 +16,9 @@ from starlette.concurrency import run_in_threadpool
 from zoneinfo import ZoneInfo
 
 import cal_client as cal
-from db import init_db, read_events_cache, overwrite_events_cache, get_db
-from rows import build_pairing_rows, end_of_next_month_local  # unchanged behavior for rows
 from cache_meta import read_cache_meta, write_cache_meta, normalize_cached_events
+from rows import build_pairing_rows, end_of_next_month_local
+from db import get_db, init_db  # for ack state + boot DB
 
 # ---------------- Paths / Static ----------------
 BASE_DIR = Path(__file__).parent.resolve()
@@ -34,7 +34,7 @@ app.mount("/pairings", StaticFiles(directory=PAIRINGS_DIR, html=True), name="pai
 def pairings_index_direct():
     return FileResponse(PAIRINGS_DIR / "index.html")
 
-# Make it the root page
+# Optionally make it the root page too (comment out if undesired)
 @app.get("/", include_in_schema=False)
 def root_index():
     return FileResponse(PAIRINGS_DIR / "index.html")
@@ -101,7 +101,7 @@ def human_ago(from_dt: Optional[dt.datetime]) -> str:
         return f"{mins} min{'s' if mins != 1 else ''} ago"
     hours = mins // 60
     if hours < 24:
-        return f"{hours} hour{'s' if hours != 1 else ''} ago"
+        return f"{hours} hour{'s' if mins != 1 else ''} ago"
     days = hours // 24
     return f"{days} day{'s' if days != 1 else ''} ago"
 
@@ -140,6 +140,7 @@ async def pull_and_update_once() -> bool:
 
         changed = json.dumps(meta.get("events", []), sort_keys=True) != json.dumps(events, sort_keys=True)
 
+        # update meta
         meta["events"] = events
         meta["last_pull_utc"] = _now_utc().isoformat()
         meta.setdefault("refresh_minutes", max(1, state.refresh_seconds // 60))
@@ -186,21 +187,19 @@ app.router.lifespan_context = lifespan
 
 
 # ---------------- Ack / Check-in policy (simulation) ----------------
-# Default policy (can be made configurable later)
 ACK_POLICY = {
     "window_open_hours": 12,        # open check-in window 12h before report
     "second_push_at_hours": 6,      # another push at 6h before report (if no ack)
     "call_start_hours": 3,          # start calls at 3h before report (if no ack)
     "call_interval_minutes": 15,    # call every 15 minutes
-    "calls_per_attempt": 2          # ring twice per attempt to bypass DND
+    "calls_per_attempt": 2          # 2 rings per attempt to bypass DND
 }
 
 def _ack_id(pairing_id: str, report_local_iso: str) -> str:
     base = f"{pairing_id}|{report_local_iso}"
     return hashlib.sha256(base.encode("utf-8")).hexdigest()[:16]
 
-def _read_ack_state(ack_id: str) -> str:
-    # states: "ack" | "snoozed" | "noop" | None (no record yet)
+def _read_ack_state(ack_id: str) -> Optional[str]:
     with get_db() as c:
         row = c.execute("SELECT state FROM acks WHERE ack_id=?", (ack_id,)).fetchone()
         return row["state"] if row else None
@@ -210,10 +209,7 @@ def _write_ack_state(ack_id: str, state_val: str, deadline_utc: Optional[str] = 
     with get_db() as c:
         cur = c.execute("SELECT 1 FROM acks WHERE ack_id=?", (ack_id,)).fetchone()
         if cur:
-            c.execute(
-                "UPDATE acks SET state=?, last_update_utc=? WHERE ack_id=?",
-                (state_val, now_iso, ack_id),
-            )
+            c.execute("UPDATE acks SET state=?, last_update_utc=? WHERE ack_id=?", (state_val, now_iso, ack_id))
         else:
             c.execute(
                 "INSERT INTO acks(ack_id, event_uid, deadline_utc, state, last_update_utc) VALUES (?,?,?,?,?)",
@@ -221,25 +217,19 @@ def _write_ack_state(ack_id: str, state_val: str, deadline_utc: Optional[str] = 
             )
 
 def _plan_attempts(report_local: dt.datetime) -> List[Dict[str, Any]]:
-    """
-    Compute the schedule of simulated attempts (pushes and calls) in LOCAL_TZ.
-    Returns [{kind:'push'|'call', at_iso, label, meta:{...}}, ...] sorted by time.
-    """
+    """Return simulated push/call attempts from window open until report (LOCAL_TZ)."""
     p = ACK_POLICY
-    at = []
-    # Push @ 12h before
-    at.append({"kind": "push", "label": "Initial push", "at_iso": (report_local - dt.timedelta(hours=p["window_open_hours"])).isoformat(), "meta": {}})
-    # Push @ 6h before
-    at.append({"kind": "push", "label": "Second push", "at_iso": (report_local - dt.timedelta(hours=p["second_push_at_hours"])).isoformat(), "meta": {}})
-    # Calls every N minutes starting at 3h before, 2 per attempt
-    start = report_local - dt.timedelta(hours=p["call_start_hours"])
-    t = start
+    at: List[Dict[str, Any]] = []
+    # Push @ 12h
+    at.append({"kind":"push","label":"Initial push","at_iso":(report_local - dt.timedelta(hours=p["window_open_hours"])).isoformat(),"meta":{}})
+    # Push @ 6h
+    at.append({"kind":"push","label":"Second push","at_iso":(report_local - dt.timedelta(hours=p["second_push_at_hours"])).isoformat(),"meta":{}})
+    # Calls every 15m from 3h, two rings per attempt (ring 2 one minute after ring 1)
+    t = report_local - dt.timedelta(hours=p["call_start_hours"])
     while t < report_local:
-        at.append({"kind": "call", "label": "Call attempt (ring 1/2)", "at_iso": t.isoformat(), "meta": {"rings": 1}})
-        at2 = t + dt.timedelta(minutes=1)  # second ring a minute later to simulate “two times”
-        at.append({"kind": "call", "label": "Call attempt (ring 2/2)", "at_iso": at2.isoformat(), "meta": {"rings": 2}})
+        at.append({"kind":"call","label":"Call attempt (ring 1/2)","at_iso":t.isoformat(),"meta":{"ring":1}})
+        at.append({"kind":"call","label":"Call attempt (ring 2/2)","at_iso":(t + dt.timedelta(minutes=1)).isoformat(),"meta":{"ring":2}})
         t = t + dt.timedelta(minutes=p["call_interval_minutes"])
-    # sort (defensive)
     at.sort(key=lambda x: x["at_iso"])
     return at
 
@@ -270,7 +260,6 @@ async def api_pairings(
     meta = await run_in_threadpool(read_cache_meta)
     events = normalize_cached_events(meta)
 
-    # Filter to requested month (default: current local month)
     def month_bounds(y: int, m: int) -> Tuple[dt.datetime, dt.datetime]:
         start = dt.datetime(y, m, 1, tzinfo=dt.timezone.utc)
         end = dt.datetime(y + (m // 12), (m % 12) + 1, 1, tzinfo=dt.timezone.utc)
@@ -285,30 +274,27 @@ async def api_pairings(
 
     rows = await run_in_threadpool(build_pairing_rows, month_events, bool(is_24h), bool(only_reports))
 
-    # ---- Attach check-in status to pairing rows ----
-    enriched_rows: List[Dict[str, Any]] = []
+    # Attach ack/check-in info to pairing rows
+    enriched: List[Dict[str, Any]] = []
     for r in rows:
         if r.get("kind") != "pairing":
-            enriched_rows.append(r)
+            enriched.append(r)
             continue
-
         pairing_id = str(r.get("pairing_id") or "")
-        report_iso = r.get("report_local_iso")
+        report_iso = r.get("report_local_iso") or ""
         report_local = to_local(iso_to_dt(report_iso)) if report_iso else None
 
         win = _window_state(report_local)
-        ack_id = _ack_id(pairing_id, report_iso or "")
-        state = _read_ack_state(ack_id)
-        acknowledged = (state == "ack")
-
+        ackid = _ack_id(pairing_id, report_iso)
+        state = _read_ack_state(ackid)
         r["ack"] = {
-            "ack_id": ack_id,
-            "window_open": win["window_open"],
-            "acknowledged": acknowledged,
+            "ack_id": ackid,
+            "window_open": bool(win["window_open"]),
+            "acknowledged": (state == "ack"),
             "seconds_until_open": win["seconds_until_open"],
             "seconds_until_report": win["seconds_until_report"],
         }
-        enriched_rows.append(r)
+        enriched.append(r)
 
     lp_iso = meta.get("last_pull_utc")
     nr_iso = meta.get("next_run_utc")
@@ -334,7 +320,7 @@ async def api_pairings(
         "next_pull_local_iso": nr_local.isoformat() if nr_local else "",
         "seconds_to_next": seconds_to_next,
         "tz_label": "CT",
-        "rows": enriched_rows,
+        "rows": enriched,
         "version": state.version,
         "year": y,
         "month": m,
@@ -344,7 +330,7 @@ async def api_pairings(
 
 @app.get("/api/ack/plan")
 def api_ack_plan(pairing_id: str, report_local_iso: str):
-    """Return the simulated schedule of future attempts for this pairing/report."""
+    """Return simulated future attempts (push + calls) for this pairing/report."""
     report_local = to_local(iso_to_dt(report_local_iso))
     if not report_local:
         raise HTTPException(400, "Invalid report_local_iso")
@@ -357,14 +343,11 @@ def api_ack_acknowledge(payload: Dict[str, Any] = Body(...)):
     report_local_iso = str(payload.get("report_local_iso") or "")
     if not pairing_id or not report_local_iso:
         raise HTTPException(400, "pairing_id and report_local_iso required")
-
-    ack_id = _ack_id(pairing_id, report_local_iso)
-    # Optionally store a "deadline" = report time in UTC
+    ackid = _ack_id(pairing_id, report_local_iso)
     report_local = to_local(iso_to_dt(report_local_iso))
     deadline_utc = report_local.astimezone(dt.timezone.utc).isoformat() if report_local else None
-
-    _write_ack_state(ack_id, "ack", deadline_utc)
-    return {"ok": True, "ack_id": ack_id}
+    _write_ack_state(ackid, "ack", deadline_utc)
+    return {"ok": True, "ack_id": ackid}
 
 @app.get("/api/status")
 async def api_status():

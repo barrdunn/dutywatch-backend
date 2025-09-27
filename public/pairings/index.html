@@ -1,60 +1,93 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <title>DutyWatch – Pairings</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <link rel="stylesheet" href="pairings.css"/>
+  <meta charset="utf-8" />
+  <title>Pairings</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/pairings/pairings.css" />
+  <style>.hidden{display:none!important}</style>
 </head>
 <body>
-  <header class="topbar">
-    <h1>DutyWatch</h1>
-    <div class="controls">
-      <label>
-        Clock:
-        <select id="clockMode">
-          <option value="12" selected>12h</option>
-          <option value="24">24h</option>
-        </select>
-      </label>
-      <label>
-        Refresh:
-        <select id="refreshMinutes"></select>
-      </label>
-      <button id="manualRefresh">Refresh Now</button>
-      <span id="statusLine"></span>
+  <div class="wrap">
+    <div class="card">
+      <h1>Pairings</h1>
+
+      <div class="sub" id="status-line">
+        <span class="chip">Looking through <strong id="looking-through">—</strong></span>
+        <span class="chip">Last pull: <strong id="last-pull">—</strong></span>
+        <span class="chip">Next refresh: <strong id="next-refresh">—</strong> <span class="muted" id="next-refresh-eta"></span></span>
+      </div>
+
+      <div class="controls">
+        <form onsubmit="window.dwManualRefresh(); return false;">
+          <button class="btn" type="submit">Pull / Refresh</button>
+        </form>
+
+        <label class="toggle" style="display:flex;align-items:center;gap:8px;">
+          Auto-refresh:
+          <select id="refresh-mins" class="toggle">
+            <option value="1">1 min</option>
+            <option value="5">5 mins</option>
+            <option value="10">10 mins</option>
+            <option value="15">15 mins</option>
+            <option value="30" selected>30 mins</option>
+          </select>
+        </label>
+
+        <label class="toggle" style="display:flex;align-items:center;gap:8px;">
+          Clock:
+          <select id="clock-mode" class="toggle">
+            <option value="12" selected>12h</option>
+            <option value="24">24h</option>
+          </select>
+        </label>
+      </div>
+
+      <table id="pairings">
+        <thead>
+          <tr>
+            <th style="width:36px">✓</th> <!-- new check-in column -->
+            <th>Pairing / OFF</th>
+            <th>Report</th>
+            <th>Release</th>
+            <th>Days / Legs / Hotel</th>
+          </tr>
+        </thead>
+        <tbody id="pairings-body"><!-- filled by JS --></tbody>
+      </table>
     </div>
-  </header>
+  </div>
 
-  <main>
-    <div id="lookingThrough" class="looking"></div>
-    <table id="pairingsTable" class="pairings-table">
-      <tbody id="pairingsBody"></tbody>
-    </table>
-  </main>
+  <!-- Static boot config for the viewer-only frontend -->
+  <script id="dw-boot" type="application/json">{
+    "clockMode":"12",
+    "onlyReports": true,
+    "tz": "CT",
+    "refreshMinutes": 30,
+    "apiBase": "",
+    "baseAirport": "DFW"
+  }</script>
 
-  <!-- Modal for Check-in Plan -->
-  <div id="planModal" class="modal hidden" role="dialog" aria-modal="true">
+  <!-- Plan modal -->
+  <div id="plan-modal" class="modal hidden" role="dialog" aria-modal="true" aria-label="Check-in & Reminder Plan">
     <div class="modal-card">
       <div class="modal-header">
         <h2>Check-in & Reminder Plan</h2>
-        <button class="close" id="closePlanModal" aria-label="Close">×</button>
+        <button class="modal-close" id="plan-close-1">×</button>
       </div>
       <div class="modal-content">
-        <div id="planMeta" class="plan-meta"></div>
+        <div id="plan-meta" class="plan-meta muted">Loading…</div>
         <table class="plan-table">
-          <thead>
-            <tr><th>When</th><th>Type</th><th>Details</th></tr>
-          </thead>
-          <tbody id="planRows"></tbody>
+          <thead><tr><th>When</th><th>Type</th><th>Details</th></tr></thead>
+          <tbody id="plan-rows"></tbody>
         </table>
       </div>
       <div class="modal-footer">
-        <button class="close" id="closePlanModal2">Close</button>
+        <button class="btn" id="plan-close-2">Close</button>
       </div>
     </div>
   </div>
 
-  <script src="pairings.js"></script>
+  <script src="/pairings/pairings.js" defer></script>
 </body>
 </html>
