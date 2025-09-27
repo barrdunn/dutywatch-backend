@@ -1,5 +1,4 @@
 (function () {
-  // ---- Boot config ----
   const cfg = safeParseJSON(document.getElementById('dw-boot')?.textContent) || {};
   const apiBase = cfg.apiBase || '';
   const HOME_BASE = (cfg.baseAirport || 'DFW').toUpperCase();
@@ -12,20 +11,18 @@
     _zeroKick: 0,
   };
 
-  // ---- Public actions ----
   window.dwManualRefresh = async function () {
-    try { await fetchJSON(apiBase + '/api/refresh', { method: 'POST' }); }
+    try { await fetch(apiBase + '/api/refresh', { method: 'POST' }); }
     catch (e) { console.error(e); }
   };
 
-  // ---- Controls ----
   const refreshSel = document.getElementById('refresh-mins');
   if (refreshSel) {
     if (cfg.refreshMinutes) refreshSel.value = String(cfg.refreshMinutes);
     refreshSel.addEventListener('change', async () => {
       const minutes = parseInt(refreshSel.value, 10);
       try {
-        await fetchJSON(apiBase + '/api/settings/refresh-seconds', {
+        await fetch(apiBase + '/api/settings/refresh-seconds', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ seconds: minutes * 60 }),
@@ -43,7 +40,8 @@
     });
   }
 
-  // ---- SSE hookup ----
+  renderOnce();
+
   try {
     const es = new EventSource(apiBase + '/api/events');
     es.addEventListener('hello', () => {});
@@ -51,104 +49,45 @@
     es.addEventListener('schedule_update', async () => { await renderOnce(); });
   } catch {}
 
-  // ---- 1s ticker ----
   setInterval(tickStatusLine, 1000);
 
-  // ---- Summary row toggle ----
-  document.addEventListener('click', (e) => {
-    const sum = e.target.closest('tr.summary');
-    if (!sum || e.target.closest('.ck')) return; // ignore ck clicks
-    sum.classList.toggle('open');
-
-    const details = sum.nextElementSibling;
-    if (!details || !details.classList.contains('details')) return;
-    const open = sum.classList.contains('open');
-    details.querySelectorAll('.day .legs').forEach(tbl => {
-      tbl.style.display = open ? 'table' : 'none';
-    });
-    details.querySelectorAll('.day .helper').forEach(h => {
-      h.textContent = open ? 'click to hide legs' : 'click to show legs';
-    });
-  });
-
-  // ---- Day toggle ----
-  document.addEventListener('click', (e) => {
-    const hdr = e.target.closest('.dayhdr');
-    if (!hdr) return;
-    const day = hdr.closest('.day');
-    const legs = day?.querySelector('.legs');
-    if (!legs) return;
-    const shown = legs.style.display !== 'none';
-    legs.style.display = shown ? 'none' : 'table';
-    const helper = day.querySelector('.helper');
-    if (helper) helper.textContent = shown ? 'click to show legs' : 'click to hide legs';
-  });
-
-  // ---- Check-in icon interactions ----
   document.addEventListener('click', async (e) => {
-    const btn = e.target.closest('.ck');
-    if (!btn) return;
-
-    const pairingId = btn.dataset.pairingId;
-    const reportIso = btn.dataset.reportIso;
-
-    const mode = btn.dataset.mode; // "out" | "pending" | "ok"
-    if (mode === 'out') {
-      openPlanModal({ pairing_id: pairingId, report_local_iso: reportIso });
-      return;
-    }
-    if (mode === 'ok') {
-      openPlanModal({ pairing_id: pairingId, report_local_iso: reportIso });
-      return;
-    }
-    // pending -> acknowledge
-    try {
-      await fetchJSON(apiBase + '/api/ack/acknowledge', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pairing_id: pairingId, report_local_iso: reportIso }),
+    const sum = e.target.closest('tr.summary');
+    if (sum) {
+      sum.classList.toggle('open');
+      const details = sum.nextElementSibling;
+      if (!details || !details.classList.contains('details')) return;
+      const open = sum.classList.contains('open');
+      details.querySelectorAll('.day .legs').forEach(tbl => {
+        tbl.style.display = open ? 'table' : 'none';
       });
-      await renderOnce();
-    } catch (err) {
-      console.error('ack error', err);
-      openPlanModal({ pairing_id: pairingId, report_local_iso: reportIso });
+      details.querySelectorAll('.day .helper').forEach(h => {
+        h.textContent = open ? 'click to hide legs' : 'click to show legs';
+      });
+      return;
+    }
+
+    // plan modal trigger (check-cell if window closed)
+    const btnPlan = e.target.closest('button[data-plan]');
+    if (btnPlan) {
+      const pairingId = btnPlan.getAttribute('data-pairing');
+      const reportIso  = btnPlan.getAttribute('data-report');
+      await openPlan(pairingId, reportIso);
+      return;
+    }
+
+    const hdr = e.target.closest('.dayhdr');
+    if (hdr) {
+      const day = hdr.closest('.day');
+      const legs = day?.querySelector('.legs');
+      if (!legs) return;
+      const shown = legs.style.display !== 'none';
+      legs.style.display = shown ? 'none' : 'table';
+      const helper = day.querySelector('.helper');
+      if (helper) helper.textContent = shown ? 'click to show legs' : 'click to hide legs';
     }
   });
 
-  // ---- Modal wiring ----
-  const modal = qs('#plan-modal');
-  const planClose1 = qs('#plan-close-1');
-  const planClose2 = qs('#plan-close-2');
-  [planClose1, planClose2].forEach(el => el && el.addEventListener('click', closePlanModal));
-  modal?.addEventListener('click', (e) => { if (e.target === modal) closePlanModal(); });
-
-  async function openPlanModal({ pairing_id, report_local_iso }) {
-    const metaEl = qs('#plan-meta');
-    const rowsEl = qs('#plan-rows');
-    if (!metaEl || !rowsEl) return;
-
-    metaEl.textContent = 'Loading…';
-    rowsEl.innerHTML = '';
-    modal?.classList.remove('hidden');
-
-    try {
-      const data = await fetchJSON(`${apiBase}/api/ack/plan?pairing_id=${encodeURIComponent(pairing_id)}&report_local_iso=${encodeURIComponent(report_local_iso)}`);
-      metaEl.textContent = `Pairing ${pairing_id} · Report ${report_local_iso}`;
-      rowsEl.innerHTML = (data.attempts || []).map(a => {
-        const when = new Date(a.at_iso);
-        return `<tr><td>${esc(when.toLocaleString())}</td><td>${esc(a.kind)}</td><td>${esc(a.label)}</td></tr>`;
-      }).join('') || `<tr><td colspan="3" class="muted">No attempts.</td></tr>`;
-    } catch (e) {
-      metaEl.textContent = 'Failed to load plan';
-      rowsEl.innerHTML = `<tr><td colspan="3" class="muted">${esc(String(e))}</td></tr>`;
-    }
-  }
-
-  function closePlanModal() {
-    modal?.classList.add('hidden');
-  }
-
-  // ---- Core render ----
   async function renderOnce() {
     const params = new URLSearchParams({
       is_24h: String(state.clockMode === 24 ? 1 : 0),
@@ -158,11 +97,6 @@
     let data;
     try {
       const res = await fetch(`${apiBase}/api/pairings?${params.toString()}`, { cache: 'no-store' });
-      if (!res.ok) {
-        const text = await res.text();
-        console.error('pairings error body:', text);
-        throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
-      }
       data = await res.json();
     } catch (e) {
       console.error('Failed to fetch /api/pairings', e);
@@ -172,7 +106,6 @@
     state.lastPullIso    = data.last_pull_local_iso || null;
     state.nextRefreshIso = data.next_pull_local_iso || null;
 
-    const refreshSel = document.getElementById('refresh-mins');
     if (refreshSel && data.refresh_minutes) {
       refreshSel.value = String(data.refresh_minutes);
     }
@@ -190,7 +123,6 @@
     tbody.innerHTML = (data.rows || []).map(row => renderRowHTML(row, HOME_BASE)).join('');
   }
 
-  // ---- Helpers for start airport / out-of-base pill ----
   function firstDepartureAirport(row) {
     const days = row?.days || [];
     for (const d of days) {
@@ -217,34 +149,17 @@
     const daysCount = row.days ? row.days.length : 0;
     const inProg = row.in_progress ? `<span class="progress">(In progress)</span>` : '';
 
-    // Out-of-base pill
     const startDep = firstDepartureAirport(row);
     const showOOB = !!(startDep && startDep !== homeBase);
     const oobPill = showOOB ? `<span class="pill pill-red">${esc(startDep)}</span>` : '';
 
-    // Check-in icon state
-    const ack = row.ack || {};
-    let ckClass = 'ck ck--out';
-    let ckLabel = '•';
-    let ckMode = 'out';
-    if (ack.acknowledged) {
-      ckClass = 'ck ck--ok'; ckLabel = '✓'; ckMode = 'ok';
-    } else if (ack.window_open) {
-      ckClass = 'ck ck--pending'; ckLabel = '!'; ckMode = 'pending';
-    } else {
-      ckClass = 'ck ck--out'; ckLabel = '•'; ckMode = 'out';
-    }
+    const checkCell = renderCheckCell(row); // new check-in cell
 
     const details = (row.days || []).map((day, i) => renderDayHTML(day, i)).join('');
 
     return `
       <tr class="summary">
-        <td>
-          <span class="${ckClass}" title="${ckMode === 'out' ? 'Window not open — click to view plan' : (ckMode === 'pending' ? 'Click to acknowledge' : 'Acknowledged')}"
-                data-mode="${ckMode}" data-pairing-id="${esc(row.pairing_id || '')}" data-report-iso="${esc(ack.report_local_iso || row.report_local_iso || '')}">
-            ${ckLabel}
-          </span>
-        </td>
+        ${checkCell}
         <td class="sum-first">
           <strong>${esc(row.pairing_id || '')}</strong>
           <span class="pill">${daysCount} day</span>
@@ -260,6 +175,24 @@
           <div class="daysbox">${details}</div>
         </td>
       </tr>`;
+  }
+
+  function renderCheckCell(row) {
+    const ack = row.ack || {};
+    const a = !!ack.acknowledged;
+    const open = !!ack.window_open;
+    // three states:
+    // - OK (acknowledged)
+    // - pending (window open but not acked)
+    // - off (window not open yet)
+    if (a) {
+      return `<td class="ck ok"><div class="dot" title="Acknowledged"></div></td>`;
+    }
+    if (!open) {
+      // button opens plan modal
+      return `<td class="ck off"><button data-plan data-pairing="${esc(row.pairing_id || '')}" data-report="${esc(ack.report_local_iso || '')}" title="View upcoming reminders">●</button></td>`;
+    }
+    return `<td class="ck pending" title="Check-in window open; awaiting acknowledgement">●</td>`;
   }
 
   function renderDayHTML(day, idx) {
@@ -292,7 +225,32 @@
       </div>`;
   }
 
-  // ---- Status ticker ----
+  async function openPlan(pairingId, reportIso) {
+    try {
+      const res = await fetch(`${apiBase}/api/ack/plan?pairing_id=${encodeURIComponent(pairingId)}&report_local_iso=${encodeURIComponent(reportIso)}`);
+      const data = await res.json();
+      const rows = (data.attempts||[]).map(a => {
+        const when = new Date(a.at_iso).toLocaleString();
+        const type = a.kind.toUpperCase();
+        const det = a.label || '';
+        return `<tr><td>${esc(when)}</td><td>${esc(type)}</td><td>${esc(det)}</td></tr>`;
+      }).join('');
+      qs('#plan-rows').innerHTML = rows || `<tr><td colspan="3" class="muted">No upcoming attempts.</td></tr>`;
+      qs('#plan-meta').textContent = `Policy: push at T-${data.policy.window_open_hours}h and T-${data.policy.second_push_at_hours}h; calls from T-${data.policy.call_start_hours}h every ${data.policy.call_interval_minutes}m (2 rings/attempt)`;
+      showModal(true);
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  function showModal(show) {
+    const m = qs('#plan-modal');
+    if (!m) return;
+    m.classList.toggle('hidden', !show);
+    qs('#plan-close-1')?.addEventListener('click', () => showModal(false));
+    qs('#plan-close-2')?.addEventListener('click', () => showModal(false));
+  }
+
   function tickStatusLine() {
     if (state.lastPullIso) {
       const ago = preciseAgo(new Date(state.lastPullIso));
@@ -317,16 +275,7 @@
     }
   }
 
-  // ---- utils ----
   function qs(sel) { return document.querySelector(sel); }
-  async function fetchJSON(url, opts) {
-    const res = await fetch(url, opts);
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
-    }
-    return res.json();
-  }
   function setText(sel, v) { const el = qs(sel); if (el) el.textContent = v; }
   function esc(s) {
     return String(s).replace(/[&<>"'`=\/]/g, (ch) =>
@@ -339,7 +288,4 @@
     return m ? `${m}m ${s}s ago` : `${s}s ago`;
   }
   function safeParseJSON(s) { try { return JSON.parse(s || '{}'); } catch { return null; } }
-
-  // ---- First paint ----
-  renderOnce();
 })();

@@ -107,7 +107,7 @@ def human_ago_precise(from_dt: Optional[dt.datetime]) -> str:
         return f"{m}m {s}s ago"
     if m:
         return f"{m}m ago"
-    return f"{s}s ago"
+    return f"{s}s ago"  # <-- fixed: no stray brace
 
 def human_ago(from_dt: Optional[dt.datetime]) -> str:
     if not from_dt:
@@ -122,7 +122,7 @@ def human_ago(from_dt: Optional[dt.datetime]) -> str:
         return f"{mins} min{'s' if mins != 1 else ''} ago"
     hours = mins // 60
     if hours < 24:
-        return f"{hours} hour{'s' if mins != 1 else ''} ago"
+        return f"{hours} hour{'s' if hours != 1 else ''} ago"
     days = hours // 24
     return f"{days} day{'s' if days != 1 else ''} ago"
 
@@ -309,11 +309,11 @@ async def api_pairings(
             report_local = to_local(iso_to_dt(report_iso)) if report_iso else None
             win = _window_state(report_local)
             ackid = _ack_id(pairing_id, report_iso)
-            state = _read_ack_state(ackid)
+            ack_state = _read_ack_state(ackid)
             r["ack"] = {
                 "ack_id": ackid,
                 "window_open": bool(win["window_open"]),
-                "acknowledged": (state == "ack"),
+                "acknowledged": (ack_state == "ack"),
                 "seconds_until_open": win["seconds_until_open"],
                 "seconds_until_report": win["seconds_until_report"],
                 "report_local_iso": report_iso,
@@ -417,9 +417,9 @@ async def api_refresh():
 @app.get("/api/events")
 async def sse_events():
     async def event_stream():
-        yield f"event: hello\ndata: {json.dumps({'version': state.version})}\n\n"
-        while not state.shutdown_event.is_set():
-            msg = await state.sse_queue.get()
-            evt_type = msg.get("type", "change")
-            yield f"event: {evt_type}\ndata: {json.dumps(msg)}\n\n"
+      yield f"event: hello\ndata: {{\"version\": {state.version}}}\n\n"
+      while not state.shutdown_event.is_set():
+          msg = await state.sse_queue.get()
+          evt_type = msg.get("type", "change")
+          yield f"event: {evt_type}\ndata: {json.dumps(msg)}\n\n"
     return StreamingResponse(event_stream(), media_type="text/event-stream")
