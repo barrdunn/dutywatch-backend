@@ -203,7 +203,7 @@ def write_cache_meta(meta: Dict[str, Any]) -> None:
     overwrite_events_cache(ROLLING_SCOPE, meta)
 
 
-# ---------------- Parsing helpers ----------------
+# ---------------- Parsing helpers (regex-only) ----------------
 REPORT_RE = re.compile(r"\bReport:\s*(\d{3,4})L?\b", re.IGNORECASE)
 LEG_RE = re.compile(r"\b(\d{3,4})\s+([A-Z]{3})-([A-Z]{3})\s+(\d{3,4})-(\d{3,4})\b")
 HOTEL_RE = re.compile(
@@ -278,17 +278,8 @@ def parse_with_regex(text: str) -> Dict[str, Any]:
     return out
 
 def parse_pairing_days(description: Optional[str]) -> Dict[str, Any]:
-    text = description or ""
-    try:
-        from llm_parser import parse_pairing_days as parse_pairing_days_llm  # optional
-    except Exception:
-        parse_pairing_days_llm = None
-    if parse_pairing_days_llm:
-        try:
-            return parse_pairing_days_llm(text)
-        except Exception:
-            pass
-    return parse_with_regex(text)
+    """LLM removed: always regex."""
+    return parse_with_regex(description or "")
 
 
 # ---------------- Pairing rows + OFF rows ----------------
