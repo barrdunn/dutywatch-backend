@@ -80,11 +80,31 @@ tr.summary::before {
 tr.summary:hover::before { background: var(--pairing-bg-hover); }
 tr.summary td { position:relative; z-index:1; background:transparent!important; border:0!important; }
 
-/* OFF rows: NO background/outline (just orange text) */
-tr.off { position:relative; }
-tr.off::before { content:none; }
-tr.off td { position:relative; z-index:1; background:transparent!important; border:0!important; }
-.off-label, .off-dur { font-weight:800; color:var(--off); }
+/* OFF rows: dark capsule, rounded; orange text only */
+tr.off {
+  position: relative;
+}
+tr.off::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--row);          /* darker blue background */
+  border: 1px solid var(--border); /* subtle outline */
+  border-radius: 12px;             /* rounded corners */
+  pointer-events: none;
+  z-index: 0;
+}
+tr.off td {
+  position: relative;
+  z-index: 1;                      /* keep cell content above capsule */
+  background: transparent !important;
+  border: 0 !important;
+}
+.off-label,
+.off-dur {
+  font-weight: 800;
+  color: var(--off);               /* orange text */
+}
 
 /* Expanded details row: full-width dark capsule */
 tr.details { position:relative; display:none; }
