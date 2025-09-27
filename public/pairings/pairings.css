@@ -24,8 +24,12 @@
   --ck-bg: #0b1219;
 }
 
-body { margin: 0; background: var(--bg); color: var(--text);
-  font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial, "Noto Sans", sans-serif; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+}
 .wrap { max-width: 1100px; margin: 28px auto; padding: 0 16px; }
 .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 16px; box-shadow: 0 6px 18px rgba(0,0,0,0.25); }
 h1 { margin: 0 0 8px; font-size: 22px; }
@@ -43,19 +47,39 @@ table { width: 100%; border-collapse: separate; border-spacing: 0 10px; }
 th, td { padding: 10px 12px; }
 th { color: var(--muted); font-weight: 600; text-align: left; border-bottom: 1px solid var(--border); }
 
-tr.summary { background: var(--pairing-bg); border: 1px solid var(--pairing-border); cursor: pointer; }
-tr.summary:hover { background: var(--pairing-bg-hover); }
-tr.summary td { border-top: 0; border-bottom: 0; }
-tr.summary td:first-child { border-radius: 12px 0 0 12px; }
-tr.summary td:last-child  { border-radius: 0 12px 12px 0; }
+/* Make the green summary capsule span ALL columns via cell backgrounds */
+tr.summary { cursor: pointer; }
+tr.summary td {
+  background: var(--pairing-bg);
+  border-top: 1px solid var(--pairing-border);
+  border-bottom: 1px solid var(--pairing-border);
+}
+tr.summary:hover td { background: var(--pairing-bg-hover); }
+tr.summary td:first-child {
+  border-left: 1px solid var(--pairing-border);
+  border-radius: 12px 0 0 12px;
+}
+tr.summary td:last-child  {
+  border-right: 1px solid var(--pairing-border);
+  border-radius: 0 12px 12px 0;
+}
 
 tr.details { background: var(--row-alt); border: 1px dashed var(--border); }
 tr.off { background: var(--row); border: 1px solid var(--border); }
 .off-label { font-weight: 800; color: var(--off); }
 .off-dur { font-weight: 800; color: var(--off); }
 
-.pill { font-size: 12px; font-weight: 700; color: #021216; background: var(--green);
-  display: inline-block; padding: 3px 8px; border-radius: 999px; margin-left: 8px; }
+.pill {
+  font-size: 12px;
+  font-weight: 700;
+  color: #021216;
+  background: var(--green);
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 999px;      /* <-- pill shape */
+  margin-left: 8px;
+  white-space: nowrap;       /* keep "2 day" on one line */
+}
 .pill-red { background: var(--red); color: #130606; margin-left: 8px; }
 
 .muted { color: var(--muted); }
@@ -68,9 +92,9 @@ tr.off { background: var(--row); border: 1px solid var(--border); }
   border: 0;
   border-radius: 10px;
   padding: 8px 10px;
-  margin-left: 24px;       /* indent under pairing */
+  margin-left: 24px;         /* indent under pairing */
   display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
-  font-weight: 600;        /* lighter than pairing title */
+  font-weight: 600;          /* lighter than pairing title */
 }
 .dayhdr .daytitle { font-weight: 600; }
 .dayhdr .helper { margin-left: auto; font-weight: 500; color: var(--muted); }
@@ -102,6 +126,7 @@ tr.summary.open + tr.details { display: table-row; }
 .plan-meta { margin-bottom: 8px; }
 
 /* check icon cell */
+th:first-child, td.ck { width: 36px; }
 .ck { display:flex; align-items:center; justify-content:center; }
 .ck .dot { width:10px; height:10px; margin:0; border-radius:999px; }
 .ck.off .dot { background: var(--ck-off); }

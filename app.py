@@ -23,9 +23,6 @@ from cache_meta import read_cache_meta, write_cache_meta, normalize_cached_event
 from rows import build_pairing_rows, end_of_next_month_local
 from db import get_db, init_db
 
-# NEW: central config (reads .env + settings.json with env override)
-import config as cfg
-
 # ---------------- Paths / Static ----------------
 BASE_DIR = Path(__file__).parent.resolve()
 PAIRINGS_DIR = BASE_DIR / "public" / "pairings"
@@ -65,11 +62,15 @@ async def timing_and_errors(request, call_next):
         logger.info("%s %s -> %dms", request.method, request.url.path, dur_ms)
 
 # ---------------- Config / Time ----------------
-LOCAL_TZ = ZoneInfo(cfg.TIMEZONE)                 # was os.getenv("LOCAL_TZ", ...)
-VIEW_WINDOW_MODE = cfg.VIEW_WINDOW_MODE           # was os.getenv("VIEW_WINDOW_MODE", ...)
+LOCAL_TZ = ZoneInfo(os.getenv("LOCAL_TZ", "America/Chicago"))
+
+# SINGLE SOURCE OF TRUTH for the viewing window
+# Supported:
+#   - TODAY_TO_END_OF_NEXT_MONTH  (default)
+VIEW_WINDOW_MODE = os.getenv("VIEW_WINDOW_MODE", "TODAY_TO_END_OF_NEXT_MONTH").upper().strip()
 
 class State:
-    refresh_seconds: int = cfg.REFRESH_SECONDS    # was os.getenv("REFRESH_SECONDS", "1800")
+    refresh_seconds: int = int(os.getenv("REFRESH_SECONDS", "1800"))  # default 30 min
     poll_task: Optional[asyncio.Task] = None
     version: int = 0
     sse_queue: "asyncio.Queue[dict]" = asyncio.Queue()
@@ -131,9 +132,21 @@ def human_ago(from_dt: Optional[dt.datetime]) -> str:
         return f"{mins} min{'s' if mins != 1 else ''} ago"
     hours = mins // 60
     if hours < 24:
-        return f"{hours} hour{'s' if mins != 1 else ''} ago"
+        return f"{hours} hour{'s' if hours != 1 else ''} ago"
     days = hours // 24
     return f"{days} day{'s' if days != 1 else ''} ago"
+
+# --- time formatting helper (added) ---
+def _fmt_time(hhmm: str, use_24h: bool) -> str:
+    if not hhmm:
+        return ""
+    s = str(hhmm).zfill(4)
+    h = int(s[:2]); m = int(s[2:])
+    if use_24h:
+        return f"{h:02d}:{m:02d}"
+    ampm = "AM" if h < 12 else "PM"
+    hh = h % 12 or 12
+    return f"{hh}:{m:02d} {ampm}"
 
 # ---------------- Calendar fetch ----------------
 def fetch_current_to_next_eom() -> List[Dict[str, Any]]:
@@ -299,11 +312,6 @@ def window_bounds_utc() -> Tuple[dt.datetime, dt.datetime, dt.datetime, dt.datet
 def health():
     return {"ok": True}
 
-# Optional: peek the effective config to confirm server is using settings.json
-@app.get("/api/config")
-def api_config():
-    return cfg.effective_settings()
-
 @app.get("/api/pairings")
 async def api_pairings(
     # legacy params kept; ignored for windowed view
@@ -329,6 +337,29 @@ async def api_pairings(
 
         window_events = [e for e in events if start_utc <= safe_start(e) < end_utc]
         rows = await run_in_threadpool(build_pairing_rows, window_events, bool(is_24h), bool(only_reports))
+
+        # --- normalize display strings to requested clock mode (added) ---
+        use_24h = bool(is_24h)
+        for r in rows:
+            if r.get("kind") != "pairing":
+                continue
+            disp = r.setdefault("display", {})
+            # pairing-level report/release display (if raw HHMM present)
+            rep = disp.get("report_hhmm") or r.get("report_hhmm") or r.get("report")
+            rel = disp.get("release_hhmm") or r.get("release_hhmm") or r.get("release")
+            if isinstance(rep, str) and rep.isdigit():
+                disp["report_str"] = _fmt_time(rep, use_24h)
+            if isinstance(rel, str) and rel.isdigit():
+                disp["release_str"] = _fmt_time(rel, use_24h)
+            # legs per day
+            for d in (r.get("days") or []):
+                for leg in (d.get("legs") or []):
+                    dep_raw = leg.get("dep_time") or leg.get("dep_hhmm")
+                    arr_raw = leg.get("arr_time") or leg.get("arr_hhmm")
+                    if dep_raw and not leg.get("dep_time_str"):
+                        leg["dep_time_str"] = _fmt_time(dep_raw, use_24h)
+                    if arr_raw and not leg.get("arr_time_str"):
+                        leg["arr_time_str"] = _fmt_time(arr_raw, use_24h)
 
         # ack enrichment
         enriched: List[Dict[str, Any]] = []
@@ -386,6 +417,7 @@ async def api_pairings(
             "version": state.version,
             "refresh_minutes": int(meta.get("refresh_minutes", max(1, state.refresh_seconds // 60))),
             "ack_policy": ACK_POLICY,
+            "is_24h": use_24h,  # debug/visibility
         }
     except Exception as e:
         tb = traceback.format_exc(limit=12)
