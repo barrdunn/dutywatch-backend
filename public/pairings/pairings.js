@@ -3,6 +3,11 @@
   const apiBase = cfg.apiBase || '';
   const HOME_BASE = (cfg.baseAirport || 'DFW').toUpperCase();
 
+  // iOS detection for minor CSS tweaks (kept as-is from your paste)
+  const IS_IOS = /iP(ad|hone|od)/.test(navigator.platform)
+    || (navigator.userAgent.includes('Mac') && 'ontouchend' in document);
+  document.documentElement.classList.toggle('ios', IS_IOS);
+
   const state = {
     lastPullIso: null,
     nextRefreshIso: null,
@@ -38,7 +43,7 @@
     clockSel.value = String(state.clockMode);
     clockSel.addEventListener('change', async () => {
       state.clockMode = parseInt(clockSel.value, 10) === 12 ? 12 : 24;
-      await renderOnce();  // re-render with new time format
+      await renderOnce();
     });
   }
 
@@ -95,13 +100,11 @@
       const reportIso = ckBtn.getAttribute('data-report') || '';
 
       if (stateAttr === 'off') {
-        // Show plan modal when window is not open
         await openPlan(pairingId, reportIso);
         return;
       }
 
       if (stateAttr === 'pending') {
-        // Acknowledge immediately
         try {
           await fetch(`${apiBase}/api/ack/acknowledge`, {
             method: 'POST',
@@ -115,8 +118,7 @@
         return;
       }
 
-      // 'ok' -> do nothing
-      return;
+      return; // 'ok'
     }
 
     // Plan modal close buttons
@@ -175,7 +177,6 @@
     tbody.innerHTML = (data.rows || []).map(row => renderRowHTML(row, HOME_BASE)).join('');
   }
 
-  // Helpers for start airport / out-of-base pill
   function firstDepartureAirport(row) {
     const days = row?.days || [];
     for (const d of days) {
@@ -188,14 +189,15 @@
   }
 
   function renderRowHTML(row, homeBase) {
+    /* OFF row: put duration in Release column (kept from your paste) */
     if (row.kind === 'off') {
       return `
         <tr class="off">
-          <td></td>
-          <td><span class="off-label">OFF</span></td>
+          <td class="ck"></td>
+          <td class="sum-first"><span class="off-label">OFF</span></td>
           <td class="muted"></td>
+          <td class="off-dur">${esc(row.display?.off_dur || '')}</td>
           <td class="muted"></td>
-          <td><span class="off-dur">${esc(row.display?.off_dur || '')}</span></td>
         </tr>`;
     }
 
@@ -231,12 +233,12 @@
 
   function renderCheckCell(row) {
     const ack = row.ack || {};
-    const acknowledged = !!ack.acknowledged;
+    theAcknowledged = !!ack.acknowledged;
     const windowOpen = !!ack.window_open;
-    const stateAttr = acknowledged ? 'ok' : (windowOpen ? 'pending' : 'off');
+    const stateAttr = theAcknowledged ? 'ok' : (windowOpen ? 'pending' : 'off');
 
-    const ariaChecked = acknowledged ? 'true' : 'false';
-    const ariaDisabled = acknowledged ? 'true' : 'false';
+    const ariaChecked = theAcknowledged ? 'true' : 'false';
+    const ariaDisabled = theAcknowledged ? 'true' : 'false';
 
     return `
       <td class="ck ${stateAttr}">
@@ -285,56 +287,52 @@
   }
 
   /* ---------------------------
-     ONLY the plan modal below
+     Plan modal ONLY — show date inside first cell on first/changed date
      --------------------------- */
+
+  function fmtMD(d) {
+    return `${d.getMonth() + 1}/${d.getDate()}`; // M/D
+  }
+  function fmtTime12(d) {
+    let h = d.getHours();
+    const m = String(d.getMinutes()).padStart(2, '0');
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    h = h % 12 || 12;
+    return `${h}:${m} ${ampm}`; // no seconds
+  }
 
   async function openPlan(pairingId, reportIso) {
     try {
       const res = await fetch(`${apiBase}/api/ack/plan?pairing_id=${encodeURIComponent(pairingId)}&report_local_iso=${encodeURIComponent(reportIso)}`);
       const data = await res.json();
 
-      // Group attempts by local date (M/D). Show date once, then times.
-      const byDate = new Map();
-      (data.attempts || [])
-        .slice()
-        .sort((a, b) => new Date(a.at_iso) - new Date(b.at_iso))
-        .forEach(a => {
-          const d = new Date(a.at_iso);
-          const key = `${d.getMonth() + 1}/${d.getDate()}`; // "9/30"
-          if (!byDate.has(key)) byDate.set(key, []);
-          byDate.get(key).push(a);
-        });
+      // Sort attempts by time
+      const attempts = (data.attempts || []).slice()
+        .sort((a, b) => new Date(a.at_iso) - new Date(b.at_iso));
 
-      const rows = [];
-      for (const [dateKey, attempts] of byDate.entries()) {
-        // date header row
-        rows.push(
-          `<tr class="plan-datehdr"><td colspan="3"><span class="plan-date">${esc(dateKey)}</span></td></tr>`
-        );
+      let prevKey = null;
+      const rows = attempts.map(a => {
+        const d = new Date(a.at_iso);
+        const key = fmtMD(d);
+        const showDate = (prevKey !== key);
+        prevKey = key;
 
-        for (const a of attempts) {
-          const d = new Date(a.at_iso);
-          const hh = d.getHours();
-          const h12 = (hh % 12) || 12;
-          const mm = String(d.getMinutes()).padStart(2, '0');
-          const ampm = hh >= 12 ? 'PM' : 'AM';
-          const time = `${h12}:${mm} ${ampm}`; // no seconds
+        const whenHTML = showDate
+          ? `<span class="when-date">${esc(key)}</span><span class="when-sep">·</span><span class="when-time">${esc(fmtTime12(d))}</span>`
+          : `<span class="when-time">${esc(fmtTime12(d))}</span>`;
 
-          const type = (a.kind || '').toString().toUpperCase();
-          const det  = a.label || '';
+        const type = (a.kind || '').toString().toUpperCase();
+        const det  = a.label || '';
 
-          rows.push(
-            `<tr class="plan-row">
-               <td class="when-time">${esc(time)}</td>
-               <td class="when-type">${esc(type)}</td>
-               <td class="when-det">${esc(det)}</td>
-             </tr>`
-          );
-        }
-      }
+        return `<tr>
+                  <td><span class="plan-when">${whenHTML}</span></td>
+                  <td>${esc(type)}</td>
+                  <td>${esc(det)}</td>
+                </tr>`;
+      });
 
       qs('#plan-rows').innerHTML =
-        rows.join('') || `<tr><td colspan="3" class="muted">No upcoming attempts.</td></tr>`;
+        (rows.join('')) || `<tr><td colspan="3" class="muted">No upcoming attempts.</td></tr>`;
 
       qs('#plan-meta').textContent =
         `Policy: push at T-${data.policy.window_open_hours}h and T-${data.policy.second_push_at_hours}h; ` +
@@ -383,7 +381,7 @@
   function setText(sel, v) { const el = qs(sel); if (el) el.textContent = v; }
   function esc(s) {
     return String(s).replace(/[&<>"'`=\/]/g, (ch) =>
-      ({'&':'&amp;','<':'&#x3E;','"':'&quot;',"'":'&#39;','/':'&#x2F;','`':'&#x60;','=':'&#x3D'}[ch])
+      ({'&':'&amp;','<':'&#x3E;','"':'&quot;',"'":'&#39;','/':'&#x2F;','`':'&#x60;','=':'&#x3D;'}[ch])
     );
   }
   function preciseAgo(d){

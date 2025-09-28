@@ -67,71 +67,131 @@ th { color:var(--muted); font-weight:600; text-align:left; border-bottom:1px sol
 tr.summary, tr.summary td { cursor: pointer; }
 .dayhdr { cursor: pointer; }
 
-/* first column (checkbox) width */
-th:first-child, td.ck { width: 36px; }
+/* ===== First column (checkbox) — perfectly centered H + V ===== */
+th:first-child {
+  width: 54px; min-width: 54px;
+  text-align: center; padding-left: 0; padding-right: 0;
+}
+td.ck {
+  width: 54px; min-width: 54px;
+  padding: 0 !important;
+  vertical-align: middle;  /* vertical centering via table-cell */
+  text-align: center;
+}
+td.ck .ck-wrapper {
+  display: flex;           /* wrapper fills the cell and centers content */
+  align-items: center;     /* vertical center */
+  justify-content: center; /* horizontal center */
+  width: 100%;
+  height: 100%;
+}
 
-/* =========================
-   Full-width capsule rows
-   ========================= */
+/* bigger checkbox */
+.ckbox {
+  width: 24px; height: 24px;
+  border-radius: 6px;
+  background: transparent;
+  border: 2px solid var(--ck-off);
+  display: inline-flex; align-items: center; justify-content: center;
+  position: relative; transition: transform .06s ease;
+}
+.ck.off  .ckbox { border-color: var(--ck-off); }
+.ck.pending .ckbox { border-color: var(--ck-pending); }
+.ck.ok .ckbox { border-color: var(--ck-ok); background: var(--ck-ok); }
+.ck.ok .ckbox::after{
+  content: "✓"; font-weight: 900; font-size: 14px; line-height: 1; color: #0b1510; transform: translateY(-1px);
+}
+.ckbtn{
+  appearance: none; background: transparent; border: 0;
+  padding: 0; margin: 0; cursor: pointer; line-height: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.ckbtn[aria-disabled="true"]{ cursor: default; opacity: .9; }
 
-/* Pairing summary rows: green capsule across all columns */
-tr.summary { position: relative; }
-tr.summary::before {
-  content:"";
-  position:absolute;
-  inset:0;
+@media (max-width: 640px) {
+  th:first-child, td.ck { width: 48px; min-width: 48px; }
+  .ckbox { width: 22px; height: 22px; }
+}
+
+/* ===== Capsules that start AFTER the checkbox column (per-cell, iOS-safe) ===== */
+/* SUMMARY (pairing) capsule */
+tr.summary td:not(.ck){
   background: var(--pairing-bg);
-  border: 1px solid var(--pairing-border);
-  border-radius: 12px;
-  pointer-events:none;
-  z-index:0;
+  border-top: 1px solid var(--pairing-border);
+  border-bottom: 1px solid var(--pairing-border);
 }
-tr.summary:hover::before { background: var(--pairing-bg-hover); }
-tr.summary td { position:relative; z-index:1; background:transparent!important; border:0!important; }
+tr.summary:hover td:not(.ck){ background: var(--pairing-bg-hover); }
 
-/* OFF rows: dark capsule, rounded; orange text only */
-tr.off { position: relative; }
-tr.off::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: var(--row);
-  border-radius: 12px;
-  pointer-events: none;
-  z-index: 0;
+/* round edges on first/last data cells */
+tr.summary td.sum-first{
+  border-left: 1px solid var(--pairing-border);
+  border-top-left-radius: 12px; border-bottom-left-radius: 12px;
 }
-tr.off td {
-  position: relative; z-index: 1;
-  background: transparent !important; border: 0 !important;
+tr.summary td:last-child{
+  border-right: 1px solid var(--pairing-border);
+  border-top-right-radius: 12px; border-bottom-right-radius: 12px;
+}
+
+/* OFF rows capsule aligned the same way */
+tr.off td:not(.ck){
+  background: var(--row);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+tr.off td.sum-first{
+  border-left: 1px solid var(--border);
+  border-top-left-radius: 12px; border-bottom-left-radius: 12px;
+}
+tr.off td:last-child{
+  border-right: 1px solid var(--border);
+  border-top-right-radius: 12px; border-bottom-right-radius: 12px;
 }
 .off-label, .off-dur { font-weight: 800; color: var(--off); }
 
-/* Expanded details row: full-width dark capsule */
-tr.details { position:relative; display:none; }
+/* ===== DETAILS row capsule matches alignment (starts after checkbox) ===== */
+tr.details { display:none; }
 tr.summary.open + tr.details { display: table-row; }
-tr.details::before{
-  content:"";
-  position:absolute;
-  inset:0;
+tr.details > td {
+  position: relative;
+  background: transparent; /* capsule is painted by ::before */
+  border: 0;
+  padding: 0;              /* we'll pad the inner .daysbox instead */
+}
+tr.details > td::before {
+  content: "";
+  position: absolute;
+  left: 54px;             /* match checkbox column width (desktop) */
+  right: 0;
+  top: 0;
+  bottom: 0;
   background: var(--row-alt);
   border: 1px solid var(--border);
-  border-radius:12px;
-  z-index:0;
-  pointer-events:none;
+  border-radius: 12px;
+  z-index: 0;
 }
-tr.details > td { position:relative; z-index:1; }
+@media (max-width: 640px) {
+  tr.details > td::before { left: 48px; } /* match mobile checkbox width */
+}
 
 /* content inside details */
-.daysbox { padding: 12px 16px 14px; border-radius: 10px; }
+.daysbox {
+  position: relative;
+  z-index: 1;             /* above the ::before capsule */
+  padding: 12px 16px 14px;
+  border-radius: 10px;    /* inner rounding only (visual) */
+  margin-left: 54px;      /* keep the content aligned with capsule left */
+}
+@media (max-width: 640px) {
+  .daysbox { margin-left: 48px; }
+}
 
-/* Day header spans full width */
+/* Day header */
 .day { margin: 8px 0 14px; }
 .dayhdr{
   background: rgba(73,179,124,.14);
   border:0;
   border-radius:10px;
   padding:8px 10px;
-  margin-left: 0;
   display:flex; gap:10px; align-items:center; flex-wrap:wrap;
   font-weight:600;
 }
@@ -140,10 +200,10 @@ tr.details > td { position:relative; z-index:1; }
 
 .dot{ width:6px; height:6px; border-radius:999px; background:#7ee2a1; display:inline-block; margin-right:4px; }
 
-/* Legs table flush under day header */
+/* Legs table */
 .legs-wrap{ margin:6px 0 0 0; }
-.legs{ width:100%; border-collapse:collapse; }
-.legs th, .legs td{ padding:6px 8px; border-bottom:1px solid var(--border); }
+.legs{ width:100%; border-collapse:collapse; table-layout:auto; }
+.legs th, .legs td{ padding:6px 8px; border-bottom:1px solid var(--border); vertical-align: middle; }
 .legs th{ color:var(--muted); font-size:12px; }
 .leg-done td{ text-decoration:line-through; color:var(--strike); }
 
@@ -159,83 +219,26 @@ tr.details > td { position:relative; z-index:1; }
 .progress{ font-weight:800; margin-left:8px; color:var(--green); }
 
 /* =========================
-   Check-in checkbox (left column)
-   ========================= */
-.ck{ display:flex; align-items:center; justify-content:center; }
-
-.ckbox{
-  width: 18px;
-  height: 18px;
-  border-radius: 4px;
-  background: transparent;
-  border: 2px solid var(--ck-off);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-  transition: transform .06s ease;
-}
-
-.ck.off  .ckbox { border-color: var(--ck-off); }
-.ck.pending .ckbox { border-color: var(--ck-pending); }
-.ck.ok .ckbox {
-  border-color: var(--ck-ok);
-  background: var(--ck-ok);
-}
-
-/* checkmark (shown when acknowledged) */
-.ck.ok .ckbox::after{
-  content: "✓";
-  font-weight: 900;
-  font-size: 12px;
-  line-height: 1;
-  color: #0b1510;
-  transform: translateY(-1px);
-}
-
-.ckbtn{
-  appearance: none;
-  background: transparent;
-  border: 0;
-  padding: 0;
-  margin: 0;
-  cursor: pointer;
-  line-height: 0;
-  display: inline-flex;
-}
-
-.ckbtn[aria-disabled="true"]{
-  cursor: default;
-  opacity: .9;
-}
-
-/* =========================
-   Modal (overlay plan)
+   Modal
    ========================= */
 body.modal-open { overflow: hidden; }
 
 .modal{
-  position:fixed;
-  inset:0;
-  z-index:10000;                /* ensure above table + pseudo elements */
+  position:fixed; inset:0; z-index:10000;
   background:rgba(0,0,0,.55);
-  display:flex;
-  align-items:center;
-  justify-content:center;
+  display:flex; align-items:center; justify-content:center;
   padding:16px;
 }
-
 .modal-card{
   background:var(--card);
   border:1px solid var(--border);
   border-radius:12px;
   width:calc(100% - 32px);
   max-width:720px;
-  max-height:85vh;             /* scroll inside card if long */
+  max-height:85vh;
   overflow:auto;
   box-shadow:0 20px 60px rgba(0,0,0,.6);
 }
-
 .modal-header,.modal-footer{
   padding:12px 14px;
   border-bottom:1px solid var(--border);
@@ -267,25 +270,68 @@ body.modal-open { overflow: hidden; }
 .ios table { table-layout: fixed; }
 .ios th, .ios td { word-break: break-word; overflow-wrap:anywhere; }
 
-/* ===== Plan modal-only tweaks (no impact on main view) ===== */
+/* === Consistent capsule width (details vs pairing/off) === */
+:root {
+  --ckcol-desktop: 54px;
+  --ckcol-mobile: 48px;
+  --ckcol: var(--ckcol-desktop);
+}
+@media (max-width: 640px) { :root { --ckcol: var(--ckcol-mobile); } }
 
-/* Left align the "When" column */
+tr.details > td::before {
+  left: var(--ckcol) !important;
+  right: 0;
+}
+.daysbox {
+  margin-left: var(--ckcol) !important;
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+/* === iPhone: stop "Flight" column from getting squeezed/truncated === */
+.ios .legs { table-layout: auto !important; }
+.ios .legs th:first-child,
+.ios .legs td:first-child {
+  min-width: 5.75em;
+  white-space: nowrap;
+  word-break: normal;
+}
+.ios .legs th:nth-child(2),
+.ios .legs td:nth-child(2) {
+  min-width: 6.5em;
+  word-break: keep-all;
+}
+.ios .legs td:nth-child(3) {
+  overflow-wrap: anywhere;
+}
+
+/* === Plan modal: column sizing (left-align + wrap in first col) === */
+.plan-table { width: 100%; table-layout: auto; }
 .plan-table th:first-child,
 .plan-table td:first-child {
-  text-align: left;
+  min-width: 10rem;
+  text-align: left;           /* left align "When" */
+  white-space: normal;        /* allow wrapping */
+  word-break: keep-all;
 }
-
-/* Date group header row (shows "M/D" once per group) */
-.plan-datehdr td {
-  background: var(--row-alt);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 6px 10px;
-  font-weight: 700;
-}
-
-/* Keep the "When" column from collapsing */
-.plan-row td.when-time {
-  min-width: 6.5rem;   /* enough for "12:00 PM" */
+.plan-table th:nth-child(2),
+.plan-table td:nth-child(2) {
+  min-width: 6.5rem;
   white-space: nowrap;
 }
+.plan-table th:nth-child(3),
+.plan-table td:nth-child(3) {
+  width: auto;
+}
+
+/* Inline layout inside the "When" cell:
+   shows "M/D · h:mm AM/PM" on first/changed date, otherwise just time.
+   Will wrap/stack if the cell gets tight. */
+.plan-when {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 6px;
+}
+.plan-when .when-date { font-weight: 700; }
+.plan-when .when-sep { opacity: .75; }
