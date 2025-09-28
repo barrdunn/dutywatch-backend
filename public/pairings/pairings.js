@@ -271,7 +271,7 @@
       </div>`;
   }
 
-  /* ===== Plan modal: When = DATE first, then time (date only when it changes) ===== */
+  /* ===== Plan modal: When = TIME first, then date (date shows only when it changes) ===== */
   async function openPlan(pairingId, reportIso) {
     try {
       const res = await fetch(`${apiBase}/api/ack/plan?pairing_id=${encodeURIComponent(pairingId)}&report_local_iso=${encodeURIComponent(reportIso)}`);
@@ -288,9 +288,9 @@
         const showDate = date !== lastDateKey;
         if (showDate) lastDateKey = date;
 
-        // DATE first; on same-date rows, hide date and show only time
+        // TIME first; on same-date rows, show only time
         const whenHTML = showDate
-          ? `<span class="plan-when"><span class="plan-date">${esc(date)}</span><span class="plan-time"> ${esc(t)}</span></span>`
+          ? `<span class="plan-when"><span class="plan-time">${esc(t)}</span><span class="plan-date"> ${esc(date)}</span></span>`
           : `<span class="plan-when"><span class="plan-time">${esc(t)}</span></span>`;
 
         const type = (a.kind || '').toUpperCase();
