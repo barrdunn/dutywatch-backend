@@ -3,7 +3,7 @@
   const apiBase = cfg.apiBase || '';
   const HOME_BASE = (cfg.baseAirport || 'DFW').toUpperCase();
 
-  // iOS hint (kept from before)
+  // iOS class (kept)
   const IS_IOS = /iP(ad|hone|od)/.test(navigator.platform)
     || (navigator.userAgent.includes('Mac') && 'ontouchend' in document);
   document.documentElement.classList.toggle('ios', IS_IOS);
@@ -11,18 +11,15 @@
   const state = {
     lastPullIso: null,
     nextRefreshIso: null,
-    clockMode: 12,                    // default to 12h
+    clockMode: cfg.clockMode === '24' ? 24 : 12, // default 12h
     onlyReports: cfg.onlyReports !== false,
-    _zeroKick: 0,
-    rows: [],                         // raw from server
-    rowsNorm: [],                     // normalized (times parsed once)
+    rows: [],       // server data
+    rowsNorm: [],   // server data + parsed minute fields
+    rendered: false
   };
 
-  // If boot config requests 24, honor it
-  if (cfg.clockMode === '24') state.clockMode = 24;
-
-  // ===== Time parsing/formatting (client-only) =====
-  // minutes 0..1439 -> string
+  // ============== Time helpers ==============
+  // minutes -> "HH:MM"/"h:MM AM"
   function fmtMin(min, is24) {
     if (min == null || isNaN(min)) return '';
     let h = Math.floor(min / 60), m = min % 60;
@@ -32,97 +29,88 @@
     return `${hh}:${String(m).padStart(2, '0')} ${ampm}`;
   }
 
-  // Accept: "1730", "730", "17:30", "7:30 PM", "07:30PM", optional tz tail (ignored)
+  // parse many common formats to minutes since midnight (local)
   function parseToMin(any) {
     if (any == null) return null;
     let s = String(any).trim();
     if (!s) return null;
 
-    // Strip trailing timezone labels, keep AM/PM
-    // e.g. "7:30 PM CT" -> "7:30 PM"
-    s = s.replace(/\s([A-Z]{1,4})$/, (m, tz) => (/AM|PM/i.test(tz) ? ` ${tz}` : ''));
+    // strip lone timezone tokens at end (CT, CST, Z), keep AM/PM
+    s = s.replace(/\s([A-Z]{1,4})$/i, (m, tz) => (/AM|PM/i.test(tz) ? ` ${tz}` : ''));
 
-    // "HHMM" or "HMM"
+    // "HHMM"/"HMM"
     if (/^\d{3,4}$/.test(s)) {
       const mm = parseInt(s.slice(-2), 10);
       const hh = parseInt(s.slice(0, s.length - 2), 10);
       if (mm >= 0 && mm < 60 && hh >= 0 && hh < 24) return hh * 60 + mm;
     }
-
-    // "H:MM" or "HH:MM" with optional AM/PM
-    const m = s.match(/^(\d{1,2}):(\d{2})\s*([AP]M)?$/i);
+    // "H:MM" (opt AM/PM)
+    let m = s.match(/^(\d{1,2}):(\d{2})\s*([AP]M)?$/i);
     if (m) {
-      let hh = parseInt(m[1], 10);
-      const mm = parseInt(m[2], 10);
-      const ampm = (m[3] || '').toUpperCase();
+      let hh = parseInt(m[1], 10), mm = parseInt(m[2], 10);
       if (mm >= 0 && mm < 60 && hh >= 0 && hh <= 23) {
-        if (ampm) {
-          // 12h -> 24h
-          if (hh === 12) hh = 0;
-          if (ampm === 'PM') hh += 12;
-        }
+        const ap = (m[3] || '').toUpperCase();
+        if (ap) { if (hh === 12) hh = 0; if (ap === 'PM') hh += 12; }
         return hh * 60 + mm;
       }
     }
-
-    // "H:MMam" / "h:mmPM"
-    const m2 = s.match(/^(\d{1,2}):(\d{2})\s*([ap]m)$/i);
-    if (m2) {
-      let hh = parseInt(m2[1], 10);
-      const mm = parseInt(m2[2], 10);
-      const ampm = m2[3].toUpperCase();
+    // "h:MMam"/"h:MMpm"
+    m = s.match(/^(\d{1,2}):(\d{2})\s*([ap]m)$/i);
+    if (m) {
+      let hh = parseInt(m[1], 10), mm = parseInt(m[2], 10);
       if (hh === 12) hh = 0;
-      if (ampm === 'PM') hh += 12;
+      if (m[3].toUpperCase() === 'PM') hh += 12;
       return hh * 60 + mm;
     }
-
-    return null; // unparseable -> UI will show original string if we ever need it
+    return null;
   }
 
-  // Prefer raw HHMM-like fields; else parse any stringy display we got
-  function chooseTimeToMin(obj, bases) {
-    for (const b of bases) {
-      const v = obj?.[b];
-      if (v == null) continue;
+  // pick best source field(s) for a time
+  function chooseTimeToMin(obj, fields) {
+    for (const f of fields) {
+      const v = obj && obj[f];
+      if (v == null || v === '') continue;
       const min = parseToMin(v);
       if (min != null) return min;
     }
     return null;
   }
 
-  // Normalize all times in rows once (we mutate a copy so originals stay intact)
+  // Normalize all rows once so we have minute fields to format on demand
   function normalizeRows(rows) {
-    const out = [];
-    for (const r of (rows || [])) {
-      if (r.kind === 'off') { out.push(r); continue; }
+    return (rows || []).map(r => {
+      if (r.kind === 'off') return r;
 
       const disp = r.display || {};
-      const reportMin = chooseTimeToMin(disp, ['report_hhmm','report','report_str']) ??
-                        chooseTimeToMin(r,    ['report_hhmm','report','report_str']);
-      const releaseMin = chooseTimeToMin(disp, ['release_hhmm','release','release_str']) ??
-                         chooseTimeToMin(r,    ['release_hhmm','release','release_str']);
+      const repMin =
+        chooseTimeToMin(disp, ['report_hhmm','report','report_str']) ??
+        chooseTimeToMin(r,    ['report_hhmm','report','report_str']);
+      const relMin =
+        chooseTimeToMin(disp, ['release_hhmm','release','release_str']) ??
+        chooseTimeToMin(r,    ['release_hhmm','release','release_str']);
 
       const days = (r.days || []).map(d => {
+        const reportMin = chooseTimeToMin(d, ['report','report_time','report_str']);
+        const releaseMin = chooseTimeToMin(d, ['release','release_time','release_str']);
         const legs = (d.legs || []).map(leg => ({
           ...leg,
           _depMin: chooseTimeToMin(leg, ['dep_hhmm','dep_time','dep_time_str','dep']),
           _arrMin: chooseTimeToMin(leg, ['arr_hhmm','arr_time','arr_time_str','arr']),
         }));
-        return { ...d, legs };
+        return { ...d, _reportMin: reportMin, _releaseMin: releaseMin, legs };
       });
 
-      out.push({ ...r, _reportMin: reportMin, _releaseMin: releaseMin, days });
-    }
-    return out;
+      return { ...r, _reportMin: repMin, _releaseMin: relMin, days };
+    });
   }
 
-  // ===== Public action =====
+  // ============== Public actions ==============
   window.dwManualRefresh = async function () {
     try { await fetch(apiBase + '/api/refresh', { method: 'POST' }); }
     catch (e) { console.error(e); }
   };
 
-  // ===== Controls =====
+  // ============== Controls ==============
   const refreshSel = document.getElementById('refresh-mins');
   if (refreshSel) {
     if (cfg.refreshMinutes) refreshSel.value = String(cfg.refreshMinutes);
@@ -141,13 +129,13 @@
   const clockSel = document.getElementById('clock-mode');
   if (clockSel) {
     clockSel.value = String(state.clockMode);
-    clockSel.addEventListener('change', async () => {
+    clockSel.addEventListener('change', () => {
       state.clockMode = parseInt(clockSel.value, 10) === 24 ? 24 : 12;
-      repaintTablePreservingOpen();   // no fetch, no collapsing summaries
+      repaintTimesOnly();           // <<< no DOM rebuild, just rewrite time text
     });
   }
 
-  // ===== First paint & live updates =====
+  // ============== Initial load + SSE ==============
   renderOnce();
 
   try {
@@ -157,12 +145,10 @@
     es.addEventListener('schedule_update', async () => { await renderOnce(); });
   } catch {}
 
-  // ===== Status ticker =====
   setInterval(tickStatusLine, 1000);
 
-  // ===== Global clicks =====
+  // ============== Click handlers (unchanged UX) ==============
   document.addEventListener('click', async (e) => {
-    // Expand/collapse pairing rows (ignore clicks on checkbox)
     const sum = e.target.closest('tr.summary');
     if (sum && !e.target.closest('[data-ck]')) {
       sum.classList.toggle('open');
@@ -178,7 +164,6 @@
       return;
     }
 
-    // Day header toggles its legs
     const hdr = e.target.closest('.dayhdr');
     if (hdr) {
       const day = hdr.closest('.day');
@@ -191,7 +176,6 @@
       return;
     }
 
-    // Check-in checkbox behavior (unchanged)
     const ckBtn = e.target.closest('[data-ck]');
     if (ckBtn) {
       const stateAttr = ckBtn.getAttribute('data-ck');
@@ -218,7 +202,6 @@
       return;
     }
 
-    // Modal close
     if (e.target.id === 'plan-close-1' || e.target.id === 'plan-close-2' || e.target.classList.contains('modal')) {
       showModal(false);
       return;
@@ -229,10 +212,10 @@
     if (e.key === 'Escape') showModal(false);
   });
 
-  // ===== Fetch & normalize on server change =====
+  // ============== Fetch + render (one-time structure) ==============
   async function renderOnce() {
     const params = new URLSearchParams({
-      is_24h: 0, // backend can ignore; we control formatting on client
+      is_24h: 0, // we handle on client
       only_reports: String(state.onlyReports ? 1 : 0),
     });
 
@@ -249,105 +232,127 @@
     state.nextRefreshIso = data.next_pull_local_iso || null;
     if (refreshSel && data.refresh_minutes) refreshSel.value = String(data.refresh_minutes);
 
-    // Header text
     const label = (data.window && data.window.label) || data.looking_through || '—';
     setText('#looking-through', label);
     setText('#last-pull', data.last_pull_local ?? '—');
-
     const base = (data.next_pull_local && data.tz_label)
       ? `${data.next_pull_local} (${data.tz_label})`
       : '—';
     const nextEl = qs('#next-refresh');
     if (nextEl) nextEl.innerHTML = `${esc(base)} <span id="next-refresh-eta"></span>`;
 
-    // Cache + normalize
     state.rows = data.rows || [];
     state.rowsNorm = normalizeRows(state.rows);
 
-    repaintTablePreservingOpen();
+    // Build table structure only once per fetch
+    buildTable();
+    state.rendered = true;
+
+    // Then write times according to current clock mode
+    repaintTimesOnly();
   }
 
-  // ===== Render helpers =====
-  function repaintTablePreservingOpen() {
+  function buildTable() {
     const tbody = qs('#pairings-body');
-    // remember open summaries by pairing_id
-    const openKeys = Array.from(tbody.querySelectorAll('tr.summary.open'))
-      .map(tr => tr.dataset.key)
-      .filter(Boolean);
+    const parts = [];
 
-    tbody.innerHTML = (state.rowsNorm || []).map(row => renderRowHTML(row, HOME_BASE)).join('');
-
-    // restore open state
-    openKeys.forEach(key => {
-      const tr = tbody.querySelector(`tr.summary[data-key="${cssEsc(key)}"]`);
-      if (!tr) return;
-      tr.classList.add('open');
-      const details = tr.nextElementSibling;
-      if (details && details.classList.contains('details')) {
-        details.querySelectorAll('.day .legs').forEach(tbl => tbl.style.display = 'table');
-        details.querySelectorAll('.day .helper').forEach(h => h.textContent = 'click to hide legs');
+    for (const row of state.rowsNorm) {
+      if (row.kind === 'off') {
+        parts.push(`
+          <tr class="off">
+            <td class="ck"></td>
+            <td class="sum-first"><span class="off-label">OFF</span></td>
+            <td class="muted"></td>
+            <td class="off-dur">${esc(row.display?.off_dur || '')}</td>
+            <td class="muted"></td>
+          </tr>
+        `);
+        continue;
       }
-    });
-  }
 
-  function firstDepartureAirport(row) {
-    const days = row?.days || [];
-    for (const d of days) {
-      const legs = d?.legs || [];
-      if (legs.length && legs[0].dep) {
-        return String(legs[0].dep).toUpperCase();
-      }
+      const daysCount = row.days ? row.days.length : 0;
+      const inProg = row.in_progress ? `<span class="progress">(In progress)</span>` : '';
+
+      // out-of-base pill
+      const startDep = firstDepartureAirport(row);
+      const oobPill = (startDep && startDep !== HOME_BASE) ? `<span class="pill pill-red">${esc(startDep)}</span>` : '';
+
+      // summary: report/release spans with data-min for live toggle
+      const repSpan = timeSpanHTML(row._reportMin, row.display?.report_str || row.report || '');
+      const relSpan = timeSpanHTML(row._releaseMin, row.display?.release_str || row.release || '');
+
+      parts.push(`
+        <tr class="summary" data-key="${esc(row.pairing_id || '')}">
+          ${renderCheckCell(row)}
+          <td class="sum-first">
+            <strong>${esc(row.pairing_id || '')}</strong>
+            <span class="pill">${daysCount} day</span>
+            ${oobPill}
+            ${inProg}
+          </td>
+          <td>${repSpan}</td>
+          <td>${relSpan}</td>
+          <td class="muted">click to expand days</td>
+        </tr>
+        <tr class="details">
+          <td colspan="5">
+            <div class="daysbox">
+              ${renderDaysHTML(row.days || [])}
+            </div>
+          </td>
+        </tr>
+      `);
     }
-    return null;
+
+    tbody.innerHTML = parts.join('');
   }
 
-  function renderRowHTML(row, homeBase) {
-    if (row.kind === 'off') {
+  function renderDaysHTML(days) {
+    return days.map((day, i) => {
+      const rep = timeSpanHTML(day._reportMin, day.report || '');
+      const rel = timeSpanHTML(day._releaseMin, day.release || '');
+      const legs = (day.legs || []).map(leg => {
+        const dep = timeSpanHTML(leg._depMin,  leg.dep_time_str || leg.dep || '');
+        const arr = timeSpanHTML(leg._arrMin,  leg.arr_time_str || leg.arr || '');
+        const route = `${esc(leg.dep || '')}–${esc(leg.arr || '')}`;
+        return `
+          <tr class="leg-row ${leg.done ? 'leg-done' : ''}">
+            <td>${esc(leg.flight || '')}</td>
+            <td>${route}</td>
+            <td>${dep}&nbsp;→&nbsp;${arr}</td>
+          </tr>
+        `;
+      }).join('');
+
       return `
-        <tr class="off">
-          <td class="ck"></td>
-          <td class="sum-first"><span class="off-label">OFF</span></td>
-          <td class="muted"></td>
-          <td class="off-dur">${esc(row.display?.off_dur || '')}</td>
-          <td class="muted"></td>
-        </tr>`;
-    }
+        <div class="day">
+          <div class="dayhdr">
+            <span class="dot"></span>
+            <span class="daytitle">Day ${i + 1}</span>
+            ${day.report ? `· Report ${rep}` : ''}
+            ${day.release ? `· Release ${rel}` : ''}
+            ${day.hotel ? `· ${esc(day.hotel)}` : ''}
+            <span class="helper">click to show legs</span>
+          </div>
+          ${legs
+            ? `<div class="legs-wrap">
+                 <table class="legs" style="display:none">
+                   <thead><tr><th>Flight</th><th>Route</th><th>Block Times</th></tr></thead>
+                   <tbody>${legs}</tbody>
+                 </table>
+               </div>`
+            : `<div class="muted subnote">No legs parsed.</div>`
+          }
+        </div>
+      `;
+    }).join('');
+  }
 
-    const daysCount = row.days ? row.days.length : 0;
-    const inProg = row.in_progress ? `<span class="progress">(In progress)</span>` : '';
-
-    const startDep = firstDepartureAirport(row);
-    const showOOB = !!(startDep && startDep !== homeBase);
-    const oobPill = showOOB ? `<span class="pill pill-red">${esc(startDep)}</span>` : '';
-
-    // Always format from normalized minutes so toggle affects UI
-    const is24 = state.clockMode === 24;
-    const reportStr  = fmtMin(row._reportMin,  is24) || '';
-    const releaseStr = fmtMin(row._releaseMin, is24) || '';
-
-    const checkCell = renderCheckCell(row);
-    const details = (row.days || []).map((day, i) => renderDayHTML(day, i, is24)).join('');
-
-    const key = String(row.pairing_id || '');
-
-    return `
-      <tr class="summary" data-key="${esc(key)}">
-        ${checkCell}
-        <td class="sum-first">
-          <strong>${esc(row.pairing_id || '')}</strong>
-          <span class="pill">${daysCount} day</span>
-          ${oobPill}
-          ${inProg}
-        </td>
-        <td>${esc(reportStr)}</td>
-        <td>${esc(releaseStr)}</td>
-        <td class="muted">click to expand days</td>
-      </tr>
-      <tr class="details">
-        <td colspan="5">
-          <div class="daysbox">${details}</div>
-        </td>
-      </tr>`;
+  // a single <span> that can be reformatted in-place later
+  function timeSpanHTML(minOrNull, fallback) {
+    const hasMin = minOrNull != null && !isNaN(minOrNull);
+    const initText = hasMin ? fmtMin(minOrNull, state.clockMode === 24) : (fallback || '');
+    return `<span class="js-time" ${hasMin ? `data-min="${minOrNull}"` : ''}>${esc(initText)}</span>`;
   }
 
   function renderCheckCell(row) {
@@ -355,7 +360,6 @@
     const acknowledged = !!ack.acknowledged;
     const windowOpen = !!ack.window_open;
     const stateAttr = acknowledged ? 'ok' : (windowOpen ? 'pending' : 'off');
-
     const ariaChecked = acknowledged ? 'true' : 'false';
     const ariaDisabled = acknowledged ? 'true' : 'false';
 
@@ -377,50 +381,35 @@
       </td>`;
   }
 
-  function renderDayHTML(day, idx, is24) {
-    const legs = (day.legs || []).map(leg => {
-      const depStr = fmtMin(leg._depMin, is24) || esc(leg.dep_time_str || leg.dep || '');
-      const arrStr = fmtMin(leg._arrMin, is24) || esc(leg.arr_time_str || leg.arr || '');
-      const route = `${esc(leg.dep || '')}–${esc(leg.arr || '')}`;
-      const times = `${depStr}&nbsp;→&nbsp;${arrStr}`;
-      return `
-        <tr class="leg-row ${leg.done ? 'leg-done' : ''}">
-          <td>${esc(leg.flight || '')}</td>
-          <td>${route}</td>
-          <td>${times}</td>
-        </tr>`;
-    }).join('');
-
-    return `
-      <div class="day">
-        <div class="dayhdr">
-          <span class="dot"></span>
-          <span class="daytitle">Day ${idx + 1}</span>
-          ${day.report ? `· Report ${esc(day.report)}` : ''}
-          ${day.release ? `· Release ${esc(day.release)}` : ''}
-          ${day.hotel ? `· ${esc(day.hotel)}` : ''}
-          <span class="helper">click to show legs</span>
-        </div>
-        ${legs ? `
-          <div class="legs-wrap">
-            <table class="legs" style="display:none">
-              <thead><tr><th>Flight</th><th>Route</th><th>Block Times</th></tr></thead>
-              <tbody>${legs}</tbody>
-            </table>
-          </div>` : `<div class="muted subnote">No legs parsed.</div>`}
-      </div>`;
+  function firstDepartureAirport(row) {
+    const days = row?.days || [];
+    for (const d of days) {
+      const legs = d?.legs || [];
+      if (legs.length && legs[0].dep) return String(legs[0].dep).toUpperCase();
+    }
+    return null;
   }
 
-  // ===== Plan modal (still client-formatted from ISO) =====
+  // ============== Repaint only times (no layout change) ==============
+  function repaintTimesOnly() {
+    const is24 = state.clockMode === 24;
+    // Summary + details + legs (anything with .js-time and data-min)
+    document.querySelectorAll('.js-time').forEach(el => {
+      const v = el.getAttribute('data-min');
+      if (v == null || v === '') return; // no parsed minutes; leave fallback text
+      const min = parseInt(v, 10);
+      el.textContent = fmtMin(min, is24);
+    });
+
+    // Also refresh Plan modal times if open (they are rebuilt on open, so skip here)
+  }
+
+  // ============== Plan modal ==============
   function fmtModalTime(d, is24) {
-    if (is24) {
-      return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
-    }
-    const h = d.getHours();
-    const hh = (h % 12) || 12;
-    const mm = String(d.getMinutes()).padStart(2,'0');
-    const ampm = h < 12 ? 'AM' : 'PM';
-    return `${hh}:${mm} ${ampm}`;
+    if (is24) return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+    const h = d.getHours(), mm = String(d.getMinutes()).padStart(2,'0');
+    const ap = h < 12 ? 'AM' : 'PM';
+    return `${(h % 12) || 12}:${mm} ${ap}`;
   }
   const fmtDate = (d) => `${d.getMonth() + 1}/${d.getDate()}`;
 
@@ -428,28 +417,23 @@
     try {
       const res = await fetch(`${apiBase}/api/ack/plan?pairing_id=${encodeURIComponent(pairingId)}&report_local_iso=${encodeURIComponent(reportIso)}`);
       const data = await res.json();
-
       const use24 = state.clockMode === 24;
 
       let lastDateKey = null;
       const rows = (data.attempts || []).map(a => {
         const d = new Date(a.at_iso);
-        const timeStr = fmtModalTime(d, use24);
-        const dateStr = fmtDate(d);
-        const showDate = dateStr !== lastDateKey;
-        if (showDate) lastDateKey = dateStr;
+        const t = fmtModalTime(d, use24);
+        const date = fmtDate(d);
+        const showDate = date !== lastDateKey;
+        if (showDate) lastDateKey = date;
 
         const whenHTML = showDate
-          ? `<span class="plan-when"><span class="plan-time">${esc(timeStr)}</span><span class="plan-date"> ${esc(dateStr)}</span></span>`
-          : `<span class="plan-when"><span class="plan-time">${esc(timeStr)}</span></span>`;
+          ? `<span class="plan-when"><span class="plan-time">${esc(t)}</span><span class="plan-date"> ${esc(date)}</span></span>`
+          : `<span class="plan-when"><span class="plan-time">${esc(t)}</span></span>`;
 
         const type = (a.kind || '').toUpperCase();
         const det  = a.label || '';
-        return `<tr>
-          <td>${whenHTML}</td>
-          <td>${esc(type)}</td>
-          <td>${esc(det)}</td>
-        </tr>`;
+        return `<tr><td>${whenHTML}</td><td>${esc(type)}</td><td>${esc(det)}</td></tr>`;
       }).join('');
 
       qs('#plan-rows').innerHTML = rows || `<tr><td colspan="3" class="muted">No upcoming attempts.</td></tr>`;
@@ -469,13 +453,12 @@
     document.body.classList.toggle('modal-open', show);
   }
 
-  // ===== Status line tick =====
+  // ============== Status line ==============
   function tickStatusLine() {
     if (state.lastPullIso) {
       const ago = preciseAgo(new Date(state.lastPullIso));
       setText('#last-pull', ago);
     }
-
     const etaEl = qs('#next-refresh-eta');
     if (!etaEl || !state.nextRefreshIso) return;
 
@@ -487,14 +470,11 @@
     } else {
       etaEl.textContent = '(refreshing…)';
       const now = Date.now();
-      if (!state._zeroKick || now - state._zeroKick > 4000) {
-        state._zeroKick = now;
-        renderOnce();
-      }
+      repaintTimesOnly(); // keep UI fresh even if we didn't fetch yet
     }
   }
 
-  // ===== utils =====
+  // ============== utils ==============
   function qs(sel) { return document.querySelector(sel); }
   function setText(sel, v) { const el = qs(sel); if (el) el.textContent = v; }
   function esc(s) {
@@ -508,5 +488,4 @@
     return m ? `${m}m ${s}s ago` : `${s}s ago`;
   }
   function safeParseJSON(s) { try { return JSON.parse(s || '{}'); } catch { return null; } }
-  function cssEsc(s){ return String(s).replace(/"/g,'\\"'); }
 })();
