@@ -75,13 +75,13 @@ th:first-child {
 td.ck {
   width: 54px; min-width: 54px;
   padding: 0 !important;
-  vertical-align: middle;        /* vertical centering via table-cell */
+  vertical-align: middle;  /* vertical centering via table-cell */
   text-align: center;
 }
 td.ck .ck-wrapper {
-  display: flex;                 /* wrapper fills the cell and centers content */
-  align-items: center;           /* vertical center */
-  justify-content: center;       /* horizontal center */
+  display: flex;           /* wrapper fills the cell and centers content */
+  align-items: center;     /* vertical center */
+  justify-content: center; /* horizontal center */
   width: 100%;
   height: 100%;
 }
@@ -113,9 +113,7 @@ td.ck .ck-wrapper {
   .ckbox { width: 22px; height: 22px; }
 }
 
-/* ===== Capsules that start AFTER the checkbox column (no row ::before on iOS) ===== */
-/* We render the capsule per-cell on columns 2..end so it aligns with the checkbox column */
-
+/* ===== Capsules that start AFTER the checkbox column (per-cell, iOS-safe) ===== */
 /* SUMMARY (pairing) capsule */
 tr.summary td:not(.ck){
   background: var(--pairing-bg);
@@ -150,17 +148,45 @@ tr.off td:last-child{
 }
 .off-label, .off-dur { font-weight: 800; color: var(--off); }
 
-/* Expanded details row: full dark capsule under summary */
+/* ===== DETAILS row capsule matches alignment (starts after checkbox) ===== */
+/* Your HTML uses: <tr class="details"><td colspan="5">…</td></tr>.
+   We draw the capsule with a pseudo-element on that single TD and inset it
+   by the checkbox column width so it lines up with summary/off capsules. */
 tr.details { display:none; }
 tr.summary.open + tr.details { display: table-row; }
 tr.details > td {
+  position: relative;
+  background: transparent; /* capsule is painted by ::before */
+  border: 0;
+  padding: 0;              /* we'll pad the inner .daysbox instead */
+}
+tr.details > td::before {
+  content: "";
+  position: absolute;
+  left: 54px;             /* match checkbox column width (desktop) */
+  right: 0;
+  top: 0;
+  bottom: 0;
   background: var(--row-alt);
   border: 1px solid var(--border);
   border-radius: 12px;
+  z-index: 0;
+}
+@media (max-width: 640px) {
+  tr.details > td::before { left: 48px; } /* match mobile checkbox width */
 }
 
 /* content inside details */
-.daysbox { padding: 12px 16px 14px; border-radius: 10px; }
+.daysbox {
+  position: relative;
+  z-index: 1;             /* above the ::before capsule */
+  padding: 12px 16px 14px;
+  border-radius: 10px;    /* inner rounding only (visual) */
+  margin-left: 54px;      /* keep the content aligned with capsule left */
+}
+@media (max-width: 640px) {
+  .daysbox { margin-left: 48px; }
+}
 
 /* Day header */
 .day { margin: 8px 0 14px; }
@@ -243,6 +269,6 @@ body.modal-open { overflow: hidden; }
   .legs th, .legs td{ word-break: break-word; overflow-wrap:anywhere; }
 }
 
-/* ===== iOS safety: keep wrapping, avoid right spill ===== */
+/* ===== iOS safety ===== */
 .ios table { table-layout: fixed; }
 .ios th, .ios td { word-break: break-word; overflow-wrap:anywhere; }
