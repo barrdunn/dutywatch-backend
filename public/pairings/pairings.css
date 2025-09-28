@@ -24,7 +24,13 @@
   --ck-off: #62717f;
   --ck-pending: #ffd166;
   --ck-ok: #57e389;
+
+  /* widths (keep capsules aligned to checkbox column) */
+  --ckcol-desktop: 54px;
+  --ckcol-mobile: 48px;
+  --ckcol: var(--ckcol-desktop);
 }
+@media (max-width: 640px) { :root { --ckcol: var(--ckcol-mobile); } }
 
 * { box-sizing: border-box; }
 
@@ -69,11 +75,11 @@ tr.summary, tr.summary td { cursor: pointer; }
 
 /* ===== First column (checkbox) — perfectly centered H + V ===== */
 th:first-child {
-  width: 54px; min-width: 54px;
+  width: var(--ckcol); min-width: var(--ckcol);
   text-align: center; padding-left: 0; padding-right: 0;
 }
 td.ck {
-  width: 54px; min-width: 54px;
+  width: var(--ckcol); min-width: var(--ckcol);
   padding: 0 !important;
   vertical-align: middle;  /* vertical centering via table-cell */
   text-align: center;
@@ -107,11 +113,6 @@ td.ck .ck-wrapper {
   display: inline-flex; align-items: center; justify-content: center;
 }
 .ckbtn[aria-disabled="true"]{ cursor: default; opacity: .9; }
-
-@media (max-width: 640px) {
-  th:first-child, td.ck { width: 48px; min-width: 48px; }
-  .ckbox { width: 22px; height: 22px; }
-}
 
 /* ===== Capsules that start AFTER the checkbox column (per-cell, iOS-safe) ===== */
 /* SUMMARY (pairing) capsule */
@@ -149,9 +150,6 @@ tr.off td:last-child{
 .off-label, .off-dur { font-weight: 800; color: var(--off); }
 
 /* ===== DETAILS row capsule matches alignment (starts after checkbox) ===== */
-/* Your HTML uses: <tr class="details"><td colspan="5">…</td></tr>.
-   We draw the capsule with a pseudo-element on that single TD and inset it
-   by the checkbox column width so it lines up with summary/off capsules. */
 tr.details { display:none; }
 tr.summary.open + tr.details { display: table-row; }
 tr.details > td {
@@ -163,7 +161,7 @@ tr.details > td {
 tr.details > td::before {
   content: "";
   position: absolute;
-  left: 54px;             /* match checkbox column width (desktop) */
+  left: var(--ckcol);
   right: 0;
   top: 0;
   bottom: 0;
@@ -172,9 +170,6 @@ tr.details > td::before {
   border-radius: 12px;
   z-index: 0;
 }
-@media (max-width: 640px) {
-  tr.details > td::before { left: 48px; } /* match mobile checkbox width */
-}
 
 /* content inside details */
 .daysbox {
@@ -182,10 +177,7 @@ tr.details > td::before {
   z-index: 1;             /* above the ::before capsule */
   padding: 12px 16px 14px;
   border-radius: 10px;    /* inner rounding only (visual) */
-  margin-left: 54px;      /* keep the content aligned with capsule left */
-}
-@media (max-width: 640px) {
-  .daysbox { margin-left: 48px; }
+  margin-left: var(--ckcol);
 }
 
 /* Day header */
@@ -222,26 +214,30 @@ tr.details > td::before {
 .progress{ font-weight:800; margin-left:8px; color:var(--green); }
 
 /* =========================
-   Modal
+   Modal (overlay plan)
    ========================= */
-body.modal-open { overflow: hidden; }
+html.modal-open,
+body.modal-open { height: 100%; overflow: hidden; overscroll-behavior: none; }
 
 .modal{
   position:fixed; inset:0; z-index:10000;
   background:rgba(0,0,0,.55);
   display:flex; align-items:center; justify-content:center;
   padding:16px;
+  touch-action: none;           /* block scroll on backdrop */
 }
 .modal-card{
+  position: relative;
   background:var(--card);
   border:1px solid var(--border);
   border-radius:12px;
   width:calc(100% - 32px);
   max-width:720px;
-  max-height:85vh;
+  max-height:calc(100vh - 32px);
   overflow:auto;
   box-shadow:0 20px 60px rgba(0,0,0,.6);
 }
+
 .modal-header,.modal-footer{
   padding:12px 14px;
   border-bottom:1px solid var(--border);
@@ -252,9 +248,25 @@ body.modal-open { overflow: hidden; }
 .modal-close{ margin-left:auto; background:transparent; border:0; color:var(--text); font-size:20px; cursor:pointer; }
 
 .modal-content{ padding:14px; }
-.plan-table{ width:100%; border-collapse:collapse; }
+.plan-table{ width:100%; border-collapse:collapse; table-layout:auto; }
 .plan-table th,.plan-table td{ border-bottom:1px solid var(--border); padding:8px 10px; }
 .plan-meta{ margin-bottom:8px; }
+
+/* Plan modal — column sizing + responsive date/time */
+.plan-table th:first-child,
+.plan-table td:first-child {
+  min-width: 8.5rem;          /* When */
+}
+.plan-table th:nth-child(2),
+.plan-table td:nth-child(2) {
+  min-width: 6.5rem;          /* Type */
+}
+.when { display: inline-flex; gap: 8px; align-items: baseline; }
+.when-date { font-weight: 600; }
+.when-time { opacity: .9; }
+@media (max-width: 480px) {
+  .when { flex-direction: column; gap: 2px; }
+}
 
 /* utils */
 .muted{ color:var(--muted); }
@@ -272,91 +284,3 @@ body.modal-open { overflow: hidden; }
 /* ===== iOS safety ===== */
 .ios table { table-layout: fixed; }
 .ios th, .ios td { word-break: break-word; overflow-wrap:anywhere; }
-
-/* === Consistent capsule width (details vs pairing/off) === */
-/* Use a single checkbox column variable so offsets match everywhere */
-:root {
-  --ckcol-desktop: 54px;
-  --ckcol-mobile: 48px;
-  --ckcol: var(--ckcol-desktop);
-}
-@media (max-width: 640px) { :root { --ckcol: var(--ckcol-mobile); } }
-
-/* Make the details capsule start exactly after the checkbox column,
-   just like the pairing/off capsules */
-tr.details > td::before {
-  left: var(--ckcol) !important;  /* was 54px/48px */
-  right: 0;
-}
-.daysbox {
-  margin-left: var(--ckcol) !important; /* align the content with the capsule */
-  padding-left: 16px;
-  padding-right: 16px;
-}
-
-/* === iPhone: stop "Flight" column from getting squeezed/truncated === */
-.ios .legs { table-layout: auto !important; }           /* free columns */
-.ios .legs th:first-child,
-.ios .legs td:first-child {
-  min-width: 5.75em;                                    /* fits FFT1234 / AA1234 */
-  white-space: nowrap;                                   /* don’t wrap the code */
-  word-break: normal;                                    /* avoid mid-word breaks */
-}
-.ios .legs th:nth-child(2),
-.ios .legs td:nth-child(2) {
-  min-width: 6.5em;                                      /* DFW–ORD etc. */
-  word-break: keep-all;
-}
-.ios .legs td:nth-child(3) {
-  overflow-wrap: anywhere;                               /* times can wrap if needed */
-}
-
-/* === Plan modal: column sizing === */
-.plan-table { width: 100%; table-layout: auto; }
-.plan-table th:first-child,
-.plan-table td:first-child {
-  min-width: 10rem;         /* "When" column wide enough */
-  white-space: nowrap;       /* keep timestamp on one line */
-}
-.plan-table th:nth-child(2),
-.plan-table td:nth-child(2) {
-  min-width: 6.5rem;         /* "Type" column */
-  white-space: nowrap;
-}
-.plan-table th:nth-child(3),
-.plan-table td:nth-child(3) {
-  width: auto;               /* Details flexes */
-}
-
-/* === Modal/backdrop: full-screen + no page scroll behind === */
-html.modal-open,
-body.modal-open {
-  height: 100%;
-  overflow: hidden;             /* block scroll behind modal */
-  overscroll-behavior: none;    /* stop iOS rubber-banding */
-}
-
-.modal {
-  position: fixed;              /* ensure full-viewport anchor */
-  inset: 0;                     /* cover the screen */
-  padding: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  /* backdrop is the modal itself */
-  background: rgba(0,0,0,.55);
-  z-index: 10000;
-  touch-action: none;           /* block scroll gestures on overlay */
-}
-
-.modal-card{
-  position: relative;
-  width: calc(100% - 32px);
-  max-width: 720px;
-  max-height: calc(100vh - 32px);
-  overflow: auto;               /* scroll INSIDE the card if needed */
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: 0 20px 60px rgba(0,0,0,.6);
-}

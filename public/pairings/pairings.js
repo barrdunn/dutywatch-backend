@@ -3,11 +3,6 @@
   const apiBase = cfg.apiBase || '';
   const HOME_BASE = (cfg.baseAirport || 'DFW').toUpperCase();
 
-  // iOS detection for minor CSS tweaks
-  const IS_IOS = /iP(ad|hone|od)/.test(navigator.platform)
-    || (navigator.userAgent.includes('Mac') && 'ontouchend' in document);
-  document.documentElement.classList.toggle('ios', IS_IOS);
-
   const state = {
     lastPullIso: null,
     nextRefreshIso: null,
@@ -193,15 +188,20 @@
   }
 
   function renderRowHTML(row, homeBase) {
-    /* OFF row: put duration in Release column */
     if (row.kind === 'off') {
       return `
         <tr class="off">
-          <td class="ck"></td>
+          <td class="ck">
+            <div class="ck-wrapper">
+              <button class="ckbtn" type="button" aria-disabled="true" aria-checked="false" data-ck="off">
+                <span class="ckbox" aria-hidden="true"></span>
+              </button>
+            </div>
+          </td>
           <td class="sum-first"><span class="off-label">OFF</span></td>
           <td class="muted"></td>
-          <td class="off-dur">${esc(row.display?.off_dur || '')}</td>
           <td class="muted"></td>
+          <td><span class="off-dur">${esc(row.display?.off_dur || '')}</span></td>
         </tr>`;
     }
 
@@ -245,18 +245,20 @@
     const ariaDisabled = acknowledged ? 'true' : 'false';
 
     return `
-      <td class="ck ${stateAttr}">
-        <button class="ckbtn"
-                type="button"
-                role="checkbox"
-                aria-checked="${ariaChecked}"
-                aria-disabled="${ariaDisabled}"
-                title="${stateAttr === 'ok' ? 'Acknowledged' : (stateAttr === 'pending' ? 'Click to acknowledge now' : 'Click to view reminder plan')}"
-                data-ck="${stateAttr}"
-                data-pairing="${esc(row.pairing_id || '')}"
-                data-report="${esc((ack && ack.report_local_iso) || '')}">
-          <span class="ckbox" aria-hidden="true"></span>
-        </button>
+      <td class="ck">
+        <div class="ck-wrapper">
+          <button class="ckbtn"
+                  type="button"
+                  role="checkbox"
+                  aria-checked="${ariaChecked}"
+                  aria-disabled="${ariaDisabled}"
+                  title="${stateAttr === 'ok' ? 'Acknowledged' : (stateAttr === 'pending' ? 'Click to acknowledge now' : 'Click to view reminder plan')}"
+                  data-ck="${stateAttr}"
+                  data-pairing="${esc(row.pairing_id || '')}"
+                  data-report="${esc((ack && ack.report_local_iso) || '')}">
+            <span class="ckbox" aria-hidden="true"></span>
+          </button>
+        </div>
       </td>`;
   }
 
@@ -290,15 +292,42 @@
       </div>`;
   }
 
+  // Format "When" column for the plan (M/D and time without seconds)
+  function fmtWhenParts(iso) {
+    const d = new Date(iso);
+    if (isNaN(d)) return { date: esc(String(iso)), time: '' };
+    const mm = d.getMonth() + 1;
+    const dd = d.getDate();
+    const date = `${mm}/${dd}`; // 9/30
+
+    const hh = d.getHours();
+    const h12 = (hh % 12) || 12;
+    const min = String(d.getMinutes()).padStart(2, '0');
+    const ampm = hh >= 12 ? 'PM' : 'AM';
+    const time = `${h12}:${min} ${ampm}`; // 7:00 PM
+
+    return { date: esc(date), time: esc(time) };
+  }
+
   async function openPlan(pairingId, reportIso) {
     try {
       const res = await fetch(`${apiBase}/api/ack/plan?pairing_id=${encodeURIComponent(pairingId)}&report_local_iso=${encodeURIComponent(reportIso)}`);
       const data = await res.json();
       const rows = (data.attempts||[]).map(a => {
-        const when = new Date(a.at_iso).toLocaleString();
+        const { date, time } = fmtWhenParts(a.at_iso);
         const type = a.kind.toUpperCase();
         const det = a.label || '';
-        return `<tr><td>${esc(when)}</td><td>${esc(type)}</td><td>${esc(det)}</td></tr>`;
+        return `
+          <tr>
+            <td class="when-cell">
+              <span class="when">
+                <span class="when-date">${date}</span>
+                <span class="when-time">${time}</span>
+              </span>
+            </td>
+            <td>${esc(type)}</td>
+            <td>${esc(det)}</td>
+          </tr>`;
       }).join('');
       qs('#plan-rows').innerHTML = rows || `<tr><td colspan="3" class="muted">No upcoming attempts.</td></tr>`;
       qs('#plan-meta').textContent = `Policy: push at T-${data.policy.window_open_hours}h and T-${data.policy.second_push_at_hours}h; calls from T-${data.policy.call_start_hours}h every ${data.policy.call_interval_minutes}m (2 rings/attempt)`;
@@ -308,11 +337,33 @@
     }
   }
 
+  // iOS-safe scroll lock for modal
+  let __scrollLockY = 0;
   function showModal(show) {
     const m = qs('#plan-modal');
     if (!m) return;
+
+    if (show) {
+      __scrollLockY = window.scrollY || 0;
+      document.documentElement.classList.add('modal-open');
+      document.body.classList.add('modal-open');
+      document.body.style.position = 'fixed';
+      document.body.style.top = `-${__scrollLockY}px`;
+      document.body.style.left = '0';
+      document.body.style.right = '0';
+      document.body.style.width = '100%';
+    } else {
+      document.documentElement.classList.remove('modal-open');
+      document.body.classList.remove('modal-open');
+      document.body.style.position = '';
+      document.body.style.top = '';
+      document.body.style.left = '';
+      document.body.style.right = '';
+      document.body.style.width = '';
+      window.scrollTo(0, __scrollLockY);
+    }
+
     m.classList.toggle('hidden', !show);
-    document.body.classList.toggle('modal-open', show);
   }
 
   // Status line tick
