@@ -3,7 +3,7 @@
   const apiBase = cfg.apiBase || '';
   const HOME_BASE = (cfg.baseAirport || 'DFW').toUpperCase();
 
-  // iOS detection for minor CSS tweaks (kept as-is from your paste)
+  // iOS detection (for CSS toggles only)
   const IS_IOS = /iP(ad|hone|od)/.test(navigator.platform)
     || (navigator.userAgent.includes('Mac') && 'ontouchend' in document);
   document.documentElement.classList.toggle('ios', IS_IOS);
@@ -63,7 +63,6 @@
 
   // Global click handlers
   document.addEventListener('click', async (e) => {
-    // Expand/collapse pairing rows (ignore clicks on checkbox)
     const sum = e.target.closest('tr.summary');
     if (sum && !e.target.closest('[data-ck]')) {
       sum.classList.toggle('open');
@@ -79,7 +78,6 @@
       return;
     }
 
-    // Day header toggles its legs
     const hdr = e.target.closest('.dayhdr');
     if (hdr) {
       const day = hdr.closest('.day');
@@ -92,7 +90,6 @@
       return;
     }
 
-    // Check-in checkbox behavior
     const ckBtn = e.target.closest('[data-ck]');
     if (ckBtn) {
       const stateAttr = ckBtn.getAttribute('data-ck');
@@ -118,28 +115,23 @@
         return;
       }
 
-      return; // 'ok'
+      return;
     }
 
-    // Plan modal close buttons
     if (e.target.id === 'plan-close-1' || e.target.id === 'plan-close-2') {
       showModal(false);
       return;
     }
-
-    // Click on backdrop closes
     if (e.target.classList.contains('modal')) {
       showModal(false);
       return;
     }
   });
 
-  // ESC key closes modal
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') showModal(false);
   });
 
-  // Core render
   async function renderOnce() {
     const params = new URLSearchParams({
       is_24h: String(state.clockMode === 24 ? 1 : 0),
@@ -162,7 +154,6 @@
       refreshSel.value = String(data.refresh_minutes);
     }
 
-    // header label from API (single source of truth)
     const label = (data.window && data.window.label) || data.looking_through || '—';
     setText('#looking-through', label);
     setText('#last-pull', data.last_pull_local ?? '—');
@@ -189,7 +180,6 @@
   }
 
   function renderRowHTML(row, homeBase) {
-    /* OFF row: put duration in Release column (kept from your paste) */
     if (row.kind === 'off') {
       return `
         <tr class="off">
@@ -233,26 +223,28 @@
 
   function renderCheckCell(row) {
     const ack = row.ack || {};
-    theAcknowledged = !!ack.acknowledged;
+    const acknowledged = !!ack.acknowledged;
     const windowOpen = !!ack.window_open;
-    const stateAttr = theAcknowledged ? 'ok' : (windowOpen ? 'pending' : 'off');
+    const stateAttr = acknowledged ? 'ok' : (windowOpen ? 'pending' : 'off');
 
-    const ariaChecked = theAcknowledged ? 'true' : 'false';
-    const ariaDisabled = theAcknowledged ? 'true' : 'false';
+    const ariaChecked = acknowledged ? 'true' : 'false';
+    const ariaDisabled = acknowledged ? 'true' : 'false';
 
     return `
       <td class="ck ${stateAttr}">
-        <button class="ckbtn"
-                type="button"
-                role="checkbox"
-                aria-checked="${ariaChecked}"
-                aria-disabled="${ariaDisabled}"
-                title="${stateAttr === 'ok' ? 'Acknowledged' : (stateAttr === 'pending' ? 'Click to acknowledge now' : 'Click to view reminder plan')}"
-                data-ck="${stateAttr}"
-                data-pairing="${esc(row.pairing_id || '')}"
-                data-report="${esc((ack && ack.report_local_iso) || '')}">
-          <span class="ckbox" aria-hidden="true"></span>
-        </button>
+        <div class="ck-wrapper">
+          <button class="ckbtn"
+                  type="button"
+                  role="checkbox"
+                  aria-checked="${ariaChecked}"
+                  aria-disabled="${ariaDisabled}"
+                  title="${stateAttr === 'ok' ? 'Acknowledged' : (stateAttr === 'pending' ? 'Click to acknowledge now' : 'Click to view reminder plan')}"
+                  data-ck="${stateAttr}"
+                  data-pairing="${esc(row.pairing_id || '')}"
+                  data-report="${esc((ack && ack.report_local_iso) || '')}">
+            <span class="ckbox" aria-hidden="true"></span>
+          </button>
+        </div>
       </td>`;
   }
 
@@ -286,58 +278,40 @@
       </div>`;
   }
 
-  /* ---------------------------
-     Plan modal ONLY — show date inside first cell on first/changed date
-     --------------------------- */
-
-  function fmtMD(d) {
-    return `${d.getMonth() + 1}/${d.getDate()}`; // M/D
-  }
-  function fmtTime12(d) {
-    let h = d.getHours();
-    const m = String(d.getMinutes()).padStart(2, '0');
-    const ampm = h >= 12 ? 'PM' : 'AM';
-    h = h % 12 || 12;
-    return `${h}:${m} ${ampm}`; // no seconds
-  }
-
+  /* ===== Plan modal: When = time THEN date (date only when it changes) ===== */
   async function openPlan(pairingId, reportIso) {
     try {
       const res = await fetch(`${apiBase}/api/ack/plan?pairing_id=${encodeURIComponent(pairingId)}&report_local_iso=${encodeURIComponent(reportIso)}`);
       const data = await res.json();
 
-      // Sort attempts by time
-      const attempts = (data.attempts || []).slice()
-        .sort((a, b) => new Date(a.at_iso) - new Date(b.at_iso));
+      const fmtTime = (d) => d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      const fmtDate = (d) => `${d.getMonth() + 1}/${d.getDate()}`;
 
-      let prevKey = null;
-      const rows = attempts.map(a => {
+      let lastDateKey = null;
+      const rows = (data.attempts || []).map(a => {
         const d = new Date(a.at_iso);
-        const key = fmtMD(d);
-        const showDate = (prevKey !== key);
-        prevKey = key;
+        const t = fmtTime(d);
+        const date = fmtDate(d);
+        const showDate = date !== lastDateKey;
+        if (showDate) lastDateKey = date;
 
         const whenHTML = showDate
-          ? `<span class="when-date">${esc(key)}</span><span class="when-sep">·</span><span class="when-time">${esc(fmtTime12(d))}</span>`
-          : `<span class="when-time">${esc(fmtTime12(d))}</span>`;
+          ? `<span class="plan-when"><span class="plan-time">${esc(t)}</span><span class="plan-date"> ${esc(date)}</span></span>`
+          : `<span class="plan-when"><span class="plan-time">${esc(t)}</span></span>`;
 
-        const type = (a.kind || '').toString().toUpperCase();
+        const type = (a.kind || '').toUpperCase();
         const det  = a.label || '';
-
         return `<tr>
-                  <td><span class="plan-when">${whenHTML}</span></td>
-                  <td>${esc(type)}</td>
-                  <td>${esc(det)}</td>
-                </tr>`;
-      });
+          <td>${whenHTML}</td>
+          <td>${esc(type)}</td>
+          <td>${esc(det)}</td>
+        </tr>`;
+      }).join('');
 
-      qs('#plan-rows').innerHTML =
-        (rows.join('')) || `<tr><td colspan="3" class="muted">No upcoming attempts.</td></tr>`;
-
+      qs('#plan-rows').innerHTML = rows || `<tr><td colspan="3" class="muted">No upcoming attempts.</td></tr>`;
       qs('#plan-meta').textContent =
         `Policy: push at T-${data.policy.window_open_hours}h and T-${data.policy.second_push_at_hours}h; ` +
         `calls from T-${data.policy.call_start_hours}h every ${data.policy.call_interval_minutes}m (2 rings/attempt)`;
-
       showModal(true);
     } catch (e) {
       console.error(e);
@@ -351,13 +325,11 @@
     document.body.classList.toggle('modal-open', show);
   }
 
-  // Status line tick
   function tickStatusLine() {
     if (state.lastPullIso) {
       const ago = preciseAgo(new Date(state.lastPullIso));
       setText('#last-pull', ago);
     }
-
     const etaEl = qs('#next-refresh-eta');
     if (!etaEl || !state.nextRefreshIso) return;
 

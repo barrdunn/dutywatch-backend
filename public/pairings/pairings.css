@@ -67,7 +67,7 @@ th { color:var(--muted); font-weight:600; text-align:left; border-bottom:1px sol
 tr.summary, tr.summary td { cursor: pointer; }
 .dayhdr { cursor: pointer; }
 
-/* ===== First column (checkbox) — perfectly centered H + V ===== */
+/* ===== First column (checkbox) ===== */
 th:first-child {
   width: 54px; min-width: 54px;
   text-align: center; padding-left: 0; padding-right: 0;
@@ -113,8 +113,7 @@ td.ck .ck-wrapper {
   .ckbox { width: 22px; height: 22px; }
 }
 
-/* ===== Capsules that start AFTER the checkbox column (per-cell, iOS-safe) ===== */
-/* SUMMARY (pairing) capsule */
+/* ===== Capsules that start AFTER the checkbox column ===== */
 tr.summary td:not(.ck){
   background: var(--pairing-bg);
   border-top: 1px solid var(--pairing-border);
@@ -122,7 +121,6 @@ tr.summary td:not(.ck){
 }
 tr.summary:hover td:not(.ck){ background: var(--pairing-bg-hover); }
 
-/* round edges on first/last data cells */
 tr.summary td.sum-first{
   border-left: 1px solid var(--pairing-border);
   border-top-left-radius: 12px; border-bottom-left-radius: 12px;
@@ -132,7 +130,7 @@ tr.summary td:last-child{
   border-top-right-radius: 12px; border-bottom-right-radius: 12px;
 }
 
-/* OFF rows capsule aligned the same way */
+/* OFF rows */
 tr.off td:not(.ck){
   background: var(--row);
   border-top: 1px solid var(--border);
@@ -148,7 +146,7 @@ tr.off td:last-child{
 }
 .off-label, .off-dur { font-weight: 800; color: var(--off); }
 
-/* ===== DETAILS row capsule matches alignment (starts after checkbox) ===== */
+/* ===== DETAILS capsule (after checkbox) ===== */
 tr.details { display:none; }
 tr.summary.open + tr.details { display: table-row; }
 tr.details > td {
@@ -160,10 +158,7 @@ tr.details > td {
 tr.details > td::before {
   content: "";
   position: absolute;
-  left: 54px;
-  right: 0;
-  top: 0;
-  bottom: 0;
+  left: 54px; right: 0; top: 0; bottom: 0;
   background: var(--row-alt);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -172,11 +167,8 @@ tr.details > td::before {
 @media (max-width: 640px) {
   tr.details > td::before { left: 48px; }
 }
-
-/* content inside details */
 .daysbox {
-  position: relative;
-  z-index: 1;
+  position: relative; z-index: 1;
   padding: 12px 16px 14px;
   border-radius: 10px;
   margin-left: 54px;
@@ -189,8 +181,7 @@ tr.details > td::before {
 .day { margin: 8px 0 14px; }
 .dayhdr{
   background: rgba(73,179,124,.14);
-  border:0;
-  border-radius:10px;
+  border:0; border-radius:10px;
   padding:8px 10px;
   display:flex; gap:10px; align-items:center; flex-wrap:wrap;
   font-weight:600;
@@ -219,10 +210,9 @@ tr.details > td::before {
 .progress{ font-weight:800; margin-left:8px; color:var(--green); }
 
 /* =========================
-   Modal
+   Modal base
    ========================= */
 body.modal-open { overflow: hidden; }
-
 .modal{
   position:fixed; inset:0; z-index:10000;
   background:rgba(0,0,0,.55);
@@ -234,8 +224,7 @@ body.modal-open { overflow: hidden; }
   border:1px solid var(--border);
   border-radius:12px;
   width:calc(100% - 32px);
-  max-width:720px;
-  max-height:85vh;
+  max-width:720px; max-height:85vh;
   overflow:auto;
   box-shadow:0 20px 60px rgba(0,0,0,.6);
 }
@@ -247,140 +236,72 @@ body.modal-open { overflow: hidden; }
 .modal-footer{ border-top:1px solid var(--border); border-bottom:0; justify-content:flex-end; }
 .modal-header h2{ margin:0; font-size:18px; }
 .modal-close{ margin-left:auto; background:transparent; border:0; color:var(--text); font-size:20px; cursor:pointer; }
-
 .modal-content{ padding:14px; }
-.plan-table{ width:100%; border-collapse:collapse; }
+
+/* Plan table (desktop / general) */
+.plan-table{ width:100%; border-collapse:collapse; table-layout:auto; }
 .plan-table th,.plan-table td{ border-bottom:1px solid var(--border); padding:8px 10px; }
 .plan-meta{ margin-bottom:8px; }
+
+.plan-table th:first-child,
+.plan-table td:first-child{
+  min-width: 8rem;          /* smaller base than before */
+  white-space: nowrap;
+  text-align: left;
+}
+.plan-table th:nth-child(2),
+.plan-table td:nth-child(2){
+  min-width: 6rem;
+  white-space: nowrap;
+}
+.plan-table th:nth-child(3),
+.plan-table td:nth-child(3){ width:auto; }
+
+/* Mobile tuning for Plan table */
+@media (max-width: 480px){
+  .plan-table{ table-layout: fixed; }
+  .plan-table th:first-child,
+  .plan-table td:first-child{ width: 48%; min-width: 0; white-space: normal; }
+  .plan-table th:nth-child(2),
+  .plan-table td:nth-child(2){ width: 22%; min-width: 0; white-space: nowrap; text-align: right; }
+  .plan-table th:nth-child(3),
+  .plan-table td:nth-child(3){ width: 30%; }
+}
+
+/* iOS safety for Plan table: NO giant min-width; allow wrap */
+.ios .plan-table { table-layout: fixed; }
+.ios .plan-table th:first-child,
+.ios .plan-table td:first-child{
+  min-width: 0;
+  white-space: normal;  /* allow wrap if it gets tight */
+  text-align: left;
+}
+.ios .plan-table th:nth-child(2),
+.ios .plan-table td:nth-child(2){
+  min-width: 0;
+  white-space: nowrap;
+}
 
 /* utils */
 .muted{ color:var(--muted); }
 .hidden{ display:none!important; }
 
-/* ===== Mobile adjustments (<=640px) ===== */
-@media (max-width: 640px) {
-  .wrap { padding: 0 10px; }
-  h1 { font-size: 18px; margin-bottom: 6px; }
-  table { border-spacing: 0 8px; table-layout: fixed; }
-  th, td { padding: 9px 10px; font-size: 13px; line-height: 1.35; }
-  .legs th, .legs td{ word-break: break-word; overflow-wrap:anywhere; }
-}
-
-/* ===== iOS safety ===== */
+/* iOS global safety for legs table */
 .ios table { table-layout: fixed; }
 .ios th, .ios td { word-break: break-word; overflow-wrap:anywhere; }
 
-/* === Consistent capsule width (details vs pairing/off) === */
-:root {
-  --ckcol-desktop: 54px;
-  --ckcol-mobile: 48px;
-  --ckcol: var(--ckcol-desktop);
-}
-@media (max-width: 640px) { :root { --ckcol: var(--ckcol-mobile); } }
+/* details capsule offset variable (kept) */
+:root { --ckcol-desktop:54px; --ckcol-mobile:48px; --ckcol:var(--ckcol-desktop); }
+@media (max-width: 640px){ :root { --ckcol: var(--ckcol-mobile); } }
+tr.details > td::before { left: var(--ckcol) !important; right:0; }
+.daysbox { margin-left: var(--ckcol) !important; padding-left:16px; padding-right:16px; }
 
-tr.details > td::before { left: var(--ckcol) !important; right: 0; }
-.daysbox { margin-left: var(--ckcol) !important; padding-left: 16px; padding-right: 16px; }
-
-/* === iPhone: stop "Flight" column from getting squeezed/truncated === */
+/* iPhone: flight col protection (kept) */
 .ios .legs { table-layout: auto !important; }
-.ios .legs th:first-child,
-.ios .legs td:first-child {
-  min-width: 5.75em;
-  white-space: nowrap;
-  word-break: normal;
-}
-.ios .legs th:nth-child(2),
-.ios .legs td:nth-child(2) {
-  min-width: 6.5em;
-  word-break: keep-all;
-}
-.ios .legs td:nth-child(3) { overflow-wrap: anywhere; }
+.ios .legs th:first-child, .ios .legs td:first-child { min-width:5.75em; white-space:nowrap; word-break:normal; }
+.ios .legs th:nth-child(2), .ios .legs td:nth-child(2) { min-width:6.5em; word-break:keep-all; }
+.ios .legs td:nth-child(3) { overflow-wrap:anywhere; }
 
-/* === Plan modal: base column sizing (desktop & general) === */
-.plan-table { width: 100%; table-layout: auto; }
-.plan-table th:first-child,
-.plan-table td:first-child {
-  min-width: 10rem;
-  white-space: nowrap;
-  text-align: left;   /* keep When left-aligned */
-}
-.plan-table th:nth-child(2),
-.plan-table td:nth-child(2) {
-  min-width: 6.5rem;
-  white-space: nowrap;
-}
-.plan-table th:nth-child(3),
-.plan-table td:nth-child(3) { width: auto; }
-
-/* === Modal/backdrop: full-screen + no page scroll behind === */
-html.modal-open,
-body.modal-open {
-  height: 100%;
-  overflow: hidden;
-  overscroll-behavior: none;
-}
-.modal {
-  position: fixed;
-  inset: 0;
-  padding: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0,0,0,.55);
-  z-index: 10000;
-  touch-action: none;
-}
-.modal-card{
-  position: relative;
-  width: calc(100% - 32px);
-  max-width: 720px;
-  max-height: calc(100vh - 32px);
-  overflow: auto;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: 0 20px 60px rgba(0,0,0,.6);
-}
-
-/* ===== iPhone-specific width tuning for the Plan modal ===== */
-.ios .plan-table { table-layout: auto; }
-
-/* Make "When" roomy on iPhone and keep it left-aligned */
-.ios .plan-table th:first-child,
-.ios .plan-table td:first-child {
-  min-width: 13.5rem;     /* wider than desktop base */
-  white-space: normal;     /* allow wrap (time + date) if needed */
-  word-break: keep-all;
-  text-align: left;
-}
-
-/* Let "Type" yield space */
-.ios .plan-table th:nth-child(2),
-.ios .plan-table td:nth-child(2) {
-  width: 0.1%;
-  min-width: 4.75rem;
-  white-space: nowrap;
-}
-
-/* Details should not collapse vertically */
-.ios .plan-table th:nth-child(3),
-.ios .plan-table td:nth-child(3) {
-  min-width: 8rem;
-  white-space: normal;
-  word-break: break-word;
-}
-
-/* Tiny phones */
-@media (max-width: 430px) {
-  .ios .plan-table th:first-child,
-  .ios .plan-table td:first-child { min-width: 14.5rem; }
-}
-@media (max-width: 390px) {
-  .ios .plan-table th:first-child,
-  .ios .plan-table td:first-child { min-width: 15.5rem; }
-  .plan-when { line-height: 1.25; }
-}
-
-/* Inline bits for the When cell */
+/* inline bits inside When cell */
 .plan-when .plan-time { font-weight: 600; }
-.plan-when .plan-date { opacity: .85; }
+.plan-when .plan-date { opacity: .85; margin-left: .35rem; }
