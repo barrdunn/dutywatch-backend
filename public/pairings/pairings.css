@@ -26,8 +26,8 @@
   --ck-ok: #57e389;
 
   /* checkbox column width (controls first column + details offset) */
-  --ckcol-desktop: 70px;   /* wide enough so "Check In" stays on one line */
-  --ckcol-mobile: 40px;
+  --ckcol-desktop: 96px;   /* wide enough so "Check In" stays on one line (desktop) */
+  --ckcol-mobile: 84px;    /* mobile can wrap; width preserved for visual alignment */
   --ckcol: var(--ckcol-desktop);
 }
 
@@ -83,7 +83,7 @@ th:first-child {
   text-align: center;
   padding-left: 0;
   padding-right: 0;
-  white-space: nowrap;        /* keep "Check In" on one line */
+  white-space: nowrap;        /* desktop: keep "Check In" on one line */
 }
 
 td.ck {
@@ -99,6 +99,15 @@ td.ck .ck-wrapper {
   justify-content: center; /* horizontal center */
   width: 100%;
   height: 100%;
+}
+
+/* Mobile: allow the header text to wrap to two lines */
+@media (max-width: 640px) {
+  th:first-child {
+    white-space: normal;       /* enable wrapping */
+    line-height: 1.15;
+    word-break: keep-all;
+  }
 }
 
 /* bigger checkbox */
