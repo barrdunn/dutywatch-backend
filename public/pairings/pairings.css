@@ -26,8 +26,8 @@
   --ck-ok: #57e389;
 
   /* checkbox column width (controls first column + details offset) */
-  --ckcol-desktop: 96px;   /* wide enough so "Check In" stays on one line */
-  --ckcol-mobile: 84px;
+  --ckcol-desktop: 70px;   /* wide enough so "Check In" stays on one line */
+  --ckcol-mobile: 50px;
   --ckcol: var(--ckcol-desktop);
 }
 
