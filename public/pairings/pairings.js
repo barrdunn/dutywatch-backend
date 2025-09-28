@@ -3,6 +3,11 @@
   const apiBase = cfg.apiBase || '';
   const HOME_BASE = (cfg.baseAirport || 'DFW').toUpperCase();
 
+  // iOS Safari detection (real device, not just desktop emulation)
+  const IS_IOS = /iP(ad|hone|od)/.test(navigator.platform)
+    || (navigator.userAgent.includes('Mac') && 'ontouchend' in document);
+  document.documentElement.classList.toggle('ios', IS_IOS);
+
   const state = {
     lastPullIso: null,
     nextRefreshIso: null,

@@ -251,3 +251,61 @@ body.modal-open { overflow: hidden; }
 /* utils */
 .muted{ color:var(--muted); }
 .hidden{ display:none!important; }
+
+/* =========================
+   iOS Safari workaround for giant capsule bug
+   - Disable buggy table-row ::before
+   - Recreate capsule via cell backgrounds/borders
+   - Prevent horizontal overflow on iPhone
+   ========================= */
+.ios tr.summary::before,
+.ios tr.off::before,
+.ios tr.details::before {
+  display: none !important;
+}
+
+/* SUMMARY (green capsule look) */
+.ios tr.summary td {
+  background: var(--pairing-bg) !important;
+  border-top: 1px solid var(--pairing-border) !important;
+  border-bottom: 1px solid var(--pairing-border) !important;
+}
+.ios tr.summary td:first-child {
+  border-left: 1px solid var(--pairing-border) !important;
+  border-top-left-radius: 12px !important;
+  border-bottom-left-radius: 12px !important;
+}
+.ios tr.summary td:last-child {
+  border-right: 1px solid var(--pairing-border) !important;
+  border-top-right-radius: 12px !important;
+  border-bottom-right-radius: 12px !important;
+}
+
+/* OFF (dark capsule look) */
+.ios tr.off td {
+  background: var(--row) !important;
+  border-top: 1px solid var(--border) !important;
+  border-bottom: 1px solid var(--border) !important;
+}
+.ios tr.off td:first-child {
+  border-left: 1px solid var(--border) !important;
+  border-top-left-radius: 12px !important;
+  border-bottom-left-radius: 12px !important;
+}
+.ios tr.off td:last-child {
+  border-right: 1px solid var(--border) !important;
+  border-top-right-radius: 12px !important;
+  border-bottom-right-radius: 12px !important;
+}
+
+/* DETAILS (expanded) */
+.ios tr.details > td {
+  background: var(--row-alt) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 12px !important;
+}
+
+/* Stop any right-side spill on iPhone */
+html.ios, body.ios { overflow-x: hidden; }
+.ios table { table-layout: fixed; }
+.ios th, .ios td { word-break: break-word; overflow-wrap: anywhere; }
