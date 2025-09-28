@@ -10,69 +10,66 @@
   const state = {
     lastPullIso: null,
     nextRefreshIso: null,
-    clockMode: cfg.clockMode === '24' ? 24 : 12,  // default 12h
+    clockMode: cfg.clockMode === '24' ? 24 : 12,   // default 12h
     onlyReports: cfg.onlyReports !== false,
     _zeroKick: 0,
   };
 
-  // ---------------- Time helpers ----------------
-  function hhmmTo12(hhmm) {
-    if (!hhmm) return '';
-    let h = parseInt(hhmm.slice(0,2),10);
-    const m = hhmm.slice(2,4);
+  // ====== TIME/DATE FORMAT HELPERS (no column reflow) ======
+  // Find the first clock-looking time in a string and swap just that piece.
+  const TIME_12_RE = /\b([0-9]{1,2}):([0-9]{2})\s?(AM|PM)\b/i;
+  const TIME_24_RE = /\b([01]?\d|2[0-3]):?([0-5]\d)\b/;
+
+  function to12(h, m) {
+    const hh = (h % 12) || 12;
     const ampm = h < 12 ? 'AM' : 'PM';
-    h = h % 12 || 12;
-    return `${h}:${m} ${ampm}`;
+    return `${hh}:${m.toString().padStart(2,'0')} ${ampm}`;
   }
-  function hhmmTo24(hhmm) {
-    if (!hhmm) return '';
-    // If you want a colon, change to `${hhmm.slice(0,2)}:${hhmm.slice(2,4)}`
-    return `${hhmm.slice(0,2)}${hhmm.slice(2,4)}`;
-  }
-  function formatHHMM(hhmm, mode) {
-    return (parseInt(mode,10) === 24) ? hhmmTo24(hhmm) : hhmmTo12(hhmm);
-  }
-  function normalizeToHHMM(txt) {
-    if (!txt) return '';
-    const s = String(txt).trim();
-    // Try detect AM/PM anywhere
-    const ampmMatch = s.match(/(\d{1,2})\D?(\d{2})\s*(AM|PM)/i);
-    if (ampmMatch) {
-      let H = parseInt(ampmMatch[1],10);
-      const M = ampmMatch[2];
-      const AP = ampmMatch[3].toUpperCase();
-      if (AP === 'AM') { if (H === 12) H = 0; }
-      else { if (H !== 12) H += 12; }
-      return `${String(H).padStart(2,'0')}${M}`;
-    }
-    // Strip to digits; accept 3–4 digits like 815 or 0815
-    const digits = s.replace(/[^0-9]/g,'');
-    if (digits.length >= 4) return digits.slice(0,4);
-    if (digits.length === 3) return `0${digits}`;
-    return '';
-  }
-  function makeTimeSpan(candidates) {
-    // candidates: array of possible values in priority order
-    const raw = (candidates.find(v => v) ?? '').toString();
-    const hhmm = normalizeToHHMM(raw);
-    const text = hhmm ? formatHHMM(hhmm, state.clockMode) : '—';
-    return `<span class="js-time" data-hhmm="${esc(hhmm || '')}">${esc(text)}</span>`;
-  }
-  function applyClockMode(mode) {
-    const use24 = (parseInt(mode,10) === 24);
-    document.querySelectorAll('.js-time').forEach(el => {
-      const hhmm = el.getAttribute('data-hhmm') || '';
-      if (!hhmm) return; // leave as-is if we couldn't normalize
-      el.textContent = use24 ? hhmmTo24(hhmm) : hhmmTo12(hhmm);
-    });
+  function to24(h, m, withColon) {
+    const hh = h.toString().padStart(2,'0');
+    const mm = m.toString().padStart(2,'0');
+    return withColon ? `${hh}:${mm}` : `${hh}${mm}`;
   }
 
-  // ---------------- Actions/controls ----------------
+  // Replace the FIRST time in str with desired format; keep weekday+date prefix intact.
+  function swapFirstTime(str, want24, colon24=true) {
+    if (!str) return str;
+
+    // If string already has 12h with AM/PM
+    const m12 = str.match(TIME_12_RE);
+    if (m12) {
+      const h = parseInt(m12[1],10), m = parseInt(m12[2],10);
+      const h24 = (m12[3].toUpperCase()==='PM' ? (h%12)+12 : (h%12));
+      const repl = want24 ? to24(h24,m, colon24) : `${h}:${m.toString().padStart(2,'0')} ${m12[3].toUpperCase()}`;
+      return str.replace(TIME_12_RE, repl);
+    }
+
+    // Else a 24h time (with or without colon)
+    const m24 = str.match(TIME_24_RE);
+    if (m24) {
+      const h = parseInt(m24[1],10), m = parseInt(m24[2],10);
+      const repl = want24 ? to24(h,m, colon24) : to12(h,m);
+      return str.replace(TIME_24_RE, repl);
+    }
+
+    return str;
+  }
+
+  // Format a pure HHMM like "0715" -> desired string
+  function fmtHHMM(hhmm, want24, colon24=true) {
+    if (!hhmm) return '';
+    const s = String(hhmm).replace(':','').padStart(4,'0');
+    const hh = parseInt(s.slice(0,2),10), mm = parseInt(s.slice(2),10);
+    return want24 ? to24(hh,mm, colon24) : to12(hh,mm);
+  }
+
+  // ====== Public action ======
   window.dwManualRefresh = async function () {
     try { await fetch(apiBase + '/api/refresh', { method: 'POST' }); }
     catch (e) { console.error(e); }
   };
 
+  // Controls
   const refreshSel = document.getElementById('refresh-mins');
   if (refreshSel) {
     if (cfg.refreshMinutes) refreshSel.value = String(cfg.refreshMinutes);
@@ -91,41 +88,38 @@
   const clockSel = document.getElementById('clock-mode');
   if (clockSel) {
     clockSel.value = String(state.clockMode);
-    clockSel.addEventListener('change', () => {
-      state.clockMode = parseInt(clockSel.value, 10) === 12 ? 12 : 24;
-      // Update all visible times IN PLACE (no re-render, keep rows open)
-      applyClockMode(state.clockMode);
+    clockSel.addEventListener('change', async () => {
+      state.clockMode = parseInt(clockSel.value, 10) === 24 ? 24 : 12;
+      // reformat IN PLACE without changing layout / open rows
+      repaintTimesOnly();
     });
   }
 
-  // ---------------- Render cycle ----------------
+  // First paint + live updates
   renderOnce();
-
   try {
     const es = new EventSource(apiBase + '/api/events');
-    es.addEventListener('hello', () => {});
     es.addEventListener('change', async () => { await renderOnce(); });
     es.addEventListener('schedule_update', async () => { await renderOnce(); });
   } catch {}
 
   setInterval(tickStatusLine, 1000);
 
+  // Clicks
   document.addEventListener('click', async (e) => {
+    // expand/collapse
     const sum = e.target.closest('tr.summary');
     if (sum && !e.target.closest('[data-ck]')) {
       sum.classList.toggle('open');
       const details = sum.nextElementSibling;
       if (!details || !details.classList.contains('details')) return;
       const open = sum.classList.contains('open');
-      details.querySelectorAll('.day .legs').forEach(tbl => {
-        tbl.style.display = open ? 'table' : 'none';
-      });
-      details.querySelectorAll('.day .helper').forEach(h => {
-        h.textContent = open ? 'click to hide legs' : 'click to show legs';
-      });
+      details.querySelectorAll('.day .legs').forEach(tbl => { tbl.style.display = open ? 'table' : 'none'; });
+      details.querySelectorAll('.day .helper').forEach(h => { h.textContent = open ? 'click to hide legs' : 'click to show legs'; });
       return;
     }
 
+    // day header own toggle
     const hdr = e.target.closest('.dayhdr');
     if (hdr) {
       const day = hdr.closest('.day');
@@ -138,21 +132,18 @@
       return;
     }
 
+    // checkbox behavior
     const ckBtn = e.target.closest('[data-ck]');
     if (ckBtn) {
       const stateAttr = ckBtn.getAttribute('data-ck');
       const pairingId = ckBtn.getAttribute('data-pairing') || '';
       const reportIso = ckBtn.getAttribute('data-report') || '';
 
-      if (stateAttr === 'off') {
-        await openPlan(pairingId, reportIso);
-        return;
-      }
+      if (stateAttr === 'off') { await openPlan(pairingId, reportIso); return; }
       if (stateAttr === 'pending') {
         try {
           await fetch(`${apiBase}/api/ack/acknowledge`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            method:'POST', headers:{'Content-Type':'application/json'},
             body: JSON.stringify({ pairing_id: pairingId, report_local_iso: reportIso }),
           });
         } catch (err) { console.error('ack failed', err); }
@@ -161,6 +152,7 @@
       return;
     }
 
+    // plan modal close
     if (e.target.id === 'plan-close-1' || e.target.id === 'plan-close-2' || e.target.classList.contains('modal')) {
       showModal(false);
       return;
@@ -171,10 +163,10 @@
     if (e.key === 'Escape') showModal(false);
   });
 
+  // ====== Render from API ======
   async function renderOnce() {
-    // Ask server for raw strings; we’ll format on client
     const params = new URLSearchParams({
-      is_24h: '0',
+      is_24h: '0',                      // server can send raw; we’ll format on client
       only_reports: String(state.onlyReports ? 1 : 0),
     });
 
@@ -190,9 +182,7 @@
     state.lastPullIso    = data.last_pull_local_iso || null;
     state.nextRefreshIso = data.next_pull_local_iso || null;
 
-    if (refreshSel && data.refresh_minutes) {
-      refreshSel.value = String(data.refresh_minutes);
-    }
+    if (refreshSel && data.refresh_minutes) refreshSel.value = String(data.refresh_minutes);
 
     const label = (data.window && data.window.label) || data.looking_through || '—';
     setText('#looking-through', label);
@@ -207,10 +197,49 @@
     const tbody = qs('#pairings-body');
     tbody.innerHTML = (data.rows || []).map(row => renderRowHTML(row, HOME_BASE)).join('');
 
-    // Apply current clock mode after DOM is in place
-    applyClockMode(state.clockMode);
+    // format times to current mode after HTML exists
+    repaintTimesOnly();
   }
 
+  // ====== Repaint any time strings in-place (no layout or open/close changes) ======
+  function repaintTimesOnly() {
+    const want24 = state.clockMode === 24;
+
+    // main Report/Release cells (preserve weekday+date)
+    document.querySelectorAll('[data-dw="report"]').forEach(el => {
+      const orig = el.getAttribute('data-orig') || el.textContent;
+      if (!el.hasAttribute('data-orig')) el.setAttribute('data-orig', orig);
+      el.textContent = swapFirstTime(orig, want24, /*colon24*/false);   // 24h no colon as requested
+    });
+    document.querySelectorAll('[data-dw="release"]').forEach(el => {
+      const orig = el.getAttribute('data-orig') || el.textContent;
+      if (!el.hasAttribute('data-orig')) el.setAttribute('data-orig', orig);
+      el.textContent = swapFirstTime(orig, want24, /*colon24*/false);
+    });
+
+    // day headers “Report XX:YY / Release …”
+    document.querySelectorAll('[data-dw="day-report"]').forEach(el => {
+      const raw = el.getAttribute('data-hhmm') || el.textContent;
+      const text = fmtHHMM(raw, want24, /*colon24*/false);
+      el.textContent = text;
+    });
+    document.querySelectorAll('[data-dw="day-release"]').forEach(el => {
+      const raw = el.getAttribute('data-hhmm') || el.textContent;
+      const text = fmtHHMM(raw, want24, /*colon24*/false);
+      el.textContent = text;
+    });
+
+    // block times in legs table
+    document.querySelectorAll('[data-dw="bt"]').forEach(el => {
+      const dep = el.getAttribute('data-dep') || '';
+      const arr = el.getAttribute('data-arr') || '';
+      const left  = fmtHHMM(dep, want24, /*colon24*/false);
+      const right = fmtHHMM(arr, want24, /*colon24*/false);
+      el.textContent = `${left} → ${right}`;
+    });
+  }
+
+  // ====== Helpers ======
   function firstDepartureAirport(row) {
     const days = row?.days || [];
     for (const d of days) {
@@ -240,22 +269,11 @@
     const oobPill = showOOB ? `<span class="pill pill-red">${esc(startDep)}</span>` : '';
 
     const checkCell = renderCheckCell(row);
-
-    // Use ANY available value; normalize to HHMM and show formatted text now
-    const reportSpan = makeTimeSpan([
-      row.display?.report_hhmm,
-      row.report_hhmm,
-      row.display?.report_str,
-      row.report
-    ]);
-    const releaseSpan = makeTimeSpan([
-      row.display?.release_hhmm,
-      row.release_hhmm,
-      row.display?.release_str,
-      row.release
-    ]);
-
     const details = (row.days || []).map((day, i) => renderDayHTML(day, i)).join('');
+
+    // Preserve server-provided date+time string, but mark for client-time swapping
+    const repStr = esc(row.display?.report_str || '');
+    const relStr = esc(row.display?.release_str || '');
 
     return `
       <tr class="summary">
@@ -266,8 +284,8 @@
           ${oobPill}
           ${inProg}
         </td>
-        <td>${reportSpan}</td>
-        <td>${releaseSpan}</td>
+        <td data-dw="report">${repStr}</td>
+        <td data-dw="release">${relStr}</td>
         <td class="muted">click to expand days</td>
       </tr>
       <tr class="details">
@@ -282,8 +300,10 @@
     const acknowledged = !!ack.acknowledged;
     const windowOpen = !!ack.window_open;
     const stateAttr = acknowledged ? 'ok' : (windowOpen ? 'pending' : 'off');
+
     const ariaChecked = acknowledged ? 'true' : 'false';
     const ariaDisabled = acknowledged ? 'true' : 'false';
+
     return `
       <td class="ck ${stateAttr}">
         <div class="ck-wrapper">
@@ -303,77 +323,71 @@
   }
 
   function renderDayHTML(day, idx) {
-    const legsRows = (day.legs || []).map(leg => {
-      const depSpan = makeTimeSpan([leg.dep_hhmm, leg.dep_time, leg.dep_time_str]);
-      const arrSpan = makeTimeSpan([leg.arr_hhmm, leg.arr_time, leg.arr_time_str]);
-      const route = `${esc(leg.dep || '')}–${esc(leg.arr || '')}`;
+    const want24 = state.clockMode === 24; // initial paint uses current mode for leg attrs
+    const legs = (day.legs || []).map(leg => {
+      const depRaw = leg.dep_time_str || leg.dep_time || leg.dep_hhmm || '';
+      const arrRaw = leg.arr_time_str || leg.arr_time || leg.arr_hhmm || '';
+      // store raw HHMM (numbers if available) on the cell for later repaint
+      const depHHMM = String(depRaw).replace(':','');
+      const arrHHMM = String(arrRaw).replace(':','');
+      const left  = fmtHHMM(depHHMM, want24, /*colon24*/false);
+      const right = fmtHHMM(arrHHMM, want24, /*colon24*/false);
+
       return `
         <tr class="leg-row ${leg.done ? 'leg-done' : ''}">
           <td>${esc(leg.flight || '')}</td>
-          <td class="route-cell"><span class="route-code">${route}</span></td>
-          <td class="bt">${depSpan} &nbsp;→&nbsp; ${arrSpan}</td>
+          <td>${esc(leg.dep || '')}–${esc(leg.arr || '')}</td>
+          <td class="bt" data-dw="bt" data-dep="${esc(depHHMM)}" data-arr="${esc(arrHHMM)}">${left} → ${right}</td>
         </tr>`;
     }).join('');
 
-    const dayRep = makeTimeSpan([day.report_hhmm, day.report_time, day.report]);
-    const dayRel = makeTimeSpan([day.release_hhmm, day.release_time, day.release]);
+    // Day header report/release — keep raw HHMM in data-hhmm for repaint
+    const dayRepRaw = (day.report_hhmm || day.report || '').toString().replace(':','');
+    const dayRelRaw = (day.release_hhmm || day.release || '').toString().replace(':','');
+    const repDisp = fmtHHMM(dayRepRaw, want24, /*colon24*/false);
+    const relDisp = fmtHHMM(dayRelRaw, want24, /*colon24*/false);
 
     return `
       <div class="day">
         <div class="dayhdr">
           <span class="dot"></span>
           <span class="daytitle">Day ${idx + 1}</span>
-          ${day.report ? `· Report&nbsp;${dayRep}` : ''}
-          ${day.release ? `· Release&nbsp;${dayRel}` : ''}
-          ${day.hotel ? `· ${esc(day.hotel)}` : ''}
+          ${dayRepRaw ? `· Report <span data-dw="day-report" data-hhmm="${esc(dayRepRaw)}">${esc(repDisp)}</span>` : ''}
+          ${dayRelRaw ? ` · Release <span data-dw="day-release" data-hhmm="${esc(dayRelRaw)}">${esc(relDisp)}</span>` : ''}
+          ${day.hotel ? ` · ${esc(day.hotel)}` : ''}
           <span class="helper">click to show legs</span>
         </div>
-        <div class="legs-wrap">
-          <table class="legs" style="display:none">
-            <colgroup>
-              <col style="width:22%">
-              <col style="width:34%">
-              <col style="width:44%">
-            </colgroup>
-            <thead>
-              <tr>
-                <th>Flight</th>
-                <th>Route</th>
-                <th>Block Times</th>
-              </tr>
-            </thead>
-            <tbody>${legsRows}</tbody>
-          </table>
-        </div>
+        ${legs ? `
+          <div class="legs-wrap">
+            <table class="legs" style="display:none">
+              <colgroup><col><col><col></colgroup>
+              <thead><tr><th>Flight</th><th>Route</th><th>Block Times</th></tr></thead>
+              <tbody>${legs}</tbody>
+            </table>
+          </div>` : `<div class="muted subnote">No legs parsed.</div>`}
       </div>`;
   }
 
+  // ====== Plan modal (unchanged except table is equal thirds) ======
   async function openPlan(pairingId, reportIso) {
     try {
       const res = await fetch(`${apiBase}/api/ack/plan?pairing_id=${encodeURIComponent(pairingId)}&report_local_iso=${encodeURIComponent(reportIso)}`);
       const data = await res.json();
 
-      const toHHMM  = (d) => `${String(d.getHours()).padStart(2,'0')}${String(d.getMinutes()).padStart(2,'0')}`;
-      const fmtDate = (d) => `${d.getMonth()+1}/${d.getDate()}`;
-
-      let lastDateKey = null;
+      // build rows; When cell will be repainted by repaintTimesOnly via data attrs
       const rows = (data.attempts||[]).map(a => {
+        // store HHMM so toggle works without reload
         const d = new Date(a.at_iso);
-        const dateKey = fmtDate(d);
-        const hhmm = toHHMM(d);
-        const showDate = dateKey !== lastDateKey;
-        if (showDate) lastDateKey = dateKey;
-
-        const whenHTML = showDate
-          ? `<span class="js-time" data-hhmm="${hhmm}">${esc(formatHHMM(hhmm, state.clockMode))}</span> <span class="muted">${dateKey}</span>`
-          : `<span class="js-time" data-hhmm="${hhmm}">${esc(formatHHMM(hhmm, state.clockMode))}</span>`;
-
-        const type = (a.kind || '').toUpperCase();
-        const det  = a.label || '';
+        const hh = d.getHours(), mm = d.getMinutes();
+        const hhmm = `${hh.toString().padStart(2,'0')}${mm.toString().padStart(2,'0')}`;
+        const want24 = state.clockMode === 24;
+        const timeText = fmtHHMM(hhmm, want24, /*colon24*/false);
+        // show date after time when it changes — keep original simple (browser) date
+        const dateText = `${d.toLocaleDateString(undefined,{month:'short'})} ${d.getDate()}`;
         return `<tr>
-          <td>${whenHTML}</td>
-          <td>${esc(type)}</td>
-          <td>${esc(det)}</td>
+          <td><span data-dw="bt" data-dep="${esc(hhmm)}" data-arr="">${esc(timeText)}</span> ${esc(dateText)}</td>
+          <td>${esc((a.kind||'').toUpperCase())}</td>
+          <td>${esc(a.label||'')}</td>
         </tr>`;
       }).join('');
 
@@ -383,19 +397,17 @@
         `calls from T-${data.policy.call_start_hours}h every ${data.policy.call_interval_minutes}m (2 rings/attempt)`;
 
       showModal(true);
-      applyClockMode(state.clockMode);
-    } catch (e) {
-      console.error(e);
-    }
+      repaintTimesOnly();
+    } catch (e) { console.error(e); }
   }
 
   function showModal(show) {
-    const m = qs('#plan-modal');
-    if (!m) return;
+    const m = qs('#plan-modal'); if (!m) return;
     m.classList.toggle('hidden', !show);
     document.body.classList.toggle('modal-open', show);
   }
 
+  // status line
   function tickStatusLine() {
     if (state.lastPullIso) {
       const ago = preciseAgo(new Date(state.lastPullIso));
@@ -403,7 +415,6 @@
     }
     const etaEl = qs('#next-refresh-eta');
     if (!etaEl || !state.nextRefreshIso) return;
-
     const diff = Math.floor((new Date(state.nextRefreshIso).getTime() - Date.now()) / 1000);
     const left = Math.max(0, diff);
     if (left > 0) {
@@ -420,17 +431,9 @@
   }
 
   // utils
-  function qs(sel) { return document.querySelector(sel); }
-  function setText(sel, v) { const el = qs(sel); if (el) el.textContent = v; }
-  function esc(s) {
-    return String(s).replace(/[&<>"'`=\/]/g, (ch) =>
-      ({'&':'&amp;','<':'&#x3E;','"':'&quot;',"'":'&#39;','/':'&#x2F;','`':'&#x60;','=':'&#x3D;'}[ch])
-    );
-  }
-  function preciseAgo(d){
-    const sec = Math.max(0, Math.floor((Date.now() - d.getTime())/1000));
-    const m = Math.floor(sec/60), s = sec%60;
-    return m ? `${m}m ${s}s ago` : `${s}s ago`;
-  }
-  function safeParseJSON(s) { try { return JSON.parse(s || '{}'); } catch { return null; } }
+  function qs(sel){return document.querySelector(sel)}
+  function setText(sel,v){const el=qs(sel); if(el) el.textContent=v;}
+  function esc(s){return String(s).replace(/[&<>"'`=\/]/g,(ch)=>({'&':'&amp;','<':'&#x3E;','"':'&quot;',"'":'&#39;','/':'&#x2F;','`':'&#x60;','=':'&#x3D;'}[ch]))}
+  function preciseAgo(d){const sec=Math.max(0,Math.floor((Date.now()-d.getTime())/1000));const m=Math.floor(sec/60),s=sec%60;return m?`${m}m ${s}s ago`:`${s}s ago`}
+  function safeParseJSON(s){try{return JSON.parse(s||'{}')}catch{return null}}
 })();
