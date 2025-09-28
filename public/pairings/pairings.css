@@ -27,7 +27,9 @@
 
   /* checkbox column width */
   --ckcol-desktop: 54px;
-  --ckcol-mobile: 48px;
+  /* ↑ wider on mobile so “Check In” can fit on 2 lines without
+     breaking letters vertically */
+  --ckcol-mobile: 64px;
   --ckcol: var(--ckcol-desktop);
 }
 
@@ -76,21 +78,25 @@ h1 { margin: 0 0 8px; font-size: 22px; }
 #pairings th:nth-child(4), #pairings td:nth-child(4) { width: 22%; }
 #pairings th:nth-child(5), #pairings td:nth-child(5) { width: 28%; }
 
-/* no single-word wrapping in headers (except mobile first column) */
+/* headers don’t wrap single words (keeps columns clean) */
 #pairings th { white-space: nowrap; }
-@media (max-width: 640px) {
-  :root { --ckcol: var(--ckcol-mobile); }
-  #pairings th:first-child { white-space: normal; } /* allow “Check In” to wrap */
-}
-
-/* clickable cues */
-tr.summary, tr.summary td { cursor: pointer; }
-.dayhdr { cursor: pointer; }
 
 /* ===== First column (checkbox / “Check In”) ===== */
 th:first-child { text-align:center; padding-left:0; padding-right:0; }
 td.ck { padding:0 !important; text-align:center; }
 td.ck .ck-wrapper { display:flex; align-items:center; justify-content:center; width:100%; height:100%; }
+
+/* Mobile: allow “Check In” to wrap to two lines WITHOUT splitting letters */
+@media (max-width: 640px) {
+  :root { --ckcol: var(--ckcol-mobile); }
+  #pairings th:first-child {
+    white-space: normal;          /* allow wrap */
+    word-break: keep-all;         /* don’t split words into letters */
+    overflow-wrap: normal;        /* don’t hyphenate */
+    line-height: 1.15;
+    text-align: center;
+  }
+}
 
 /* bigger checkbox */
 .ckbox {
@@ -163,17 +169,20 @@ tr.details > td::before {
 
 .dot{ width:6px; height:6px; border-radius:999px; background:#7ee2a1; display:inline-block; margin-right:4px; }
 
-/* Legs table */
+/* -------- Legs table (3 columns) -------- */
 .legs-wrap{ margin:6px 0 0 0; }
-.legs{ width:100%; border-collapse:collapse; table-layout:auto; }
+.legs{ width:100%; border-collapse:collapse; table-layout: fixed; }
 .legs th, .legs td{ padding:6px 8px; border-bottom:1px solid var(--border); vertical-align: middle; }
-.legs th{ color:var(--muted); font-size:12px; }
-.leg-done td{ text-decoration:line-through; color:var(--strike); }
+.legs th{ color:var(--muted); font-size:12px; white-space: nowrap; }
 
-/* Route cell: show route then block times inline */
+/* Col widths via colgroup in JS: ~22% | ~34% | ~44% */
+
+/* Route cell: keep the airport code on one line */
 .route-cell { white-space: nowrap; }
-.route-cell .route-code { margin-right: 10px; }
-.route-cell .route-times { font-variant-numeric: tabular-nums; }
+.route-cell .route-code { font-variant-numeric: tabular-nums; }
+
+/* Block times: allow wrapping, arrow inline */
+.bt { white-space: normal; font-variant-numeric: tabular-nums; }
 
 /* pills */
 .pill{
@@ -210,12 +219,3 @@ body.modal-open { overflow: hidden; }
 /* iOS safety for table wrapping */
 .ios table { table-layout: fixed; }
 .ios th, .ios td { word-break: break-word; overflow-wrap:anywhere; }
-
-/* Legs header/cells left-aligned and stable */
-.legs { table-layout: fixed; }                 /* works with colgroup widths */
-.legs th, .legs td { text-align: left; }
-
-/* Route cell keeps times inline next to route text */
-.route-cell { display: flex; gap: 10px; align-items: baseline; }
-.route-cell .route-code { white-space: nowrap; }
-.route-cell .route-times { white-space: nowrap; }

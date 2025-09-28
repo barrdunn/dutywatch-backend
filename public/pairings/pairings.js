@@ -239,64 +239,51 @@
   }
 
   function renderDayHTML(day, idx) {
-    const legs = (day.legs || []).map(leg => {
-      const depMin = parseClockishToMin(leg.dep_time_str || leg.dep_time || leg.dep_hhmm || '');
-      const arrMin = parseClockishToMin(leg.arr_time_str || leg.arr_time || leg.arr_hhmm || '');
-      const depAttr = depMin != null ? ` data-min="${depMin}"` : '';
-      const arrAttr = arrMin != null ? ` data-min="${arrMin}"` : '';
+    const legsRows = (day.legs || []).map(leg => {
+      const route = `${esc(leg.dep || '')}–${esc(leg.arr || '')}`;
+      const depT  = esc(leg.dep_time_str || leg.dep_time || '');
+      const arrT  = esc(leg.arr_time_str || leg.arr_time || '');
+      const times = depT && arrT ? `${depT} → ${arrT}` : (depT || arrT);
 
       return `
         <tr class="leg-row ${leg.done ? 'leg-done' : ''}">
-          <!-- 1) Flight -->
           <td>${esc(leg.flight || '')}</td>
-
-          <!-- 2) Route (right after Flight) with inline block times -->
-          <td class="route-cell">
-            <span class="route-code">${esc((leg.dep || '') + '–' + (leg.arr || ''))}</span>
-            <span class="route-times">
-              <span class="js-time"${depAttr}></span>
-              &nbsp;→&nbsp;
-              <span class="js-time"${arrAttr}></span>
-            </span>
-          </td>
+          <td class="route-cell"><span class="route-code">${route}</span></td>
+          <td class="bt">${times}</td>
         </tr>`;
     }).join('');
-
-    const repMin = parseClockishToMin(day.report_time || day.report || '');
-    const relMin = parseClockishToMin(day.release_time || day.release || '');
-    const repAttr = repMin != null ? ` data-min="${repMin}"` : '';
-    const relAttr = relMin != null ? ` data-min="${relMin}"` : '';
-    const hotel = day.hotel ? ` · ${esc(day.hotel)}` : '';
 
     return `
       <div class="day">
         <div class="dayhdr">
           <span class="dot"></span>
           <span class="daytitle">Day ${idx + 1}</span>
-          ${repMin != null ? ` · Report <span class="js-time"${repAttr}></span>` : ''}
-          ${relMin != null ? ` · Release <span class="js-time"${relAttr}></span>` : ''}
-          ${hotel}
+          ${day.report ? `· Report&nbsp;${esc(day.report)}` : ''}
+          ${day.release ? `· Release&nbsp;${esc(day.release)}` : ''}
+          ${day.hotel ? `· ${esc(day.hotel)}` : ''}
           <span class="helper">click to show legs</span>
         </div>
 
         <div class="legs-wrap">
           <table class="legs" style="display:none">
-            <!-- lock columns: 1/3 | 2/3 -->
             <colgroup>
-              <col style="width: 33.3333%">
-              <col style="width: 66.6667%">
+              <col style="width:22%">
+              <col style="width:34%">
+              <col style="width:44%">
             </colgroup>
             <thead>
               <tr>
                 <th>Flight</th>
-                <th>Route/Block Times</th>
+                <th>Route</th>
+                <th>Block Times</th>
               </tr>
             </thead>
-            <tbody>${legs}</tbody>
+            <tbody>${legsRows}</tbody>
           </table>
         </div>
       </div>`;
   }
+
   /* ===== Plan modal ===== */
   async function openPlan(pairingId, reportIso) {
     try {
