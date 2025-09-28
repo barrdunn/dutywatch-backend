@@ -3,7 +3,6 @@
   const apiBase = cfg.apiBase || '';
   const HOME_BASE = (cfg.baseAirport || 'DFW').toUpperCase();
 
-  // iOS hint
   const IS_IOS = /iP(ad|hone|od)/.test(navigator.platform)
     || (navigator.userAgent.includes('Mac') && 'ontouchend' in document);
   document.documentElement.classList.toggle('ios', IS_IOS);
@@ -16,60 +15,64 @@
     _zeroKick: 0,
   };
 
-  // ———  TIME HELPERS (client-side only) ———
+  // ---------------- Time helpers ----------------
   function hhmmTo12(hhmm) {
     if (!hhmm) return '';
     let h = parseInt(hhmm.slice(0,2),10);
-    let m = hhmm.slice(2,4);
+    const m = hhmm.slice(2,4);
     const ampm = h < 12 ? 'AM' : 'PM';
     h = h % 12 || 12;
     return `${h}:${m} ${ampm}`;
   }
   function hhmmTo24(hhmm) {
     if (!hhmm) return '';
-    // Show without colon per your note: “24 hour times dont need a colon”
-    // Change to `${hhmm.slice(0,2)}:${hhmm.slice(2,4)}` if you want colon.
+    // If you want a colon, change to `${hhmm.slice(0,2)}:${hhmm.slice(2,4)}`
     return `${hhmm.slice(0,2)}${hhmm.slice(2,4)}`;
   }
+  function formatHHMM(hhmm, mode) {
+    return (parseInt(mode,10) === 24) ? hhmmTo24(hhmm) : hhmmTo12(hhmm);
+  }
   function normalizeToHHMM(txt) {
-    // Accepts "8:15 AM", "08:15", "0815", "8:15PM" and returns "0815"
     if (!txt) return '';
-    const s = String(txt).trim().toUpperCase();
-    // Try AM/PM first
-    const ampm = /(AM|PM)$/.test(s) ? RegExp.$1 : null;
-    let m = s.replace(/[^0-9]/g,'');
-    if (ampm) {
-      // assume format H?H:?MM AM|PM
-      const mmMatch = s.match(/(\d{1,2})\D?(\d{2})/);
-      if (!mmMatch) return '';
-      let H = parseInt(mmMatch[1],10);
-      const M = mmMatch[2];
-      if (ampm === 'AM') { if (H === 12) H = 0; }
+    const s = String(txt).trim();
+    // Try detect AM/PM anywhere
+    const ampmMatch = s.match(/(\d{1,2})\D?(\d{2})\s*(AM|PM)/i);
+    if (ampmMatch) {
+      let H = parseInt(ampmMatch[1],10);
+      const M = ampmMatch[2];
+      const AP = ampmMatch[3].toUpperCase();
+      if (AP === 'AM') { if (H === 12) H = 0; }
       else { if (H !== 12) H += 12; }
       return `${String(H).padStart(2,'0')}${M}`;
     }
-    // If we have 3-4 digits, pad left to 4
-    if (m.length === 3) m = `0${m}`;
-    if (m.length >= 4) return m.slice(0,4);
+    // Strip to digits; accept 3–4 digits like 815 or 0815
+    const digits = s.replace(/[^0-9]/g,'');
+    if (digits.length >= 4) return digits.slice(0,4);
+    if (digits.length === 3) return `0${digits}`;
     return '';
   }
-
+  function makeTimeSpan(candidates) {
+    // candidates: array of possible values in priority order
+    const raw = (candidates.find(v => v) ?? '').toString();
+    const hhmm = normalizeToHHMM(raw);
+    const text = hhmm ? formatHHMM(hhmm, state.clockMode) : '—';
+    return `<span class="js-time" data-hhmm="${esc(hhmm || '')}">${esc(text)}</span>`;
+  }
   function applyClockMode(mode) {
     const use24 = (parseInt(mode,10) === 24);
     document.querySelectorAll('.js-time').forEach(el => {
-      const raw = el.getAttribute('data-hhmm') || '';
-      const hhmm = normalizeToHHMM(raw);
+      const hhmm = el.getAttribute('data-hhmm') || '';
+      if (!hhmm) return; // leave as-is if we couldn't normalize
       el.textContent = use24 ? hhmmTo24(hhmm) : hhmmTo12(hhmm);
     });
   }
 
-  // Public action
+  // ---------------- Actions/controls ----------------
   window.dwManualRefresh = async function () {
     try { await fetch(apiBase + '/api/refresh', { method: 'POST' }); }
     catch (e) { console.error(e); }
   };
 
-  // Controls
   const refreshSel = document.getElementById('refresh-mins');
   if (refreshSel) {
     if (cfg.refreshMinutes) refreshSel.value = String(cfg.refreshMinutes);
@@ -88,17 +91,16 @@
   const clockSel = document.getElementById('clock-mode');
   if (clockSel) {
     clockSel.value = String(state.clockMode);
-    clockSel.addEventListener('change', async () => {
+    clockSel.addEventListener('change', () => {
       state.clockMode = parseInt(clockSel.value, 10) === 12 ? 12 : 24;
-      // NO re-render – update in place
+      // Update all visible times IN PLACE (no re-render, keep rows open)
       applyClockMode(state.clockMode);
     });
   }
 
-  // First paint
+  // ---------------- Render cycle ----------------
   renderOnce();
 
-  // SSE
   try {
     const es = new EventSource(apiBase + '/api/events');
     es.addEventListener('hello', () => {});
@@ -106,12 +108,9 @@
     es.addEventListener('schedule_update', async () => { await renderOnce(); });
   } catch {}
 
-  // Status ticker
   setInterval(tickStatusLine, 1000);
 
-  // Global click handlers
   document.addEventListener('click', async (e) => {
-    // Expand/collapse pairing rows (ignore clicks on checkbox)
     const sum = e.target.closest('tr.summary');
     if (sum && !e.target.closest('[data-ck]')) {
       sum.classList.toggle('open');
@@ -127,7 +126,6 @@
       return;
     }
 
-    // Day header toggles its legs
     const hdr = e.target.closest('.dayhdr');
     if (hdr) {
       const day = hdr.closest('.day');
@@ -140,7 +138,6 @@
       return;
     }
 
-    // Check-in checkbox behavior
     const ckBtn = e.target.closest('[data-ck]');
     if (ckBtn) {
       const stateAttr = ckBtn.getAttribute('data-ck');
@@ -151,7 +148,6 @@
         await openPlan(pairingId, reportIso);
         return;
       }
-
       if (stateAttr === 'pending') {
         try {
           await fetch(`${apiBase}/api/ack/acknowledge`, {
@@ -159,16 +155,12 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ pairing_id: pairingId, report_local_iso: reportIso }),
           });
-        } catch (err) {
-          console.error('ack failed', err);
-        }
+        } catch (err) { console.error('ack failed', err); }
         await renderOnce();
-        return;
       }
       return;
     }
 
-    // Plan modal close + backdrop
     if (e.target.id === 'plan-close-1' || e.target.id === 'plan-close-2' || e.target.classList.contains('modal')) {
       showModal(false);
       return;
@@ -179,10 +171,10 @@
     if (e.key === 'Escape') showModal(false);
   });
 
-  // Core render
   async function renderOnce() {
+    // Ask server for raw strings; we’ll format on client
     const params = new URLSearchParams({
-      is_24h: '0',                       // server times raw; we format client-side
+      is_24h: '0',
       only_reports: String(state.onlyReports ? 1 : 0),
     });
 
@@ -202,7 +194,6 @@
       refreshSel.value = String(data.refresh_minutes);
     }
 
-    // header label from API (single source of truth)
     const label = (data.window && data.window.label) || data.looking_through || '—';
     setText('#looking-through', label);
     setText('#last-pull', data.last_pull_local ?? '—');
@@ -216,18 +207,15 @@
     const tbody = qs('#pairings-body');
     tbody.innerHTML = (data.rows || []).map(row => renderRowHTML(row, HOME_BASE)).join('');
 
-    // After we’ve written the DOM, apply the selected clock mode
+    // Apply current clock mode after DOM is in place
     applyClockMode(state.clockMode);
   }
 
-  // Helpers for start airport / out-of-base pill
   function firstDepartureAirport(row) {
     const days = row?.days || [];
     for (const d of days) {
       const legs = d?.legs || [];
-      if (legs.length && legs[0].dep) {
-        return String(legs[0].dep).toUpperCase();
-      }
+      if (legs.length && legs[0].dep) return String(legs[0].dep).toUpperCase();
     }
     return null;
   }
@@ -253,12 +241,19 @@
 
     const checkCell = renderCheckCell(row);
 
-    // Summary report/release: embed raw HHMM for live formatting
-    const repRaw = row.display?.report_hhmm || row.report_hhmm || row.report || '';
-    const relRaw = row.display?.release_hhmm || row.release_hhmm || row.release || '';
-
-    const reportCell = `<span class="js-time" data-hhmm="${esc(repRaw)}"></span>`;
-    const releaseCell = `<span class="js-time" data-hhmm="${esc(relRaw)}"></span>`;
+    // Use ANY available value; normalize to HHMM and show formatted text now
+    const reportSpan = makeTimeSpan([
+      row.display?.report_hhmm,
+      row.report_hhmm,
+      row.display?.report_str,
+      row.report
+    ]);
+    const releaseSpan = makeTimeSpan([
+      row.display?.release_hhmm,
+      row.release_hhmm,
+      row.display?.release_str,
+      row.release
+    ]);
 
     const details = (row.days || []).map((day, i) => renderDayHTML(day, i)).join('');
 
@@ -271,8 +266,8 @@
           ${oobPill}
           ${inProg}
         </td>
-        <td>${reportCell}</td>
-        <td>${releaseCell}</td>
+        <td>${reportSpan}</td>
+        <td>${releaseSpan}</td>
         <td class="muted">click to expand days</td>
       </tr>
       <tr class="details">
@@ -287,10 +282,8 @@
     const acknowledged = !!ack.acknowledged;
     const windowOpen = !!ack.window_open;
     const stateAttr = acknowledged ? 'ok' : (windowOpen ? 'pending' : 'off');
-
     const ariaChecked = acknowledged ? 'true' : 'false';
     const ariaDisabled = acknowledged ? 'true' : 'false';
-
     return `
       <td class="ck ${stateAttr}">
         <div class="ck-wrapper">
@@ -311,38 +304,30 @@
 
   function renderDayHTML(day, idx) {
     const legsRows = (day.legs || []).map(leg => {
-      // Use ANY available raw time; we normalize to HHMM later
-      const depRaw = leg.dep_hhmm || leg.dep_time || leg.dep_time_str || '';
-      const arrRaw = leg.arr_hhmm || leg.arr_time || leg.arr_time_str || '';
-
+      const depSpan = makeTimeSpan([leg.dep_hhmm, leg.dep_time, leg.dep_time_str]);
+      const arrSpan = makeTimeSpan([leg.arr_hhmm, leg.arr_time, leg.arr_time_str]);
       const route = `${esc(leg.dep || '')}–${esc(leg.arr || '')}`;
-
       return `
         <tr class="leg-row ${leg.done ? 'leg-done' : ''}">
           <td>${esc(leg.flight || '')}</td>
           <td class="route-cell"><span class="route-code">${route}</span></td>
-          <td class="bt">
-            <span class="js-time" data-hhmm="${esc(depRaw)}"></span>
-             &nbsp;→&nbsp;
-            <span class="js-time" data-hhmm="${esc(arrRaw)}"></span>
-          </td>
+          <td class="bt">${depSpan} &nbsp;→&nbsp; ${arrSpan}</td>
         </tr>`;
     }).join('');
 
-    const dayReportRaw  = day.report_hhmm || day.report_time || '';
-    const dayReleaseRaw = day.release_hhmm || day.release_time || '';
+    const dayRep = makeTimeSpan([day.report_hhmm, day.report_time, day.report]);
+    const dayRel = makeTimeSpan([day.release_hhmm, day.release_time, day.release]);
 
     return `
       <div class="day">
         <div class="dayhdr">
           <span class="dot"></span>
           <span class="daytitle">Day ${idx + 1}</span>
-          ${day.report ? `· Report&nbsp;<span class="js-time" data-hhmm="${esc(dayReportRaw || day.report)}"></span>` : ''}
-          ${day.release ? `· Release&nbsp;<span class="js-time" data-hhmm="${esc(dayReleaseRaw || day.release)}"></span>` : ''}
+          ${day.report ? `· Report&nbsp;${dayRep}` : ''}
+          ${day.release ? `· Release&nbsp;${dayRel}` : ''}
           ${day.hotel ? `· ${esc(day.hotel)}` : ''}
           <span class="helper">click to show legs</span>
         </div>
-
         <div class="legs-wrap">
           <table class="legs" style="display:none">
             <colgroup>
@@ -368,8 +353,8 @@
       const res = await fetch(`${apiBase}/api/ack/plan?pairing_id=${encodeURIComponent(pairingId)}&report_local_iso=${encodeURIComponent(reportIso)}`);
       const data = await res.json();
 
-      const fmtDate = (d) => `${d.getMonth()+1}/${d.getDate()}`;
       const toHHMM  = (d) => `${String(d.getHours()).padStart(2,'0')}${String(d.getMinutes()).padStart(2,'0')}`;
+      const fmtDate = (d) => `${d.getMonth()+1}/${d.getDate()}`;
 
       let lastDateKey = null;
       const rows = (data.attempts||[]).map(a => {
@@ -380,8 +365,8 @@
         if (showDate) lastDateKey = dateKey;
 
         const whenHTML = showDate
-          ? `<span class="js-time" data-hhmm="${hhmm}"></span> <span class="muted">${dateKey}</span>`
-          : `<span class="js-time" data-hhmm="${hhmm}"></span>`;
+          ? `<span class="js-time" data-hhmm="${hhmm}">${esc(formatHHMM(hhmm, state.clockMode))}</span> <span class="muted">${dateKey}</span>`
+          : `<span class="js-time" data-hhmm="${hhmm}">${esc(formatHHMM(hhmm, state.clockMode))}</span>`;
 
         const type = (a.kind || '').toUpperCase();
         const det  = a.label || '';
@@ -398,7 +383,6 @@
         `calls from T-${data.policy.call_start_hours}h every ${data.policy.call_interval_minutes}m (2 rings/attempt)`;
 
       showModal(true);
-      // Ensure modal times obey current clock mode
       applyClockMode(state.clockMode);
     } catch (e) {
       console.error(e);
@@ -412,7 +396,6 @@
     document.body.classList.toggle('modal-open', show);
   }
 
-  // Status line tick
   function tickStatusLine() {
     if (state.lastPullIso) {
       const ago = preciseAgo(new Date(state.lastPullIso));
