@@ -238,58 +238,53 @@ body.modal-open { overflow: hidden; }
 .modal-close{ margin-left:auto; background:transparent; border:0; color:var(--text); font-size:20px; cursor:pointer; }
 .modal-content{ padding:14px; }
 
-/* Plan table (desktop / general) */
-.plan-table{ width:100%; border-collapse:collapse; table-layout:auto; }
-.plan-table th,.plan-table td{ border-bottom:1px solid var(--border); padding:8px 10px; }
-.plan-meta{ margin-bottom:8px; }
-
+/* =========================
+   Plan table (equal thirds everywhere)
+   ========================= */
+.plan-table{
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;           /* force equal widths */
+}
+.plan-table th,
+.plan-table td{
+  border-bottom:1px solid var(--border);
+  padding:8px 10px;
+  width: 33.3333%;
+  min-width: 0;
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
 .plan-table th:first-child,
-.plan-table td:first-child{
-  text-align: left;
-}
+.plan-table td:first-child{ text-align: left; }
+.plan-table th:nth-child(2),
+.plan-table td:nth-child(2){ text-align: center; }
+.plan-table th:nth-child(3),
+.plan-table td:nth-child(3){ text-align: left; }
 
-/* ---------- iPhone (mobile) = equal thirds ---------- */
-@media (max-width: 480px){
-  .plan-table{
-    table-layout: fixed;      /* equal widths obey */
-    width: 100%;
-  }
-  .plan-table th,
-  .plan-table td{
-    width: 33.3333%;
-    min-width: 0;
-    white-space: normal;      /* allow wrapping */
-    word-break: normal;
-    overflow-wrap: anywhere;  /* long words won't overflow */
-  }
-  .plan-table th:first-child,
-  .plan-table td:first-child{ text-align: left; }
-  .plan-table th:nth-child(2),
-  .plan-table td:nth-child(2){ text-align: center; }
-  .plan-table th:nth-child(3),
-  .plan-table td:nth-child(3){ text-align: left; }
-}
+.plan-meta{ margin-bottom:8px; }
 
 /* utils */
 .muted{ color:var(--muted); }
 .hidden{ display:none!important; }
 
-/* iOS global safety for legs table */
+/* iOS global safety for legs table (unchanged) */
 .ios table { table-layout: fixed; }
 .ios th, .ios td { word-break: break-word; overflow-wrap:anywhere; }
 
-/* details capsule offset variable (kept) */
+/* details capsule offset variable (unchanged) */
 :root { --ckcol-desktop:54px; --ckcol-mobile:48px; --ckcol:var(--ckcol-desktop); }
 @media (max-width: 640px){ :root { --ckcol: var(--ckcol-mobile); } }
 tr.details > td::before { left: var(--ckcol) !important; right:0; }
 .daysbox { margin-left: var(--ckcol) !important; padding-left:16px; padding-right:16px; }
 
-/* iPhone: flight col protection (kept) */
+/* iPhone: flight col protection (unchanged) */
 .ios .legs { table-layout: auto !important; }
 .ios .legs th:first-child, .ios .legs td:first-child { min-width:5.75em; white-space:nowrap; word-break:normal; }
 .ios .legs th:nth-child(2), .ios .legs td:nth-child(2) { min-width:6.5em; word-break:keep-all; }
 .ios .legs td:nth-child(3) { overflow-wrap:anywhere; }
 
 /* inline bits inside When cell */
-.plan-when .plan-time { font-weight: 600; }
-.plan-when .plan-date { opacity: .85; margin-left: .35rem; }
+.plan-when .plan-date { font-weight: 600; }
+.plan-when .plan-time { opacity: .85; margin-left: .35rem; }
