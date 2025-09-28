@@ -24,6 +24,15 @@
   --ck-off: #62717f;
   --ck-pending: #ffd166;
   --ck-ok: #57e389;
+
+  /* checkbox column width (controls first column + details offset) */
+  --ckcol-desktop: 96px;   /* wide enough so "Check In" stays on one line */
+  --ckcol-mobile: 84px;
+  --ckcol: var(--ckcol-desktop);
+}
+
+@media (max-width: 640px) {
+  :root { --ckcol: var(--ckcol-mobile); }
 }
 
 * { box-sizing: border-box; }
@@ -67,21 +76,27 @@ th { color:var(--muted); font-weight:600; text-align:left; border-bottom:1px sol
 tr.summary, tr.summary td { cursor: pointer; }
 .dayhdr { cursor: pointer; }
 
-/* ===== First column (checkbox) ===== */
+/* ===== First column (Check In / checkbox) ===== */
 th:first-child {
-  width: 54px; min-width: 54px;
-  text-align: center; padding-left: 0; padding-right: 0;
+  width: var(--ckcol);
+  min-width: var(--ckcol);
+  text-align: center;
+  padding-left: 0;
+  padding-right: 0;
+  white-space: nowrap;        /* keep "Check In" on one line */
 }
+
 td.ck {
-  width: 54px; min-width: 54px;
+  width: var(--ckcol);
+  min-width: var(--ckcol);
   padding: 0 !important;
   vertical-align: middle;
   text-align: center;
 }
 td.ck .ck-wrapper {
   display: flex;
-  align-items: center;
-  justify-content: center;
+  align-items: center;     /* vertical center */
+  justify-content: center; /* horizontal center */
   width: 100%;
   height: 100%;
 }
@@ -109,7 +124,6 @@ td.ck .ck-wrapper {
 .ckbtn[aria-disabled="true"]{ cursor: default; opacity: .9; }
 
 @media (max-width: 640px) {
-  th:first-child, td.ck { width: 48px; min-width: 48px; }
   .ckbox { width: 22px; height: 22px; }
 }
 
@@ -158,23 +172,17 @@ tr.details > td {
 tr.details > td::before {
   content: "";
   position: absolute;
-  left: 54px; right: 0; top: 0; bottom: 0;
+  left: var(--ckcol); right: 0; top: 0; bottom: 0;
   background: var(--row-alt);
   border: 1px solid var(--border);
   border-radius: 12px;
   z-index: 0;
 }
-@media (max-width: 640px) {
-  tr.details > td::before { left: 48px; }
-}
 .daysbox {
   position: relative; z-index: 1;
   padding: 12px 16px 14px;
   border-radius: 10px;
-  margin-left: 54px;
-}
-@media (max-width: 640px) {
-  .daysbox { margin-left: 48px; }
+  margin-left: var(--ckcol);
 }
 
 /* Day header */
@@ -270,18 +278,12 @@ body.modal-open { overflow: hidden; }
 .ios table { table-layout: fixed; }
 .ios th, .ios td { word-break: break-word; overflow-wrap:anywhere; }
 
-/* details capsule offset variable (kept) */
-:root { --ckcol-desktop:54px; --ckcol-mobile:48px; --ckcol:var(--ckcol-desktop); }
-@media (max-width: 640px){ :root { --ckcol: var(--ckcol-mobile); } }
-tr.details > td::before { left: var(--ckcol) !important; right:0; }
-.daysbox { margin-left: var(--ckcol) !important; padding-left:16px; padding-right:16px; }
-
 /* iPhone: flight col protection (kept) */
 .ios .legs { table-layout: auto !important; }
 .ios .legs th:first-child, .ios .legs td:first-child { min-width:5.75em; white-space:nowrap; word-break:normal; }
 .ios .legs th:nth-child(2), .ios .legs td:nth-child(2) { min-width:6.5em; word-break:keep-all; }
 .ios .legs td:nth-child(3) { overflow-wrap:anywhere; }
 
-/* inline bits inside When cell (time first, then date) */
+/* inline bits inside When/Check In cell in modal */
 .plan-when .plan-time { font-weight: 600; }
 .plan-when .plan-date { opacity: .9; margin-left: .35rem; }
