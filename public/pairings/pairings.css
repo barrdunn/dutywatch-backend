@@ -210,3 +210,12 @@ body.modal-open { overflow: hidden; }
 /* iOS safety for table wrapping */
 .ios table { table-layout: fixed; }
 .ios th, .ios td { word-break: break-word; overflow-wrap:anywhere; }
+
+/* Legs header/cells left-aligned and stable */
+.legs { table-layout: fixed; }                 /* works with colgroup widths */
+.legs th, .legs td { text-align: left; }
+
+/* Route cell keeps times inline next to route text */
+.route-cell { display: flex; gap: 10px; align-items: baseline; }
+.route-cell .route-code { white-space: nowrap; }
+.route-cell .route-times { white-space: nowrap; }
