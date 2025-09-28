@@ -26,8 +26,8 @@
   --ck-ok: #57e389;
 
   /* checkbox column width (controls first column + details offset) */
-  --ckcol-desktop: 76px;   /* wide enough so "Check In" stays on one line (desktop) */
-  --ckcol-mobile: 55px;    /* mobile can wrap; width preserved for visual alignment */
+  --ckcol-desktop: 76px;   /* desktop: “Check In” stays one line */
+  --ckcol-mobile: 55px;    /* mobile: “Check In” may wrap to 2 lines */
   --ckcol: var(--ckcol-desktop);
 }
 
@@ -70,7 +70,20 @@ h1 { margin: 0 0 8px; font-size: 22px; }
 /* table */
 table { width:100%; border-collapse:separate; border-spacing:0 10px; }
 th, td { padding:10px 12px; vertical-align: middle; }
-th { color:var(--muted); font-weight:600; text-align:left; border-bottom:1px solid var(--border); }
+
+/* header labels: default = single-line, no wrapping or hyphenation */
+th {
+  color:var(--muted);
+  font-weight:600;
+  text-align:left;
+  border-bottom:1px solid var(--border);
+  white-space: nowrap;          /* never wrap by default */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: normal;           /* no mid-word breaks */
+  overflow-wrap: normal;
+  hyphens: none;
+}
 
 /* clickable cues */
 tr.summary, tr.summary td { cursor: pointer; }
@@ -83,7 +96,12 @@ th:first-child {
   text-align: center;
   padding-left: 0;
   padding-right: 0;
-  white-space: nowrap;        /* desktop: keep "Check In" on one line */
+
+  /* Allow “Check In” to wrap between words ONLY (no intra-word breaks) */
+  white-space: normal;          /* enable wrap */
+  word-break: keep-all;         /* do not break inside words */
+  overflow-wrap: normal;
+  hyphens: none;
 }
 
 td.ck {
@@ -99,15 +117,6 @@ td.ck .ck-wrapper {
   justify-content: center; /* horizontal center */
   width: 100%;
   height: 100%;
-}
-
-/* Mobile: allow the header text to wrap to two lines */
-@media (max-width: 640px) {
-  th:first-child {
-    white-space: normal;       /* enable wrapping */
-    line-height: 1.15;
-    word-break: keep-all;
-  }
 }
 
 /* bigger checkbox */
@@ -259,7 +268,7 @@ body.modal-open { overflow: hidden; }
 .plan-table{
   width: 100%;
   border-collapse: collapse;
-  table-layout: fixed;        /* forces equal widths */
+  table-layout: fixed;        /* equal widths */
 }
 .plan-table th,
 .plan-table td{
@@ -267,9 +276,18 @@ body.modal-open { overflow: hidden; }
   padding:8px 10px;
   width:33.3333%;
   min-width:0;
-  white-space: normal;
-  overflow-wrap: anywhere;
 }
+
+/* Plan table headers: never wrap (except we don't need special-case here) */
+.plan-table th{
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: normal;
+  overflow-wrap: normal;
+  hyphens: none;
+}
+
 .plan-table th:first-child,
 .plan-table td:first-child{ text-align: left; }
 .plan-table th:nth-child(2),
