@@ -247,7 +247,10 @@
 
       return `
         <tr class="leg-row ${leg.done ? 'leg-done' : ''}">
+          <!-- 1) Flight -->
           <td>${esc(leg.flight || '')}</td>
+
+          <!-- 2) Route (right after Flight) with inline block times -->
           <td class="route-cell">
             <span class="route-code">${esc((leg.dep || '') + '–' + (leg.arr || ''))}</span>
             <span class="route-times">
@@ -263,7 +266,6 @@
     const relMin = parseClockishToMin(day.release_time || day.release || '');
     const repAttr = repMin != null ? ` data-min="${repMin}"` : '';
     const relAttr = relMin != null ? ` data-min="${relMin}"` : '';
-
     const hotel = day.hotel ? ` · ${esc(day.hotel)}` : '';
 
     return `
@@ -276,16 +278,20 @@
           ${hotel}
           <span class="helper">click to show legs</span>
         </div>
-        ${legs ? `
-          <div class="legs-wrap">
-            <table class="legs" style="display:none">
-              <thead><tr><th>Flight</th><th>Route</th></tr></thead>
-              <tbody>${legs}</tbody>
-            </table>
-          </div>` : `<div class="muted subnote">No legs parsed.</div>`}
+
+        <div class="legs-wrap">
+          <table class="legs" style="display:none">
+            <thead>
+              <tr>
+                <th>Flight</th>
+                <th>Route/Block Times</th>
+              </tr>
+            </thead>
+            <tbody>${legs}</tbody>
+          </table>
+        </div>
       </div>`;
   }
-
   /* ===== Plan modal ===== */
   async function openPlan(pairingId, reportIso) {
     try {
