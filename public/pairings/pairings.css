@@ -24,13 +24,7 @@
   --ck-off: #62717f;
   --ck-pending: #ffd166;
   --ck-ok: #57e389;
-
-  /* widths (keep capsules aligned to checkbox column) */
-  --ckcol-desktop: 54px;
-  --ckcol-mobile: 48px;
-  --ckcol: var(--ckcol-desktop);
 }
-@media (max-width: 640px) { :root { --ckcol: var(--ckcol-mobile); } }
 
 * { box-sizing: border-box; }
 
@@ -73,120 +67,71 @@ th { color:var(--muted); font-weight:600; text-align:left; border-bottom:1px sol
 tr.summary, tr.summary td { cursor: pointer; }
 .dayhdr { cursor: pointer; }
 
-/* ===== First column (checkbox) — perfectly centered H + V ===== */
-th:first-child {
-  width: var(--ckcol); min-width: var(--ckcol);
-  text-align: center; padding-left: 0; padding-right: 0;
-}
-td.ck {
-  width: var(--ckcol); min-width: var(--ckcol);
-  padding: 0 !important;
-  vertical-align: middle;  /* vertical centering via table-cell */
-  text-align: center;
-}
-td.ck .ck-wrapper {
-  display: flex;           /* wrapper fills the cell and centers content */
-  align-items: center;     /* vertical center */
-  justify-content: center; /* horizontal center */
-  width: 100%;
-  height: 100%;
-}
+/* first column (checkbox) width */
+th:first-child, td.ck { width: 36px; }
 
-/* bigger checkbox */
-.ckbox {
-  width: 24px; height: 24px;
-  border-radius: 6px;
-  background: transparent;
-  border: 2px solid var(--ck-off);
-  display: inline-flex; align-items: center; justify-content: center;
-  position: relative; transition: transform .06s ease;
-}
-.ck.off  .ckbox { border-color: var(--ck-off); }
-.ck.pending .ckbox { border-color: var(--ck-pending); }
-.ck.ok .ckbox { border-color: var(--ck-ok); background: var(--ck-ok); }
-.ck.ok .ckbox::after{
-  content: "✓"; font-weight: 900; font-size: 14px; line-height: 1; color: #0b1510; transform: translateY(-1px);
-}
-.ckbtn{
-  appearance: none; background: transparent; border: 0;
-  padding: 0; margin: 0; cursor: pointer; line-height: 0;
-  display: inline-flex; align-items: center; justify-content: center;
-}
-.ckbtn[aria-disabled="true"]{ cursor: default; opacity: .9; }
+/* =========================
+   Full-width capsule rows
+   ========================= */
 
-/* ===== Capsules that start AFTER the checkbox column (per-cell, iOS-safe) ===== */
-/* SUMMARY (pairing) capsule */
-tr.summary td:not(.ck){
+/* Pairing summary rows: green capsule across all columns */
+tr.summary { position: relative; }
+tr.summary::before {
+  content:"";
+  position:absolute;
+  inset:0;
   background: var(--pairing-bg);
-  border-top: 1px solid var(--pairing-border);
-  border-bottom: 1px solid var(--pairing-border);
+  border: 1px solid var(--pairing-border);
+  border-radius: 12px;
+  pointer-events:none;
+  z-index:0;
 }
-tr.summary:hover td:not(.ck){ background: var(--pairing-bg-hover); }
+tr.summary:hover::before { background: var(--pairing-bg-hover); }
+tr.summary td { position:relative; z-index:1; background:transparent!important; border:0!important; }
 
-/* round edges on first/last data cells */
-tr.summary td.sum-first{
-  border-left: 1px solid var(--pairing-border);
-  border-top-left-radius: 12px; border-bottom-left-radius: 12px;
-}
-tr.summary td:last-child{
-  border-right: 1px solid var(--pairing-border);
-  border-top-right-radius: 12px; border-bottom-right-radius: 12px;
-}
-
-/* OFF rows capsule aligned the same way */
-tr.off td:not(.ck){
+/* OFF rows: dark capsule, rounded; orange text only */
+tr.off { position: relative; }
+tr.off::before {
+  content: "";
+  position: absolute;
+  inset: 0;
   background: var(--row);
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
+  border-radius: 12px;
+  pointer-events: none;
+  z-index: 0;
 }
-tr.off td.sum-first{
-  border-left: 1px solid var(--border);
-  border-top-left-radius: 12px; border-bottom-left-radius: 12px;
-}
-tr.off td:last-child{
-  border-right: 1px solid var(--border);
-  border-top-right-radius: 12px; border-bottom-right-radius: 12px;
+tr.off td {
+  position: relative; z-index: 1;
+  background: transparent !important; border: 0 !important;
 }
 .off-label, .off-dur { font-weight: 800; color: var(--off); }
 
-/* ===== DETAILS row capsule matches alignment (starts after checkbox) ===== */
-tr.details { display:none; }
+/* Expanded details row: full-width dark capsule */
+tr.details { position:relative; display:none; }
 tr.summary.open + tr.details { display: table-row; }
-tr.details > td {
-  position: relative;
-  background: transparent; /* capsule is painted by ::before */
-  border: 0;
-  padding: 0;              /* we'll pad the inner .daysbox instead */
-}
-tr.details > td::before {
-  content: "";
-  position: absolute;
-  left: var(--ckcol);
-  right: 0;
-  top: 0;
-  bottom: 0;
+tr.details::before{
+  content:"";
+  position:absolute;
+  inset:0;
   background: var(--row-alt);
   border: 1px solid var(--border);
-  border-radius: 12px;
-  z-index: 0;
+  border-radius:12px;
+  z-index:0;
+  pointer-events:none;
 }
+tr.details > td { position:relative; z-index:1; }
 
 /* content inside details */
-.daysbox {
-  position: relative;
-  z-index: 1;             /* above the ::before capsule */
-  padding: 12px 16px 14px;
-  border-radius: 10px;    /* inner rounding only (visual) */
-  margin-left: var(--ckcol);
-}
+.daysbox { padding: 12px 16px 14px; border-radius: 10px; }
 
-/* Day header */
+/* Day header spans full width */
 .day { margin: 8px 0 14px; }
 .dayhdr{
   background: rgba(73,179,124,.14);
   border:0;
   border-radius:10px;
   padding:8px 10px;
+  margin-left: 0;
   display:flex; gap:10px; align-items:center; flex-wrap:wrap;
   font-weight:600;
 }
@@ -195,10 +140,10 @@ tr.details > td::before {
 
 .dot{ width:6px; height:6px; border-radius:999px; background:#7ee2a1; display:inline-block; margin-right:4px; }
 
-/* Legs table */
+/* Legs table flush under day header */
 .legs-wrap{ margin:6px 0 0 0; }
-.legs{ width:100%; border-collapse:collapse; table-layout:auto; }
-.legs th, .legs td{ padding:6px 8px; border-bottom:1px solid var(--border); vertical-align: middle; }
+.legs{ width:100%; border-collapse:collapse; }
+.legs th, .legs td{ padding:6px 8px; border-bottom:1px solid var(--border); }
 .legs th{ color:var(--muted); font-size:12px; }
 .leg-done td{ text-decoration:line-through; color:var(--strike); }
 
@@ -214,26 +159,79 @@ tr.details > td::before {
 .progress{ font-weight:800; margin-left:8px; color:var(--green); }
 
 /* =========================
+   Check-in checkbox (left column)
+   ========================= */
+.ck{ display:flex; align-items:center; justify-content:center; }
+
+.ckbox{
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  background: transparent;
+  border: 2px solid var(--ck-off);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  transition: transform .06s ease;
+}
+
+.ck.off  .ckbox { border-color: var(--ck-off); }
+.ck.pending .ckbox { border-color: var(--ck-pending); }
+.ck.ok .ckbox {
+  border-color: var(--ck-ok);
+  background: var(--ck-ok);
+}
+
+/* checkmark (shown when acknowledged) */
+.ck.ok .ckbox::after{
+  content: "✓";
+  font-weight: 900;
+  font-size: 12px;
+  line-height: 1;
+  color: #0b1510;
+  transform: translateY(-1px);
+}
+
+.ckbtn{
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  line-height: 0;
+  display: inline-flex;
+}
+
+.ckbtn[aria-disabled="true"]{
+  cursor: default;
+  opacity: .9;
+}
+
+/* =========================
    Modal (overlay plan)
    ========================= */
-html.modal-open,
-body.modal-open { height: 100%; overflow: hidden; overscroll-behavior: none; }
+body.modal-open { overflow: hidden; }
 
 .modal{
-  position:fixed; inset:0; z-index:10000;
+  position:fixed;
+  inset:0;
+  z-index:10000;                /* ensure above table + pseudo elements */
   background:rgba(0,0,0,.55);
-  display:flex; align-items:center; justify-content:center;
+  display:flex;
+  align-items:center;
+  justify-content:center;
   padding:16px;
-  touch-action: none;           /* block scroll on backdrop */
 }
+
 .modal-card{
-  position: relative;
   background:var(--card);
   border:1px solid var(--border);
   border-radius:12px;
   width:calc(100% - 32px);
   max-width:720px;
-  max-height:calc(100vh - 32px);
+  max-height:85vh;             /* scroll inside card if long */
   overflow:auto;
   box-shadow:0 20px 60px rgba(0,0,0,.6);
 }
@@ -248,25 +246,9 @@ body.modal-open { height: 100%; overflow: hidden; overscroll-behavior: none; }
 .modal-close{ margin-left:auto; background:transparent; border:0; color:var(--text); font-size:20px; cursor:pointer; }
 
 .modal-content{ padding:14px; }
-.plan-table{ width:100%; border-collapse:collapse; table-layout:auto; }
+.plan-table{ width:100%; border-collapse:collapse; }
 .plan-table th,.plan-table td{ border-bottom:1px solid var(--border); padding:8px 10px; }
 .plan-meta{ margin-bottom:8px; }
-
-/* Plan modal — column sizing + responsive date/time */
-.plan-table th:first-child,
-.plan-table td:first-child {
-  min-width: 8.5rem;          /* When */
-}
-.plan-table th:nth-child(2),
-.plan-table td:nth-child(2) {
-  min-width: 6.5rem;          /* Type */
-}
-.when { display: inline-flex; gap: 8px; align-items: baseline; }
-.when-date { font-weight: 600; }
-.when-time { opacity: .9; }
-@media (max-width: 480px) {
-  .when { flex-direction: column; gap: 2px; }
-}
 
 /* utils */
 .muted{ color:var(--muted); }
@@ -284,3 +266,26 @@ body.modal-open { height: 100%; overflow: hidden; overscroll-behavior: none; }
 /* ===== iOS safety ===== */
 .ios table { table-layout: fixed; }
 .ios th, .ios td { word-break: break-word; overflow-wrap:anywhere; }
+
+/* ===== Plan modal-only tweaks (no impact on main view) ===== */
+
+/* Left align the "When" column */
+.plan-table th:first-child,
+.plan-table td:first-child {
+  text-align: left;
+}
+
+/* Date group header row (shows "M/D" once per group) */
+.plan-datehdr td {
+  background: var(--row-alt);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px 10px;
+  font-weight: 700;
+}
+
+/* Keep the "When" column from collapsing */
+.plan-row td.when-time {
+  min-width: 6.5rem;   /* enough for "12:00 PM" */
+  white-space: nowrap;
+}

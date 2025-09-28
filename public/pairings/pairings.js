@@ -191,14 +191,8 @@
     if (row.kind === 'off') {
       return `
         <tr class="off">
-          <td class="ck">
-            <div class="ck-wrapper">
-              <button class="ckbtn" type="button" aria-disabled="true" aria-checked="false" data-ck="off">
-                <span class="ckbox" aria-hidden="true"></span>
-              </button>
-            </div>
-          </td>
-          <td class="sum-first"><span class="off-label">OFF</span></td>
+          <td></td>
+          <td><span class="off-label">OFF</span></td>
           <td class="muted"></td>
           <td class="muted"></td>
           <td><span class="off-dur">${esc(row.display?.off_dur || '')}</span></td>
@@ -245,20 +239,18 @@
     const ariaDisabled = acknowledged ? 'true' : 'false';
 
     return `
-      <td class="ck">
-        <div class="ck-wrapper">
-          <button class="ckbtn"
-                  type="button"
-                  role="checkbox"
-                  aria-checked="${ariaChecked}"
-                  aria-disabled="${ariaDisabled}"
-                  title="${stateAttr === 'ok' ? 'Acknowledged' : (stateAttr === 'pending' ? 'Click to acknowledge now' : 'Click to view reminder plan')}"
-                  data-ck="${stateAttr}"
-                  data-pairing="${esc(row.pairing_id || '')}"
-                  data-report="${esc((ack && ack.report_local_iso) || '')}">
-            <span class="ckbox" aria-hidden="true"></span>
-          </button>
-        </div>
+      <td class="ck ${stateAttr}">
+        <button class="ckbtn"
+                type="button"
+                role="checkbox"
+                aria-checked="${ariaChecked}"
+                aria-disabled="${ariaDisabled}"
+                title="${stateAttr === 'ok' ? 'Acknowledged' : (stateAttr === 'pending' ? 'Click to acknowledge now' : 'Click to view reminder plan')}"
+                data-ck="${stateAttr}"
+                data-pairing="${esc(row.pairing_id || '')}"
+                data-report="${esc((ack && ack.report_local_iso) || '')}">
+          <span class="ckbox" aria-hidden="true"></span>
+        </button>
       </td>`;
   }
 
@@ -292,78 +284,73 @@
       </div>`;
   }
 
-  // Format "When" column for the plan (M/D and time without seconds)
-  function fmtWhenParts(iso) {
-    const d = new Date(iso);
-    if (isNaN(d)) return { date: esc(String(iso)), time: '' };
-    const mm = d.getMonth() + 1;
-    const dd = d.getDate();
-    const date = `${mm}/${dd}`; // 9/30
-
-    const hh = d.getHours();
-    const h12 = (hh % 12) || 12;
-    const min = String(d.getMinutes()).padStart(2, '0');
-    const ampm = hh >= 12 ? 'PM' : 'AM';
-    const time = `${h12}:${min} ${ampm}`; // 7:00 PM
-
-    return { date: esc(date), time: esc(time) };
-  }
+  /* ---------------------------
+     ONLY the plan modal below
+     --------------------------- */
 
   async function openPlan(pairingId, reportIso) {
     try {
       const res = await fetch(`${apiBase}/api/ack/plan?pairing_id=${encodeURIComponent(pairingId)}&report_local_iso=${encodeURIComponent(reportIso)}`);
       const data = await res.json();
-      const rows = (data.attempts||[]).map(a => {
-        const { date, time } = fmtWhenParts(a.at_iso);
-        const type = a.kind.toUpperCase();
-        const det = a.label || '';
-        return `
-          <tr>
-            <td class="when-cell">
-              <span class="when">
-                <span class="when-date">${date}</span>
-                <span class="when-time">${time}</span>
-              </span>
-            </td>
-            <td>${esc(type)}</td>
-            <td>${esc(det)}</td>
-          </tr>`;
-      }).join('');
-      qs('#plan-rows').innerHTML = rows || `<tr><td colspan="3" class="muted">No upcoming attempts.</td></tr>`;
-      qs('#plan-meta').textContent = `Policy: push at T-${data.policy.window_open_hours}h and T-${data.policy.second_push_at_hours}h; calls from T-${data.policy.call_start_hours}h every ${data.policy.call_interval_minutes}m (2 rings/attempt)`;
+
+      // Group attempts by local date (M/D). Show date once, then times.
+      const byDate = new Map();
+      (data.attempts || [])
+        .slice()
+        .sort((a, b) => new Date(a.at_iso) - new Date(b.at_iso))
+        .forEach(a => {
+          const d = new Date(a.at_iso);
+          const key = `${d.getMonth() + 1}/${d.getDate()}`; // "9/30"
+          if (!byDate.has(key)) byDate.set(key, []);
+          byDate.get(key).push(a);
+        });
+
+      const rows = [];
+      for (const [dateKey, attempts] of byDate.entries()) {
+        // date header row
+        rows.push(
+          `<tr class="plan-datehdr"><td colspan="3"><span class="plan-date">${esc(dateKey)}</span></td></tr>`
+        );
+
+        for (const a of attempts) {
+          const d = new Date(a.at_iso);
+          const hh = d.getHours();
+          const h12 = (hh % 12) || 12;
+          const mm = String(d.getMinutes()).padStart(2, '0');
+          const ampm = hh >= 12 ? 'PM' : 'AM';
+          const time = `${h12}:${mm} ${ampm}`; // no seconds
+
+          const type = (a.kind || '').toString().toUpperCase();
+          const det  = a.label || '';
+
+          rows.push(
+            `<tr class="plan-row">
+               <td class="when-time">${esc(time)}</td>
+               <td class="when-type">${esc(type)}</td>
+               <td class="when-det">${esc(det)}</td>
+             </tr>`
+          );
+        }
+      }
+
+      qs('#plan-rows').innerHTML =
+        rows.join('') || `<tr><td colspan="3" class="muted">No upcoming attempts.</td></tr>`;
+
+      qs('#plan-meta').textContent =
+        `Policy: push at T-${data.policy.window_open_hours}h and T-${data.policy.second_push_at_hours}h; ` +
+        `calls from T-${data.policy.call_start_hours}h every ${data.policy.call_interval_minutes}m (2 rings/attempt)`;
+
       showModal(true);
     } catch (e) {
       console.error(e);
     }
   }
 
-  // iOS-safe scroll lock for modal
-  let __scrollLockY = 0;
   function showModal(show) {
     const m = qs('#plan-modal');
     if (!m) return;
-
-    if (show) {
-      __scrollLockY = window.scrollY || 0;
-      document.documentElement.classList.add('modal-open');
-      document.body.classList.add('modal-open');
-      document.body.style.position = 'fixed';
-      document.body.style.top = `-${__scrollLockY}px`;
-      document.body.style.left = '0';
-      document.body.style.right = '0';
-      document.body.style.width = '100%';
-    } else {
-      document.documentElement.classList.remove('modal-open');
-      document.body.classList.remove('modal-open');
-      document.body.style.position = '';
-      document.body.style.top = '';
-      document.body.style.left = '';
-      document.body.style.right = '';
-      document.body.style.width = '';
-      window.scrollTo(0, __scrollLockY);
-    }
-
     m.classList.toggle('hidden', !show);
+    document.body.classList.toggle('modal-open', show);
   }
 
   // Status line tick
@@ -396,7 +383,7 @@
   function setText(sel, v) { const el = qs(sel); if (el) el.textContent = v; }
   function esc(s) {
     return String(s).replace(/[&<>"'`=\/]/g, (ch) =>
-      ({'&':'&amp;','<':'&#x3E;','"':'&quot;',"'":'&#39;','/':'&#x2F;','`':'&#x60;','=':'&#x3D;'}[ch])
+      ({'&':'&amp;','<':'&#x3E;','"':'&quot;',"'":'&#39;','/':'&#x2F;','`':'&#x60;','=':'&#x3D'}[ch])
     );
   }
   function preciseAgo(d){
