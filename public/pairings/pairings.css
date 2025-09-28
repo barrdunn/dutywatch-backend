@@ -143,6 +143,51 @@ tr.details>td::before{content:"";position:absolute;left:var(--ckcol);right:0;top
   }
 }
 
+/* --- Legs table: lock alignment + column widths --- */
+.legs {
+  width: 100%;
+  table-layout: fixed;                 /* predictable column positions */
+}
+
+.legs th,
+.legs td {
+  text-align: left !important;         /* kill any inherited centering */
+}
+
+/* Column widths: Flight | Route | Block Times */
+.legs th:first-child,
+.legs td:first-child {
+  width: 26% !important;               /* Flight (left, never centered) */
+  white-space: nowrap;                  /* keeps FFT1234 on one line */
+}
+
+.legs th:nth-child(2),
+.legs td:nth-child(2) {
+  width: 34% !important;               /* Route */
+  padding-right: 8px;
+}
+
+.legs th:nth-child(3),
+.legs td:nth-child(3) {
+  width: 40% !important;               /* Block Times */
+  padding-left: 12px;                  /* brings it closer to Route */
+  font-variant-numeric: tabular-nums;
+}
+
+/* Mobile: keep Flight single line; let Block Times wrap at spaces */
+@media (max-width: 640px) {
+  .legs td:first-child {
+    white-space: nowrap;
+    word-break: normal;
+  }
+  .legs td:nth-child(3) {
+    white-space: normal;
+    word-break: normal;
+    overflow-wrap: anywhere;           /* wrap only if needed */
+  }
+}
+
+
 /* Optional: use tabular numbers for nicer time alignment */
 .legs td:nth-child(3),
 .legs th:nth-child(3) {
