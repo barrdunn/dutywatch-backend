@@ -3,7 +3,6 @@
   const apiBase = cfg.apiBase || '';
   const HOME_BASE = (cfg.baseAirport || 'DFW').toUpperCase();
 
-  // iOS flag (small CSS tweaks)
   const IS_IOS = /iP(ad|hone|od)/.test(navigator.platform)
     || (navigator.userAgent.includes('Mac') && 'ontouchend' in document);
   document.documentElement.classList.toggle('ios', IS_IOS);
@@ -11,19 +10,17 @@
   const state = {
     lastPullIso: null,
     nextRefreshIso: null,
-    clockMode: cfg.clockMode === '24' ? 24 : 12, // default 12h
+    clockMode: cfg.clockMode === '24' ? 24 : 12,
     onlyReports: cfg.onlyReports !== false,
     _zeroKick: 0,
-    rowsCache: null,      // keep last fetched rows so we can repaint without re-render
+    rowsCache: null,
   };
 
-  // Public action
   window.dwManualRefresh = async function () {
     try { await fetch(apiBase + '/api/refresh', { method: 'POST' }); }
     catch (e) { console.error(e); }
   };
 
-  // Controls
   const refreshSel = document.getElementById('refresh-mins');
   if (refreshSel) {
     if (cfg.refreshMinutes) refreshSel.value = String(cfg.refreshMinutes);
@@ -42,16 +39,14 @@
   const clockSel = document.getElementById('clock-mode');
   if (clockSel) {
     clockSel.value = String(state.clockMode);
-    clockSel.addEventListener('change', async () => {
+    clockSel.addEventListener('change', () => {
       state.clockMode = parseInt(clockSel.value, 10) === 24 ? 24 : 12;
-      repaintTimesOnly(); // just repaint strings; don’t rebuild DOM/layout
+      repaintTimesOnly(); // no DOM rebuild
     });
   }
 
-  // First paint
   renderOnce();
 
-  // SSE
   try {
     const es = new EventSource(apiBase + '/api/events');
     es.addEventListener('hello', () => {});
@@ -59,12 +54,9 @@
     es.addEventListener('schedule_update', async () => { await renderOnce(); });
   } catch {}
 
-  // Status ticker
   setInterval(tickStatusLine, 1000);
 
-  // Global click handlers
   document.addEventListener('click', async (e) => {
-    // Expand/collapse pairing rows (ignore clicks on checkbox)
     const sum = e.target.closest('tr.summary');
     if (sum && !e.target.closest('[data-ck]')) {
       sum.classList.toggle('open');
@@ -80,7 +72,6 @@
       return;
     }
 
-    // Day header toggles its legs
     const hdr = e.target.closest('.dayhdr');
     if (hdr) {
       const day = hdr.closest('.day');
@@ -93,7 +84,6 @@
       return;
     }
 
-    // Check-in checkbox behavior
     const ckBtn = e.target.closest('[data-ck]');
     if (ckBtn) {
       const stateAttr = ckBtn.getAttribute('data-ck');
@@ -101,13 +91,11 @@
       const reportIso = ckBtn.getAttribute('data-report') || '';
 
       if (stateAttr === 'off') {
-        // Show plan modal when window is not open
         await openPlan(pairingId, reportIso);
         return;
       }
 
       if (stateAttr === 'pending') {
-        // Acknowledge immediately
         try {
           await fetch(`${apiBase}/api/ack/acknowledge`, {
             method: 'POST',
@@ -120,30 +108,21 @@
         await renderOnce();
         return;
       }
-
-      // 'ok' -> do nothing
       return;
     }
 
-    // Plan modal close buttons
     if (e.target.id === 'plan-close-1' || e.target.id === 'plan-close-2') {
       showModal(false);
       return;
     }
-
-    // Click on backdrop closes
     if (e.target.classList.contains('modal')) {
       showModal(false);
       return;
     }
   });
 
-  // ESC key closes modal
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') showModal(false);
-  });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') showModal(false); });
 
-  // Core render
   async function renderOnce() {
     const params = new URLSearchParams({
       is_24h: String(state.clockMode === 24 ? 1 : 0),
@@ -162,43 +141,33 @@
     state.lastPullIso    = data.last_pull_local_iso || null;
     state.nextRefreshIso = data.next_pull_local_iso || null;
 
-    if (refreshSel && data.refresh_minutes) {
-      refreshSel.value = String(data.refresh_minutes);
-    }
+    if (refreshSel && data.refresh_minutes) refreshSel.value = String(data.refresh_minutes);
 
-    // header label from API (single source of truth)
     const label = (data.window && data.window.label) || data.looking_through || '—';
     setText('#looking-through', label);
     setText('#last-pull', data.last_pull_local ?? '—');
 
-    const base = (data.next_pull_local && data.tz_label)
-      ? `${data.next_pull_local} (${data.tz_label})`
-      : '—';
+    const base = (data.next_pull_local && data.tz_label) ? `${data.next_pull_local} (${data.tz_label})` : '—';
     const nextEl = qs('#next-refresh');
     if (nextEl) nextEl.innerHTML = `${esc(base)} <span id="next-refresh-eta"></span>`;
 
     const tbody = qs('#pairings-body');
-    state.rowsCache = (data.rows || []).slice(); // cache for repaint
+    state.rowsCache = (data.rows || []).slice();
     tbody.innerHTML = state.rowsCache.map(row => renderRowHTML(row, HOME_BASE)).join('');
 
-    // After inserting HTML, do an initial repaint to the current mode
     repaintTimesOnly();
   }
 
-  // Helpers for start airport / out-of-base pill
   function firstDepartureAirport(row) {
     const days = row?.days || [];
     for (const d of days) {
       const legs = d?.legs || [];
-      if (legs.length && legs[0].dep) {
-        return String(legs[0].dep).toUpperCase();
-      }
+      if (legs.length && legs[0].dep) return String(legs[0].dep).toUpperCase();
     }
     return null;
   }
 
   function renderRowHTML(row, homeBase) {
-    /* OFF row: put duration in Release column */
     if (row.kind === 'off') {
       return `
         <tr class="off">
@@ -219,11 +188,9 @@
 
     const checkCell = renderCheckCell(row);
 
-    // Use ISO datetimes for summary report/release so we can repaint cleanly
     const repIso = row.report_local_iso || row.ack?.report_local_iso || row.display?.report_iso || '';
     const relIso = row.release_local_iso || row.display?.release_iso || '';
 
-    // Summary date/time cells are painted via JS with .js-dt
     return `
       <tr class="summary">
         ${checkCell}
@@ -281,18 +248,17 @@
       return `
         <tr class="leg-row ${leg.done ? 'leg-done' : ''}">
           <td>${esc(leg.flight || '')}</td>
-          <td>${esc(leg.dep || '')}–${esc(leg.arr || '')}</td>
-          <td>
-            <span class="bt">
-              <span class="bt-dep js-time"${depAttr}></span>
-              <span class="bt-arrow">→</span>
-              <span class="bt-arr js-time"${arrAttr}></span>
+          <td class="route-cell">
+            <span class="route-code">${esc((leg.dep || '') + '–' + (leg.arr || ''))}</span>
+            <span class="route-times">
+              <span class="js-time"${depAttr}></span>
+              &nbsp;→&nbsp;
+              <span class="js-time"${arrAttr}></span>
             </span>
           </td>
         </tr>`;
     }).join('');
 
-    // Day header report/release (time repaintable)
     const repMin = parseClockishToMin(day.report_time || day.report || '');
     const relMin = parseClockishToMin(day.release_time || day.release || '');
     const repAttr = repMin != null ? ` data-min="${repMin}"` : '';
@@ -313,7 +279,7 @@
         ${legs ? `
           <div class="legs-wrap">
             <table class="legs" style="display:none">
-              <thead><tr><th>Flight</th><th>Route</th><th>Block Times</th></tr></thead>
+              <thead><tr><th>Flight</th><th>Route</th></tr></thead>
               <tbody>${legs}</tbody>
             </table>
           </div>` : `<div class="muted subnote">No legs parsed.</div>`}
@@ -364,9 +330,8 @@
     document.body.classList.toggle('modal-open', show);
   }
 
-  // ====== Time repaint (no layout change) ======
+  /* ===== Repaint times (summary + day header + legs) ===== */
   function repaintTimesOnly() {
-    // Summary report/release (ISO => full date + time)
     document.querySelectorAll('.js-dt').forEach(el => {
       const iso = el.getAttribute('data-iso') || '';
       if (!iso) { el.textContent = '—'; return; }
@@ -375,7 +340,6 @@
       el.textContent = formatSummaryDateTime(d, state.clockMode);
     });
 
-    // Any element with minutes since midnight
     document.querySelectorAll('.js-time').forEach(el => {
       const minAttr = el.getAttribute('data-min');
       if (minAttr == null || minAttr === '') { el.textContent = ''; return; }
@@ -384,8 +348,7 @@
     });
   }
 
-  // ===== Formatting helpers =====
-  // Produce "Wed Oct 08 11:15 AM"  (or "Wed Oct 08 1115" for 24h)
+  /* ===== Formatting helpers ===== */
   function formatSummaryDateTime(d, mode) {
     const wd = d.toLocaleDateString(undefined, { weekday:'short' });
     const mo = d.toLocaleDateString(undefined, { month:'short' });
@@ -394,12 +357,10 @@
     return `${wd} ${mo} ${da} ${time}`;
   }
 
-  // Parse "11:15 AM", "07:00", "1115", "7:00 pm" -> minutes since midnight
   function parseClockishToMin(s) {
     if (!s) return null;
     const str = String(s).trim().toUpperCase();
 
-    // 12h like "11:15 AM"
     let m = str.match(/^(\d{1,2}):?(\d{2})\s*(AM|PM)$/);
     if (m) {
       let h = parseInt(m[1], 10);
@@ -410,45 +371,34 @@
       return h*60 + mm;
     }
 
-    // 24h with colon "07:30"
     m = str.match(/^(\d{2}):(\d{2})$/);
     if (m) return parseInt(m[1],10)*60 + parseInt(m[2],10);
 
-    // 24h "0730" or "730" -> 7:30
     m = str.match(/^(\d{3,4})$/);
     if (m) {
       const v = m[1].padStart(4,'0');
       return parseInt(v.slice(0,2),10)*60 + parseInt(v.slice(2),10);
     }
-
     return null;
   }
 
-  // Turn minutes since midnight into "11:15 AM" (12h) or "1115" (24h, no colon)
+  // 12h -> "7:05 PM", 24h -> "1905" (no colon)
   function formatMinutesToString(mins, mode) {
     if (mins == null || isNaN(mins)) return '';
-    mins = ((mins % (24*60)) + (24*60)) % (24*60); // clamp
-
+    mins = ((mins % (24*60)) + (24*60)) % (24*60);
     const h24 = Math.floor(mins/60);
     const mm = (mins % 60).toString().padStart(2,'0');
-
-    if (mode === 24) {
-      // No colon per your request
-      return `${h24.toString().padStart(2,'0')}${mm}`;
-    }
-    // 12h
+    if (mode === 24) return `${h24.toString().padStart(2,'0')}${mm}`;
     const ap = h24 < 12 ? 'AM' : 'PM';
     let h12 = h24 % 12; if (h12 === 0) h12 = 12;
     return `${h12}:${mm} ${ap}`;
   }
 
-  // Status line tick
   function tickStatusLine() {
     if (state.lastPullIso) {
       const ago = preciseAgo(new Date(state.lastPullIso));
       setText('#last-pull', ago);
     }
-
     const etaEl = qs('#next-refresh-eta');
     if (!etaEl || !state.nextRefreshIso) return;
 

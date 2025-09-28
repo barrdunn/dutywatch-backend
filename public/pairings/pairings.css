@@ -25,7 +25,7 @@
   --ck-pending: #ffd166;
   --ck-ok: #57e389;
 
-  /* checkbox column width (used to align details capsule) */
+  /* checkbox column width */
   --ckcol-desktop: 54px;
   --ckcol-mobile: 48px;
   --ckcol: var(--ckcol-desktop);
@@ -76,7 +76,7 @@ h1 { margin: 0 0 8px; font-size: 22px; }
 #pairings th:nth-child(4), #pairings td:nth-child(4) { width: 22%; }
 #pairings th:nth-child(5), #pairings td:nth-child(5) { width: 28%; }
 
-/* no single-word wrapping in headers, except 'Check In' can wrap on mobile */
+/* no single-word wrapping in headers (except mobile first column) */
 #pairings th { white-space: nowrap; }
 @media (max-width: 640px) {
   :root { --ckcol: var(--ckcol-mobile); }
@@ -88,17 +88,9 @@ tr.summary, tr.summary td { cursor: pointer; }
 .dayhdr { cursor: pointer; }
 
 /* ===== First column (checkbox / “Check In”) ===== */
-th:first-child {
-  text-align: center; padding-left: 0; padding-right: 0;
-}
-td.ck {
-  padding: 0 !important;
-  text-align: center;
-}
-td.ck .ck-wrapper {
-  display:flex; align-items:center; justify-content:center;
-  width:100%; height:100%;
-}
+th:first-child { text-align:center; padding-left:0; padding-right:0; }
+td.ck { padding:0 !important; text-align:center; }
+td.ck .ck-wrapper { display:flex; align-items:center; justify-content:center; width:100%; height:100%; }
 
 /* bigger checkbox */
 .ckbox {
@@ -115,14 +107,10 @@ td.ck .ck-wrapper {
 .ck.ok .ckbox::after{
   content: "✓"; font-weight: 900; font-size: 14px; line-height: 1; color: #0b1510; transform: translateY(-1px);
 }
-.ckbtn{
-  appearance: none; background: transparent; border: 0;
-  padding: 0; margin: 0; cursor: pointer; line-height: 0;
-  display: inline-flex; align-items: center; justify-content: center;
-}
+.ckbtn{ appearance:none; background:transparent; border:0; padding:0; margin:0; cursor:pointer; line-height:0; display:inline-flex; align-items:center; justify-content:center; }
 .ckbtn[aria-disabled="true"]{ cursor: default; opacity: .9; }
 
-/* ===== Capsules that start AFTER the checkbox column ===== */
+/* ===== Capsules after checkbox ===== */
 tr.summary td:not(.ck){
   background: var(--pairing-bg);
   border-top: 1px solid var(--pairing-border);
@@ -138,7 +126,7 @@ tr.summary td:last-child{
   border-top-right-radius: 12px; border-bottom-right-radius: 12px;
 }
 
-/* OFF rows capsule */
+/* OFF rows */
 tr.off td:not(.ck){
   background: var(--row);
   border-top: 1px solid var(--border);
@@ -154,36 +142,21 @@ tr.off td:last-child{
 }
 .off-label, .off-dur { font-weight: 800; color: var(--off); }
 
-/* ===== DETAILS capsule (offset after checkbox column) ===== */
+/* ===== DETAILS capsule ===== */
 tr.details { display:none; }
 tr.summary.open + tr.details { display: table-row; }
-tr.details > td {
-  position: relative; background: transparent; border: 0; padding: 0;
-}
+tr.details > td { position: relative; background: transparent; border: 0; padding: 0; }
 tr.details > td::before {
-  content: "";
-  position: absolute;
-  left: var(--ckcol); right: 0; top: 0; bottom: 0;
-  background: var(--row-alt);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  z-index: 0;
+  content: ""; position: absolute; left: var(--ckcol); right: 0; top: 0; bottom: 0;
+  background: var(--row-alt); border: 1px solid var(--border); border-radius: 12px; z-index: 0;
 }
-.daysbox {
-  position: relative; z-index: 1;
-  padding: 12px 16px 14px;
-  border-radius: 10px;
-  margin-left: var(--ckcol);
-}
+.daysbox { position: relative; z-index: 1; padding: 12px 16px 14px; border-radius: 10px; margin-left: var(--ckcol); }
 
 /* Day header */
 .day { margin: 8px 0 14px; }
 .dayhdr{
-  background: rgba(73,179,124,.14);
-  border:0; border-radius:10px;
-  padding:8px 10px;
-  display:flex; gap:10px; align-items:center; flex-wrap:wrap;
-  font-weight:600;
+  background: rgba(73,179,124,.14); border:0; border-radius:10px;
+  padding:8px 10px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; font-weight:600;
 }
 .dayhdr .daytitle{ font-weight:600; }
 .dayhdr .helper{ margin-left:auto; font-weight:500; color:var(--muted); }
@@ -197,16 +170,10 @@ tr.details > td::before {
 .legs th{ color:var(--muted); font-size:12px; }
 .leg-done td{ text-decoration:line-through; color:var(--strike); }
 
-/* — Align Block Times (time / arrow / time grid) — */
-.bt{
-  display:grid;
-  grid-template-columns: 6ch 2ch 6ch;
-  align-items:center;
-  justify-items:start;
-  white-space:nowrap;
-}
-.bt .bt-dep, .bt .bt-arr { font-variant-numeric: tabular-nums; }
-.bt .bt-arrow { text-align:center; }
+/* Route cell: show route then block times inline */
+.route-cell { white-space: nowrap; }
+.route-cell .route-code { margin-right: 10px; }
+.route-cell .route-times { font-variant-numeric: tabular-nums; }
 
 /* pills */
 .pill{
@@ -222,26 +189,9 @@ tr.details > td::before {
    Modal
    ========================= */
 body.modal-open { overflow: hidden; }
-.modal{
-  position:fixed; inset:0; z-index:10000;
-  background:rgba(0,0,0,.55);
-  display:flex; align-items:center; justify-content:center;
-  padding:16px;
-}
-.modal-card{
-  background:var(--card);
-  border:1px solid var(--border);
-  border-radius:12px;
-  width:calc(100% - 32px);
-  max-width:720px; max-height:85vh;
-  overflow:auto;
-  box-shadow:0 20px 60px rgba(0,0,0,.6);
-}
-.modal-header,.modal-footer{
-  padding:12px 14px;
-  border-bottom:1px solid var(--border);
-  display:flex; align-items:center;
-}
+.modal{ position:fixed; inset:0; z-index:10000; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; padding:16px; }
+.modal-card{ background:var(--card); border:1px solid var(--border); border-radius:12px; width:calc(100% - 32px); max-width:720px; max-height:85vh; overflow:auto; box-shadow:0 20px 60px rgba(0,0,0,.6); }
+.modal-header,.modal-footer{ padding:12px 14px; border-bottom:1px solid var(--border); display:flex; align-items:center; }
 .modal-footer{ border-top:1px solid var(--border); border-bottom:0; justify-content:flex-end; }
 .modal-header h2{ margin:0; font-size:18px; }
 .modal-close{ margin-left:auto; background:transparent; border:0; color:var(--text); font-size:20px; cursor:pointer; }
