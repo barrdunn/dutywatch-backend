@@ -3,6 +3,7 @@
   const apiBase = cfg.apiBase || '';
   const HOME_BASE = (cfg.baseAirport || 'DFW').toUpperCase();
 
+  // iOS detection for minor CSS tweaks (kept)
   const IS_IOS = /iP(ad|hone|od)/.test(navigator.platform)
     || (navigator.userAgent.includes('Mac') && 'ontouchend' in document);
   document.documentElement.classList.toggle('ios', IS_IOS);
@@ -15,11 +16,13 @@
     _zeroKick: 0,
   };
 
+  // Public action
   window.dwManualRefresh = async function () {
     try { await fetch(apiBase + '/api/refresh', { method: 'POST' }); }
     catch (e) { console.error(e); }
   };
 
+  // Controls
   const refreshSel = document.getElementById('refresh-mins');
   if (refreshSel) {
     if (cfg.refreshMinutes) refreshSel.value = String(cfg.refreshMinutes);
@@ -40,12 +43,17 @@
     clockSel.value = String(state.clockMode);
     clockSel.addEventListener('change', async () => {
       state.clockMode = parseInt(clockSel.value, 10) === 12 ? 12 : 24;
+      // Re-render by re-fetching all rows with is_24h flag to get report/release/legs in correct format
       await renderOnce();
+      // If the plan modal is open, re-open/redraw it with new time format on next click.
+      // (We purposely keep modal content simple: it is regenerated every time you open it.)
     });
   }
 
+  // First paint
   renderOnce();
 
+  // SSE
   try {
     const es = new EventSource(apiBase + '/api/events');
     es.addEventListener('hello', () => {});
@@ -53,9 +61,12 @@
     es.addEventListener('schedule_update', async () => { await renderOnce(); });
   } catch {}
 
+  // Status ticker
   setInterval(tickStatusLine, 1000);
 
+  // Global click handlers
   document.addEventListener('click', async (e) => {
+    // Expand/collapse pairing rows (ignore clicks on checkbox)
     const sum = e.target.closest('tr.summary');
     if (sum && !e.target.closest('[data-ck]')) {
       sum.classList.toggle('open');
@@ -71,6 +82,7 @@
       return;
     }
 
+    // Day header toggles its legs
     const hdr = e.target.closest('.dayhdr');
     if (hdr) {
       const day = hdr.closest('.day');
@@ -83,6 +95,7 @@
       return;
     }
 
+    // Check-in checkbox behavior
     const ckBtn = e.target.closest('[data-ck]');
     if (ckBtn) {
       const stateAttr = ckBtn.getAttribute('data-ck');
@@ -90,11 +103,13 @@
       const reportIso = ckBtn.getAttribute('data-report') || '';
 
       if (stateAttr === 'off') {
+        // Show plan modal when window is not open
         await openPlan(pairingId, reportIso);
         return;
       }
 
       if (stateAttr === 'pending') {
+        // Acknowledge immediately
         try {
           await fetch(`${apiBase}/api/ack/acknowledge`, {
             method: 'POST',
@@ -108,23 +123,29 @@
         return;
       }
 
+      // 'ok' -> do nothing
       return;
     }
 
+    // Plan modal close buttons
     if (e.target.id === 'plan-close-1' || e.target.id === 'plan-close-2') {
       showModal(false);
       return;
     }
+
+    // Click on backdrop closes
     if (e.target.classList.contains('modal')) {
       showModal(false);
       return;
     }
   });
 
+  // ESC key closes modal
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') showModal(false);
   });
 
+  // Core render
   async function renderOnce() {
     const params = new URLSearchParams({
       is_24h: String(state.clockMode === 24 ? 1 : 0),
@@ -147,6 +168,7 @@
       refreshSel.value = String(data.refresh_minutes);
     }
 
+    // header label from API (single source of truth)
     const label = (data.window && data.window.label) || data.looking_through || '—';
     setText('#looking-through', label);
     setText('#last-pull', data.last_pull_local ?? '—');
@@ -161,6 +183,7 @@
     tbody.innerHTML = (data.rows || []).map(row => renderRowHTML(row, HOME_BASE)).join('');
   }
 
+  // Helpers for start airport / out-of-base pill
   function firstDepartureAirport(row) {
     const days = row?.days || [];
     for (const d of days) {
@@ -173,6 +196,7 @@
   }
 
   function renderRowHTML(row, homeBase) {
+    /* OFF row: put duration in Release column (kept) */
     if (row.kind === 'off') {
       return `
         <tr class="off">
@@ -271,27 +295,43 @@
       </div>`;
   }
 
-  /* ===== Plan modal: When = TIME first, then date (date shows only when it changes) ===== */
+  // ---- Time + Date helpers for the plan modal (12h / 24h aware)
+  function fmtTime(d, is24) {
+    if (is24) {
+      // 24h HH:MM
+      const hh = String(d.getHours()).padStart(2, '0');
+      const mm = String(d.getMinutes()).padStart(2, '0');
+      return `${hh}:${mm}`;
+    }
+    // 12h h:MM AM/PM
+    const h = d.getHours();
+    const hh12 = (h % 12) || 12;
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    const ampm = h < 12 ? 'AM' : 'PM';
+    return `${hh12}:${mm} ${ampm}`;
+  }
+  const fmtDate = (d) => `${d.getMonth() + 1}/${d.getDate()}`;
+
+  // Plan modal (When column shows TIME then DATE; 12/24h according to state.clockMode)
   async function openPlan(pairingId, reportIso) {
     try {
       const res = await fetch(`${apiBase}/api/ack/plan?pairing_id=${encodeURIComponent(pairingId)}&report_local_iso=${encodeURIComponent(reportIso)}`);
       const data = await res.json();
 
-      const fmtTime = (d) => d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-      const fmtDate = (d) => `${d.getMonth() + 1}/${d.getDate()}`;
+      const use24 = state.clockMode === 24;
 
       let lastDateKey = null;
       const rows = (data.attempts || []).map(a => {
         const d = new Date(a.at_iso);
-        const t = fmtTime(d);
-        const date = fmtDate(d);
-        const showDate = date !== lastDateKey;
-        if (showDate) lastDateKey = date;
+        const timeStr = fmtTime(d, use24);
+        const dateStr = fmtDate(d);
+        const showDate = dateStr !== lastDateKey;
+        if (showDate) lastDateKey = dateStr;
 
-        // TIME first; on same-date rows, show only time
+        // TIME first; show DATE only when it changes (and always after time)
         const whenHTML = showDate
-          ? `<span class="plan-when"><span class="plan-time">${esc(t)}</span><span class="plan-date"> ${esc(date)}</span></span>`
-          : `<span class="plan-when"><span class="plan-time">${esc(t)}</span></span>`;
+          ? `<span class="plan-when"><span class="plan-time">${esc(timeStr)}</span><span class="plan-date"> ${esc(dateStr)}</span></span>`
+          : `<span class="plan-when"><span class="plan-time">${esc(timeStr)}</span></span>`;
 
         const type = (a.kind || '').toUpperCase();
         const det  = a.label || '';
@@ -319,11 +359,13 @@
     document.body.classList.toggle('modal-open', show);
   }
 
+  // Status line tick
   function tickStatusLine() {
     if (state.lastPullIso) {
       const ago = preciseAgo(new Date(state.lastPullIso));
       setText('#last-pull', ago);
     }
+
     const etaEl = qs('#next-refresh-eta');
     if (!etaEl || !state.nextRefreshIso) return;
 
