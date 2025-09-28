@@ -25,18 +25,13 @@
   --ck-pending: #ffd166;
   --ck-ok: #57e389;
 
-  /* checkbox column width (controls first column + details offset) */
-  --ckcol-desktop: 76px;   /* desktop: “Check In” stays one line */
-  --ckcol-mobile: 55px;    /* mobile: “Check In” may wrap to 2 lines */
+  /* checkbox column width (used to align details capsule) */
+  --ckcol-desktop: 54px;
+  --ckcol-mobile: 48px;
   --ckcol: var(--ckcol-desktop);
 }
 
-@media (max-width: 640px) {
-  :root { --ckcol: var(--ckcol-mobile); }
-}
-
 * { box-sizing: border-box; }
-
 html, body { overflow-x: hidden; }
 
 body {
@@ -67,56 +62,42 @@ h1 { margin: 0 0 8px; font-size: 22px; }
 .btn { background:var(--accent); color:#031323; border:0; border-radius:10px; padding:8px 12px; font-weight:600; cursor:pointer; }
 .toggle, select.toggle { background:transparent; color:var(--text); border:1px solid var(--border); border-radius:10px; padding:6px 10px; cursor:pointer; }
 
-/* table */
-table { width:100%; border-collapse:separate; border-spacing:0 10px; }
-th, td { padding:10px 12px; vertical-align: middle; }
+/* =========================
+   Main table (LOCKED columns)
+   ========================= */
+#pairings { width:100%; border-collapse:separate; border-spacing:0 10px; table-layout: fixed; }
+#pairings th, #pairings td { padding:10px 12px; vertical-align: middle; text-align:left; }
+#pairings th { color:var(--muted); font-weight:600; border-bottom:1px solid var(--border); }
 
-/* header labels: default = single-line, no wrapping or hyphenation */
-th {
-  color:var(--muted);
-  font-weight:600;
-  text-align:left;
-  border-bottom:1px solid var(--border);
-  white-space: nowrap;          /* never wrap by default */
-  overflow: hidden;
-  text-overflow: ellipsis;
-  word-break: normal;           /* no mid-word breaks */
-  overflow-wrap: normal;
-  hyphens: none;
+/* fixed column widths so toggling 12/24 doesn’t move anything */
+#pairings th:nth-child(1), #pairings td:nth-child(1) { width: var(--ckcol); min-width: var(--ckcol); }
+#pairings th:nth-child(2), #pairings td:nth-child(2) { width: 28%; }
+#pairings th:nth-child(3), #pairings td:nth-child(3) { width: 22%; }
+#pairings th:nth-child(4), #pairings td:nth-child(4) { width: 22%; }
+#pairings th:nth-child(5), #pairings td:nth-child(5) { width: 28%; }
+
+/* no single-word wrapping in headers, except 'Check In' can wrap on mobile */
+#pairings th { white-space: nowrap; }
+@media (max-width: 640px) {
+  :root { --ckcol: var(--ckcol-mobile); }
+  #pairings th:first-child { white-space: normal; } /* allow “Check In” to wrap */
 }
 
 /* clickable cues */
 tr.summary, tr.summary td { cursor: pointer; }
 .dayhdr { cursor: pointer; }
 
-/* ===== First column (Check In / checkbox) ===== */
+/* ===== First column (checkbox / “Check In”) ===== */
 th:first-child {
-  width: var(--ckcol);
-  min-width: var(--ckcol);
-  text-align: center;
-  padding-left: 0;
-  padding-right: 0;
-
-  /* Allow “Check In” to wrap between words ONLY (no intra-word breaks) */
-  white-space: normal;          /* enable wrap */
-  word-break: keep-all;         /* do not break inside words */
-  overflow-wrap: normal;
-  hyphens: none;
+  text-align: center; padding-left: 0; padding-right: 0;
 }
-
 td.ck {
-  width: var(--ckcol);
-  min-width: var(--ckcol);
   padding: 0 !important;
-  vertical-align: middle;
   text-align: center;
 }
 td.ck .ck-wrapper {
-  display: flex;
-  align-items: center;     /* vertical center */
-  justify-content: center; /* horizontal center */
-  width: 100%;
-  height: 100%;
+  display:flex; align-items:center; justify-content:center;
+  width:100%; height:100%;
 }
 
 /* bigger checkbox */
@@ -141,10 +122,6 @@ td.ck .ck-wrapper {
 }
 .ckbtn[aria-disabled="true"]{ cursor: default; opacity: .9; }
 
-@media (max-width: 640px) {
-  .ckbox { width: 22px; height: 22px; }
-}
-
 /* ===== Capsules that start AFTER the checkbox column ===== */
 tr.summary td:not(.ck){
   background: var(--pairing-bg);
@@ -152,7 +129,6 @@ tr.summary td:not(.ck){
   border-bottom: 1px solid var(--pairing-border);
 }
 tr.summary:hover td:not(.ck){ background: var(--pairing-bg-hover); }
-
 tr.summary td.sum-first{
   border-left: 1px solid var(--pairing-border);
   border-top-left-radius: 12px; border-bottom-left-radius: 12px;
@@ -162,7 +138,7 @@ tr.summary td:last-child{
   border-top-right-radius: 12px; border-bottom-right-radius: 12px;
 }
 
-/* OFF rows */
+/* OFF rows capsule */
 tr.off td:not(.ck){
   background: var(--row);
   border-top: 1px solid var(--border);
@@ -178,14 +154,11 @@ tr.off td:last-child{
 }
 .off-label, .off-dur { font-weight: 800; color: var(--off); }
 
-/* ===== DETAILS capsule (after checkbox) ===== */
+/* ===== DETAILS capsule (offset after checkbox column) ===== */
 tr.details { display:none; }
 tr.summary.open + tr.details { display: table-row; }
 tr.details > td {
-  position: relative;
-  background: transparent;
-  border: 0;
-  padding: 0;
+  position: relative; background: transparent; border: 0; padding: 0;
 }
 tr.details > td::before {
   content: "";
@@ -224,6 +197,17 @@ tr.details > td::before {
 .legs th{ color:var(--muted); font-size:12px; }
 .leg-done td{ text-decoration:line-through; color:var(--strike); }
 
+/* — Align Block Times (time / arrow / time grid) — */
+.bt{
+  display:grid;
+  grid-template-columns: 6ch 2ch 6ch;
+  align-items:center;
+  justify-items:start;
+  white-space:nowrap;
+}
+.bt .bt-dep, .bt .bt-arr { font-variant-numeric: tabular-nums; }
+.bt .bt-arrow { text-align:center; }
+
 /* pills */
 .pill{
   display:inline-flex; align-items:center; gap:6px;
@@ -232,11 +216,10 @@ tr.details > td::before {
   padding:3px 8px; border-radius:999px; margin-left:8px;
 }
 .pill-red{ background:var(--red); color:#130606; margin-left:8px; }
-
 .progress{ font-weight:800; margin-left:8px; color:var(--green); }
 
 /* =========================
-   Modal base
+   Modal
    ========================= */
 body.modal-open { overflow: hidden; }
 .modal{
@@ -263,54 +246,17 @@ body.modal-open { overflow: hidden; }
 .modal-header h2{ margin:0; font-size:18px; }
 .modal-close{ margin-left:auto; background:transparent; border:0; color:var(--text); font-size:20px; cursor:pointer; }
 .modal-content{ padding:14px; }
-
-/* ---------- Plan table (equal thirds on ALL sizes) ---------- */
-.plan-table{
-  width: 100%;
-  border-collapse: collapse;
-  table-layout: fixed;        /* equal widths */
-}
-.plan-table th,
-.plan-table td{
-  border-bottom:1px solid var(--border);
-  padding:8px 10px;
-  width:33.3333%;
-  min-width:0;
-}
-
-/* Plan table headers: never wrap (except we don't need special-case here) */
-.plan-table th{
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  word-break: normal;
-  overflow-wrap: normal;
-  hyphens: none;
-}
-
-.plan-table th:first-child,
-.plan-table td:first-child{ text-align: left; }
-.plan-table th:nth-child(2),
-.plan-table td:nth-child(2){ text-align: center; }
-.plan-table th:nth-child(3),
-.plan-table td:nth-child(3){ text-align: left; }
-
+.plan-table{ width:100%; border-collapse:collapse; table-layout: fixed; }
+.plan-table th,.plan-table td{ border-bottom:1px solid var(--border); padding:8px 10px; width:33.3333%; }
+.plan-table th:nth-child(1), .plan-table td:nth-child(1){ text-align:left; }
+.plan-table th:nth-child(2), .plan-table td:nth-child(2){ text-align:center; }
+.plan-table th:nth-child(3), .plan-table td:nth-child(3){ text-align:left; }
 .plan-meta{ margin-bottom:8px; }
 
 /* utils */
 .muted{ color:var(--muted); }
 .hidden{ display:none!important; }
 
-/* iOS global safety for legs table */
+/* iOS safety for table wrapping */
 .ios table { table-layout: fixed; }
 .ios th, .ios td { word-break: break-word; overflow-wrap:anywhere; }
-
-/* iPhone: flight col protection (kept) */
-.ios .legs { table-layout: auto !important; }
-.ios .legs th:first-child, .ios .legs td:first-child { min-width:5.75em; white-space:nowrap; word-break:normal; }
-.ios .legs th:nth-child(2), .ios .legs td:nth-child(2) { min-width:6.5em; word-break:keep-all; }
-.ios .legs td:nth-child(3) { overflow-wrap:anywhere; }
-
-/* inline bits inside When/Check In cell in modal */
-.plan-when .plan-time { font-weight: 600; }
-.plan-when .plan-date { opacity: .9; margin-left: .35rem; }

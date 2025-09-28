@@ -1,24 +1,29 @@
 (function () {
-  // ---------------- boot config ----------------
   const cfg = safeParseJSON(document.getElementById('dw-boot')?.textContent) || {};
   const apiBase = cfg.apiBase || '';
   const HOME_BASE = (cfg.baseAirport || 'DFW').toUpperCase();
 
+  // iOS flag (small CSS tweaks)
+  const IS_IOS = /iP(ad|hone|od)/.test(navigator.platform)
+    || (navigator.userAgent.includes('Mac') && 'ontouchend' in document);
+  document.documentElement.classList.toggle('ios', IS_IOS);
+
   const state = {
     lastPullIso: null,
     nextRefreshIso: null,
-    clockMode: cfg.clockMode === '24' ? 24 : 12,  // default 12h
+    clockMode: cfg.clockMode === '24' ? 24 : 12, // default 12h
     onlyReports: cfg.onlyReports !== false,
     _zeroKick: 0,
+    rowsCache: null,      // keep last fetched rows so we can repaint without re-render
   };
 
-  // ---------------- public action ----------------
+  // Public action
   window.dwManualRefresh = async function () {
     try { await fetch(apiBase + '/api/refresh', { method: 'POST' }); }
     catch (e) { console.error(e); }
   };
 
-  // ---------------- controls ----------------
+  // Controls
   const refreshSel = document.getElementById('refresh-mins');
   if (refreshSel) {
     if (cfg.refreshMinutes) refreshSel.value = String(cfg.refreshMinutes);
@@ -38,14 +43,15 @@
   if (clockSel) {
     clockSel.value = String(state.clockMode);
     clockSel.addEventListener('change', async () => {
-      state.clockMode = parseInt(clockSel.value, 10) === 12 ? 12 : 24;
-      repaintTimesOnly(); // no layout change, no row close
+      state.clockMode = parseInt(clockSel.value, 10) === 24 ? 24 : 12;
+      repaintTimesOnly(); // just repaint strings; don’t rebuild DOM/layout
     });
   }
 
-  // ---------------- first paint + SSE ----------------
+  // First paint
   renderOnce();
 
+  // SSE
   try {
     const es = new EventSource(apiBase + '/api/events');
     es.addEventListener('hello', () => {});
@@ -53,12 +59,12 @@
     es.addEventListener('schedule_update', async () => { await renderOnce(); });
   } catch {}
 
-  // ---------------- status ticker ----------------
+  // Status ticker
   setInterval(tickStatusLine, 1000);
 
-  // ---------------- global clicks ----------------
+  // Global click handlers
   document.addEventListener('click', async (e) => {
-    // Expand/collapse summary (ignore clicks on the check-in button)
+    // Expand/collapse pairing rows (ignore clicks on checkbox)
     const sum = e.target.closest('tr.summary');
     if (sum && !e.target.closest('[data-ck]')) {
       sum.classList.toggle('open');
@@ -87,7 +93,7 @@
       return;
     }
 
-    // Check-in button behavior
+    // Check-in checkbox behavior
     const ckBtn = e.target.closest('[data-ck]');
     if (ckBtn) {
       const stateAttr = ckBtn.getAttribute('data-ck');
@@ -95,11 +101,13 @@
       const reportIso = ckBtn.getAttribute('data-report') || '';
 
       if (stateAttr === 'off') {
+        // Show plan modal when window is not open
         await openPlan(pairingId, reportIso);
         return;
       }
 
       if (stateAttr === 'pending') {
+        // Acknowledge immediately
         try {
           await fetch(`${apiBase}/api/ack/acknowledge`, {
             method: 'POST',
@@ -112,14 +120,17 @@
         await renderOnce();
         return;
       }
+
+      // 'ok' -> do nothing
       return;
     }
 
-    // Plan modal close
+    // Plan modal close buttons
     if (e.target.id === 'plan-close-1' || e.target.id === 'plan-close-2') {
       showModal(false);
       return;
     }
+
     // Click on backdrop closes
     if (e.target.classList.contains('modal')) {
       showModal(false);
@@ -132,7 +143,7 @@
     if (e.key === 'Escape') showModal(false);
   });
 
-  // ---------------- render ----------------
+  // Core render
   async function renderOnce() {
     const params = new URLSearchParams({
       is_24h: String(state.clockMode === 24 ? 1 : 0),
@@ -155,7 +166,7 @@
       refreshSel.value = String(data.refresh_minutes);
     }
 
-    // Header
+    // header label from API (single source of truth)
     const label = (data.window && data.window.label) || data.looking_through || '—';
     setText('#looking-through', label);
     setText('#last-pull', data.last_pull_local ?? '—');
@@ -166,135 +177,15 @@
     const nextEl = qs('#next-refresh');
     if (nextEl) nextEl.innerHTML = `${esc(base)} <span id="next-refresh-eta"></span>`;
 
-    // Body
     const tbody = qs('#pairings-body');
-    tbody.innerHTML = (data.rows || []).map(row => renderRowHTML(row, HOME_BASE)).join('');
+    state.rowsCache = (data.rows || []).slice(); // cache for repaint
+    tbody.innerHTML = state.rowsCache.map(row => renderRowHTML(row, HOME_BASE)).join('');
 
-    // After fresh markup, ensure initial time paint is correct for current mode
+    // After inserting HTML, do an initial repaint to the current mode
     repaintTimesOnly();
   }
 
-  // ---------------- formatting helpers ----------------
-  function qs(sel) { return document.querySelector(sel); }
-  function setText(sel, v) { const el = qs(sel); if (el) el.textContent = v; }
-  function safeParseJSON(s) { try { return JSON.parse(s || '{}'); } catch { return null; } }
-  function esc(s) {
-    return String(s).replace(/[&<>"'`=\/]/g, (ch) =>
-      ({'&':'&amp;','<':'&#x3E;','"':'&quot;',"'":'&#39;','/':'&#x2F;','`':'&#x60;','=':'&#x3D;'}[ch])
-    );
-  }
-
-  // Convert ISO string to minutes since midnight (local)
-  function isoToMinutes(iso) {
-    if (!iso) return null;
-    const d = new Date(iso);
-    if (isNaN(d)) return null;
-    return d.getHours() * 60 + d.getMinutes();
-    // seconds ignored intentionally; we never show seconds
-  }
-
-  // Parse "11:15 AM", "1115", "07:00", "700", etc. -> minutes since midnight
-  function parseClockishToMin(s) {
-    if (!s) return null;
-    const str = String(s).trim().toUpperCase();
-    // "11:15 AM" / "7:05 PM"
-    let m = str.match(/^(\d{1,2}):?(\d{2})\s*(AM|PM)?$/i);
-    if (m) {
-      let h = parseInt(m[1],10);
-      const min = parseInt(m[2],10);
-      const ap = (m[3]||'').toUpperCase();
-      if (ap === 'AM') { if (h === 12) h = 0; }
-      else if (ap === 'PM') { if (h !== 12) h += 12; }
-      return h*60 + min;
-    }
-    // "700", "1135" (24h)
-    m = str.match(/^(\d{1,2})(\d{2})$/);
-    if (m) {
-      let h = parseInt(m[1],10);
-      const min = parseInt(m[2],10);
-      if (h >= 0 && h <= 23 && min >= 0 && min <= 59) return h*60 + min;
-    }
-    return null;
-  }
-
-  // 12/24 formatter for minutes since midnight
-  function fmtMin(min, is24) {
-    min = Math.max(0, Math.min(1439, min|0));
-    const h = Math.floor(min/60);
-    const m = min % 60;
-    if (is24) {
-      // no colon in 24h per request
-      return String(h).padStart(2,'0') + String(m).padStart(2,'0');
-    } else {
-      const ap = h < 12 ? 'AM' : 'PM';
-      const hh = (h % 12) || 12;
-      return `${hh}:${String(m).padStart(2,'0')} ${ap}`;
-    }
-  }
-
-  // "Wed Oct 08"
-  function wkdMonDay(d) {
-    const wk = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()];
-    const mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()];
-    const dd = String(d.getDate()).padStart(2,'0');
-    return `${wk} ${mo} ${dd}`;
-  }
-
-  // Build an in-place repaintable time span
-  // datePrefix is shown BEFORE time (summary rows)
-  function timeSpanHTML(minOrNull, fallback, datePrefix /* optional */) {
-    const hasMin = minOrNull != null && !isNaN(minOrNull);
-    const timeText = hasMin ? fmtMin(minOrNull, state.clockMode === 24) : (fallback || '');
-    const prefix = datePrefix ? datePrefix + ' ' : '';
-    return `<span class="js-time tabnums"
-              ${hasMin ? `data-min="${minOrNull}"` : ''}
-              ${datePrefix ? `data-date="${esc(datePrefix)}"` : ''}>${esc(prefix + timeText)}</span>`;
-  }
-
-  // Repaint ALL .js-time for current mode, preserving any date prefix
-  function repaintTimesOnly() {
-    const is24 = state.clockMode === 24;
-    document.querySelectorAll('.js-time').forEach(el => {
-      const raw = el.getAttribute('data-min');
-      if (raw == null || raw === '') return;
-      const mins = parseInt(raw, 10);
-      const datePrefix = el.getAttribute('data-date');
-      const t = fmtMin(mins, is24);
-      el.textContent = datePrefix ? `${datePrefix} ${t}` : t;
-    });
-  }
-
-  function preciseAgo(d){
-    const sec = Math.max(0, Math.floor((Date.now() - d.getTime())/1000));
-    const m = Math.floor(sec/60), s = sec%60;
-    return m ? `${m}m ${s}s ago` : `${s}s ago`;
-  }
-
-  // ---------------- status line tick ----------------
-  function tickStatusLine() {
-    if (state.lastPullIso) {
-      const ago = preciseAgo(new Date(state.lastPullIso));
-      setText('#last-pull', ago);
-    }
-    const etaEl = qs('#next-refresh-eta');
-    if (!etaEl || !state.nextRefreshIso) return;
-
-    const diff = Math.floor((new Date(state.nextRefreshIso).getTime() - Date.now()) / 1000);
-    const left = Math.max(0, diff);
-    if (left > 0) {
-      const m = Math.floor(left / 60), s = left % 60;
-      etaEl.textContent = `in ${m}m ${s}s`;
-    } else {
-      etaEl.textContent = '(refreshing…)';
-      const now = Date.now();
-      if (!state._zeroKick || now - state._zeroKick > 4000) {
-        state._zeroKick = now;
-        renderOnce();
-      }
-    }
-  }
-
-  // ---------------- row render helpers ----------------
+  // Helpers for start airport / out-of-base pill
   function firstDepartureAirport(row) {
     const days = row?.days || [];
     for (const d of days) {
@@ -307,7 +198,7 @@
   }
 
   function renderRowHTML(row, homeBase) {
-    // OFF rows (duration in Release column)
+    /* OFF row: put duration in Release column */
     if (row.kind === 'off') {
       return `
         <tr class="off">
@@ -328,21 +219,11 @@
 
     const checkCell = renderCheckCell(row);
 
-    // ---- Summary report/release with DATE PREFIX (like screenshot) ----
-    const reportISO = row.report_local_iso || (row.days && row.days[0]?.report_local_iso) || '';
-    const releaseISO = (row.days && row.days[row.days.length-1]?.release_local_iso) || row.release_local_iso || '';
+    // Use ISO datetimes for summary report/release so we can repaint cleanly
+    const repIso = row.report_local_iso || row.ack?.report_local_iso || row.display?.report_iso || '';
+    const relIso = row.release_local_iso || row.display?.release_iso || '';
 
-    const repMin = isoToMinutes(reportISO) ?? parseClockishToMin(row.display?.report_str || row.report || '');
-    const relMin = isoToMinutes(releaseISO) ?? parseClockishToMin(row.display?.release_str || row.release || '');
-
-    const repDateP = reportISO ? wkdMonDay(new Date(reportISO)) : '';
-    const relDateP = releaseISO ? wkdMonDay(new Date(releaseISO)) : '';
-
-    const repSpan = timeSpanHTML(repMin, row.display?.report_str ?? row.report ?? '', repDateP);
-    const relSpan = timeSpanHTML(relMin, row.display?.release_str ?? row.release ?? '', relDateP);
-
-    const details = (row.days || []).map((day, i) => renderDayHTML(day, i)).join('');
-
+    // Summary date/time cells are painted via JS with .js-dt
     return `
       <tr class="summary">
         ${checkCell}
@@ -352,13 +233,13 @@
           ${oobPill}
           ${inProg}
         </td>
-        <td>${repSpan}</td>
-        <td>${relSpan}</td>
+        <td><span class="js-dt" data-iso="${esc(repIso)}"></span></td>
+        <td><span class="js-dt" data-iso="${esc(relIso)}"></span></td>
         <td class="muted">click to expand days</td>
       </tr>
       <tr class="details">
         <td colspan="5">
-          <div class="daysbox">${details}</div>
+          <div class="daysbox">${(row.days || []).map((day, i) => renderDayHTML(day, i)).join('')}</div>
         </td>
       </tr>`;
   }
@@ -384,43 +265,49 @@
                   data-ck="${stateAttr}"
                   data-pairing="${esc(row.pairing_id || '')}"
                   data-report="${esc((ack && ack.report_local_iso) || '')}">
-            <span aria-hidden="true">Check In</span>
+            <span class="ckbox" aria-hidden="true"></span>
           </button>
         </div>
       </td>`;
   }
 
   function renderDayHTML(day, idx) {
-    // Legs with repaintable times
     const legs = (day.legs || []).map(leg => {
       const depMin = parseClockishToMin(leg.dep_time_str || leg.dep_time || leg.dep_hhmm || '');
       const arrMin = parseClockishToMin(leg.arr_time_str || leg.arr_time || leg.arr_hhmm || '');
-      const depSpan = timeSpanHTML(depMin, leg.dep_time_str || leg.dep_time || '', null);
-      const arrSpan = timeSpanHTML(arrMin, leg.arr_time_str || leg.arr_time || '', null);
+      const depAttr = depMin != null ? ` data-min="${depMin}"` : '';
+      const arrAttr = arrMin != null ? ` data-min="${arrMin}"` : '';
+
       return `
         <tr class="leg-row ${leg.done ? 'leg-done' : ''}">
           <td>${esc(leg.flight || '')}</td>
           <td>${esc(leg.dep || '')}–${esc(leg.arr || '')}</td>
-          <td>${depSpan}
-              &nbsp;→&nbsp;
-              ${arrSpan}</td>
+          <td>
+            <span class="bt">
+              <span class="bt-dep js-time"${depAttr}></span>
+              <span class="bt-arrow">→</span>
+              <span class="bt-arr js-time"${arrAttr}></span>
+            </span>
+          </td>
         </tr>`;
     }).join('');
 
-    // Day header times (no date prefix – keep compact)
-    const dRepMin = parseClockishToMin(day.report || day.report_time || '');
-    const dRelMin = parseClockishToMin(day.release || day.release_time || '');
-    const rep = timeSpanHTML(dRepMin, day.report || '', null);
-    const rel = timeSpanHTML(dRelMin, day.release || '', null);
+    // Day header report/release (time repaintable)
+    const repMin = parseClockishToMin(day.report_time || day.report || '');
+    const relMin = parseClockishToMin(day.release_time || day.release || '');
+    const repAttr = repMin != null ? ` data-min="${repMin}"` : '';
+    const relAttr = relMin != null ? ` data-min="${relMin}"` : '';
+
+    const hotel = day.hotel ? ` · ${esc(day.hotel)}` : '';
 
     return `
       <div class="day">
         <div class="dayhdr">
           <span class="dot"></span>
           <span class="daytitle">Day ${idx + 1}</span>
-          ${day.report ? `· Report ${rep}` : ''}
-          ${day.release ? `· Release ${rel}` : ''}
-          ${day.hotel ? `· ${esc(day.hotel)}` : ''}
+          ${repMin != null ? ` · Report <span class="js-time"${repAttr}></span>` : ''}
+          ${relMin != null ? ` · Release <span class="js-time"${relAttr}></span>` : ''}
+          ${hotel}
           <span class="helper">click to show legs</span>
         </div>
         ${legs ? `
@@ -433,34 +320,30 @@
       </div>`;
   }
 
-  // ---------------- plan modal ----------------
+  /* ===== Plan modal ===== */
   async function openPlan(pairingId, reportIso) {
     try {
       const res = await fetch(`${apiBase}/api/ack/plan?pairing_id=${encodeURIComponent(pairingId)}&report_local_iso=${encodeURIComponent(reportIso)}`);
       const data = await res.json();
 
       const fmtDate = (d) => `${d.getMonth()+1}/${d.getDate()}`;
-      const toMin = (d) => d.getHours()*60 + d.getMinutes();
+      let lastDate = null;
 
-      let lastDateKey = null;
-      const rows = (data.attempts || []).map(a => {
+      const rows = (data.attempts||[]).map(a => {
         const d = new Date(a.at_iso);
-        const dateKey = fmtDate(d);
-        const showDate = dateKey !== lastDateKey;
-        if (showDate) lastDateKey = dateKey;
+        const t = formatMinutesToString(d.getHours()*60 + d.getMinutes(), state.clockMode);
+        const date = fmtDate(d);
+        const showDate = (date !== lastDate);
+        if (showDate) lastDate = date;
 
-        const mins = toMin(d);
-        // we show TIME then date (no layout reflow on repaint)
         const whenHTML = showDate
-          ? `<span class="js-time tabnums" data-min="${mins}">${fmtMin(mins, state.clockMode===24)} <span class="muted">${dateKey}</span></span>`
-          : `<span class="js-time tabnums" data-min="${mins}">${fmtMin(mins, state.clockMode===24)}</span>`;
+          ? `<span class="plan-when"><span class="plan-time">${esc(t)}</span> <span class="plan-date">${esc(date)}</span></span>`
+          : `<span class="plan-when"><span class="plan-time">${esc(t)}</span></span>`;
 
-        const type = (a.kind || '').toUpperCase();
-        const det  = a.label || '';
         return `<tr>
           <td>${whenHTML}</td>
-          <td>${esc(type)}</td>
-          <td>${esc(det)}</td>
+          <td>${esc((a.kind||'').toUpperCase())}</td>
+          <td>${esc(a.label||'')}</td>
         </tr>`;
       }).join('');
 
@@ -469,9 +352,6 @@
         `Policy: push at T-${data.policy.window_open_hours}h and T-${data.policy.second_push_at_hours}h; ` +
         `calls from T-${data.policy.call_start_hours}h every ${data.policy.call_interval_minutes}m (2 rings/attempt)`;
       showModal(true);
-
-      // Ensure plan modal respects current clock mode
-      repaintTimesOnly();
     } catch (e) {
       console.error(e);
     }
@@ -483,4 +363,122 @@
     m.classList.toggle('hidden', !show);
     document.body.classList.toggle('modal-open', show);
   }
+
+  // ====== Time repaint (no layout change) ======
+  function repaintTimesOnly() {
+    // Summary report/release (ISO => full date + time)
+    document.querySelectorAll('.js-dt').forEach(el => {
+      const iso = el.getAttribute('data-iso') || '';
+      if (!iso) { el.textContent = '—'; return; }
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) { el.textContent = '—'; return; }
+      el.textContent = formatSummaryDateTime(d, state.clockMode);
+    });
+
+    // Any element with minutes since midnight
+    document.querySelectorAll('.js-time').forEach(el => {
+      const minAttr = el.getAttribute('data-min');
+      if (minAttr == null || minAttr === '') { el.textContent = ''; return; }
+      const mins = parseInt(minAttr, 10);
+      el.textContent = formatMinutesToString(mins, state.clockMode);
+    });
+  }
+
+  // ===== Formatting helpers =====
+  // Produce "Wed Oct 08 11:15 AM"  (or "Wed Oct 08 1115" for 24h)
+  function formatSummaryDateTime(d, mode) {
+    const wd = d.toLocaleDateString(undefined, { weekday:'short' });
+    const mo = d.toLocaleDateString(undefined, { month:'short' });
+    const da = d.getDate().toString().padStart(2,'0');
+    const time = formatMinutesToString(d.getHours()*60 + d.getMinutes(), mode);
+    return `${wd} ${mo} ${da} ${time}`;
+  }
+
+  // Parse "11:15 AM", "07:00", "1115", "7:00 pm" -> minutes since midnight
+  function parseClockishToMin(s) {
+    if (!s) return null;
+    const str = String(s).trim().toUpperCase();
+
+    // 12h like "11:15 AM"
+    let m = str.match(/^(\d{1,2}):?(\d{2})\s*(AM|PM)$/);
+    if (m) {
+      let h = parseInt(m[1], 10);
+      const mm = parseInt(m[2], 10);
+      const ap = m[3];
+      if (ap === 'PM' && h !== 12) h += 12;
+      if (ap === 'AM' && h === 12) h = 0;
+      return h*60 + mm;
+    }
+
+    // 24h with colon "07:30"
+    m = str.match(/^(\d{2}):(\d{2})$/);
+    if (m) return parseInt(m[1],10)*60 + parseInt(m[2],10);
+
+    // 24h "0730" or "730" -> 7:30
+    m = str.match(/^(\d{3,4})$/);
+    if (m) {
+      const v = m[1].padStart(4,'0');
+      return parseInt(v.slice(0,2),10)*60 + parseInt(v.slice(2),10);
+    }
+
+    return null;
+  }
+
+  // Turn minutes since midnight into "11:15 AM" (12h) or "1115" (24h, no colon)
+  function formatMinutesToString(mins, mode) {
+    if (mins == null || isNaN(mins)) return '';
+    mins = ((mins % (24*60)) + (24*60)) % (24*60); // clamp
+
+    const h24 = Math.floor(mins/60);
+    const mm = (mins % 60).toString().padStart(2,'0');
+
+    if (mode === 24) {
+      // No colon per your request
+      return `${h24.toString().padStart(2,'0')}${mm}`;
+    }
+    // 12h
+    const ap = h24 < 12 ? 'AM' : 'PM';
+    let h12 = h24 % 12; if (h12 === 0) h12 = 12;
+    return `${h12}:${mm} ${ap}`;
+  }
+
+  // Status line tick
+  function tickStatusLine() {
+    if (state.lastPullIso) {
+      const ago = preciseAgo(new Date(state.lastPullIso));
+      setText('#last-pull', ago);
+    }
+
+    const etaEl = qs('#next-refresh-eta');
+    if (!etaEl || !state.nextRefreshIso) return;
+
+    const diff = Math.floor((new Date(state.nextRefreshIso).getTime() - Date.now()) / 1000);
+    const left = Math.max(0, diff);
+    if (left > 0) {
+      const m = Math.floor(left / 60), s = left % 60;
+      etaEl.textContent = `in ${m}m ${s}s`;
+    } else {
+      etaEl.textContent = '(refreshing…)';
+      const now = Date.now();
+      if (!state._zeroKick || now - state._zeroKick > 4000) {
+        state._zeroKick = now;
+        renderOnce();
+      }
+    }
+  }
+
+  // utils
+  function qs(sel) { return document.querySelector(sel); }
+  function setText(sel, v) { const el = qs(sel); if (el) el.textContent = v; }
+  function esc(s) {
+    return String(s).replace(/[&<>"'`=\/]/g, (ch) =>
+      ({'&':'&amp;','<':'&#x3E;','"':'&quot;',"'":'&#39;','/':'&#x2F;','`':'&#x60;','=':'&#x3D;'}[ch])
+    );
+  }
+  function preciseAgo(d){
+    const sec = Math.max(0, Math.floor((Date.now() - d.getTime())/1000));
+    const m = Math.floor(sec/60), s = sec%60;
+    return m ? `${m}m ${s}s ago` : `${s}s ago`;
+  }
+  function safeParseJSON(s) { try { return JSON.parse(s || '{}'); } catch { return null; } }
 })();
