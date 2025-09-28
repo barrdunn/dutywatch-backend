@@ -3,7 +3,7 @@
   const apiBase = cfg.apiBase || '';
   const HOME_BASE = (cfg.baseAirport || 'DFW').toUpperCase();
 
-  // iOS Safari detection (real device, not just desktop emulation)
+  // iOS detection for minor CSS tweaks
   const IS_IOS = /iP(ad|hone|od)/.test(navigator.platform)
     || (navigator.userAgent.includes('Mac') && 'ontouchend' in document);
   document.documentElement.classList.toggle('ios', IS_IOS);
@@ -193,14 +193,15 @@
   }
 
   function renderRowHTML(row, homeBase) {
+    /* OFF row: put duration in Release column */
     if (row.kind === 'off') {
       return `
         <tr class="off">
-          <td></td>
-          <td><span class="off-label">OFF</span></td>
+          <td class="ck"></td>
+          <td class="sum-first"><span class="off-label">OFF</span></td>
           <td class="muted"></td>
+          <td class="off-dur">${esc(row.display?.off_dur || '')}</td>
           <td class="muted"></td>
-          <td><span class="off-dur">${esc(row.display?.off_dur || '')}</span></td>
         </tr>`;
     }
 
