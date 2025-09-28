@@ -309,3 +309,40 @@ body.modal-open { overflow: hidden; }
 html.ios, body.ios { overflow-x: hidden; }
 .ios table { table-layout: fixed; }
 .ios th, .ios td { word-break: break-word; overflow-wrap: anywhere; }
+
+/* ---- iPhone column sizing & tap targets ---- */
+
+/* Make the checkbox column comfy to tap (44–48px) */
+.ios th:first-child,
+.ios td.ck {
+  width: 48px !important;
+  min-width: 48px !important;
+}
+
+/* Slightly bigger checkbox on phones */
+@media (max-width: 640px) {
+  .ckbox { width: 22px; height: 22px; }
+}
+
+/* Let the details (legs) table size by content so the "Flight" code isn't squashed */
+.ios .legs { table-layout: auto !important; }
+
+/* Give the Flight column a real width and keep it on one line */
+.ios .legs td:first-child,
+.ios .legs th:first-child {
+  min-width: 5.5em;      /* fits “AA1234” comfortably */
+  white-space: nowrap;
+}
+
+/* Keep Route readable but flexible */
+.ios .legs td:nth-child(2),
+.ios .legs th:nth-child(2) {
+  min-width: 6.5em;      /* e.g., “DFW–LAX” */
+}
+
+/* Block Times can wrap if needed (prevents horizontal scroll) */
+.ios .legs td:nth-child(3) {
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
