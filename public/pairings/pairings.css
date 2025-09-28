@@ -272,3 +272,41 @@ body.modal-open { overflow: hidden; }
 /* ===== iOS safety ===== */
 .ios table { table-layout: fixed; }
 .ios th, .ios td { word-break: break-word; overflow-wrap:anywhere; }
+
+/* === Consistent capsule width (details vs pairing/off) === */
+/* Use a single checkbox column variable so offsets match everywhere */
+:root {
+  --ckcol-desktop: 54px;
+  --ckcol-mobile: 48px;
+  --ckcol: var(--ckcol-desktop);
+}
+@media (max-width: 640px) { :root { --ckcol: var(--ckcol-mobile); } }
+
+/* Make the details capsule start exactly after the checkbox column,
+   just like the pairing/off capsules */
+tr.details > td::before {
+  left: var(--ckcol) !important;  /* was 54px/48px */
+  right: 0;
+}
+.daysbox {
+  margin-left: var(--ckcol) !important; /* align the content with the capsule */
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+/* === iPhone: stop "Flight" column from getting squeezed/truncated === */
+.ios .legs { table-layout: auto !important; }           /* free columns */
+.ios .legs th:first-child,
+.ios .legs td:first-child {
+  min-width: 5.75em;                                    /* fits FFT1234 / AA1234 */
+  white-space: nowrap;                                   /* don’t wrap the code */
+  word-break: normal;                                    /* avoid mid-word breaks */
+}
+.ios .legs th:nth-child(2),
+.ios .legs td:nth-child(2) {
+  min-width: 6.5em;                                      /* DFW–ORD etc. */
+  word-break: keep-all;
+}
+.ios .legs td:nth-child(3) {
+  overflow-wrap: anywhere;                               /* times can wrap if needed */
+}
