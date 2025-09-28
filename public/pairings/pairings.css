@@ -67,34 +67,26 @@ th { color:var(--muted); font-weight:600; text-align:left; border-bottom:1px sol
 tr.summary, tr.summary td { cursor: pointer; }
 .dayhdr { cursor: pointer; }
 
-/* ===== First column (checkbox) — centered H+V ===== */
+/* ===== First column (checkbox) — perfectly centered H + V ===== */
 th:first-child {
   width: 54px; min-width: 54px;
   text-align: center; padding-left: 0; padding-right: 0;
 }
 td.ck {
-  /* stay a real table-cell so vertical-align works */
   width: 54px; min-width: 54px;
   padding: 0 !important;
+  vertical-align: middle;        /* vertical centering via table-cell */
   text-align: center;
-  vertical-align: middle;  /* vertical center in the row */
 }
-.ckbtn {
-  /* horizontally center the box and keep tap target tight */
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent; border: 0; margin: 0; padding: 0;
-  line-height: 0; cursor: pointer;
-}
-.ck {
-  /* container for states; no flex on TD (keeps table layout) */
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+td.ck .ck-wrapper {
+  display: flex;                 /* wrapper fills the cell and centers content */
+  align-items: center;           /* vertical center */
+  justify-content: center;       /* horizontal center */
+  width: 100%;
+  height: 100%;
 }
 
-/* Bigger checkbox */
+/* bigger checkbox */
 .ckbox {
   width: 24px; height: 24px;
   border-radius: 6px;
@@ -109,11 +101,22 @@ td.ck {
 .ck.ok .ckbox::after{
   content: "✓"; font-weight: 900; font-size: 14px; line-height: 1; color: #0b1510; transform: translateY(-1px);
 }
+.ckbtn{
+  appearance: none; background: transparent; border: 0;
+  padding: 0; margin: 0; cursor: pointer; line-height: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+}
 .ckbtn[aria-disabled="true"]{ cursor: default; opacity: .9; }
 
-/* ===== Capsules that start AFTER the checkbox column (no row ::before) ===== */
+@media (max-width: 640px) {
+  th:first-child, td.ck { width: 48px; min-width: 48px; }
+  .ckbox { width: 22px; height: 22px; }
+}
 
-/* SUMMARY (pairing) capsule: style per-cell on columns 2..end */
+/* ===== Capsules that start AFTER the checkbox column (no row ::before on iOS) ===== */
+/* We render the capsule per-cell on columns 2..end so it aligns with the checkbox column */
+
+/* SUMMARY (pairing) capsule */
 tr.summary td:not(.ck){
   background: var(--pairing-bg);
   border-top: 1px solid var(--pairing-border);
@@ -121,7 +124,7 @@ tr.summary td:not(.ck){
 }
 tr.summary:hover td:not(.ck){ background: var(--pairing-bg-hover); }
 
-/* Round edges on first/last data cells */
+/* round edges on first/last data cells */
 tr.summary td.sum-first{
   border-left: 1px solid var(--pairing-border);
   border-top-left-radius: 12px; border-bottom-left-radius: 12px;
@@ -131,7 +134,7 @@ tr.summary td:last-child{
   border-top-right-radius: 12px; border-bottom-right-radius: 12px;
 }
 
-/* OFF rows capsule aligned the same way (starts after checkbox) */
+/* OFF rows capsule aligned the same way */
 tr.off td:not(.ck){
   background: var(--row);
   border-top: 1px solid var(--border);
@@ -237,8 +240,6 @@ body.modal-open { overflow: hidden; }
   h1 { font-size: 18px; margin-bottom: 6px; }
   table { border-spacing: 0 8px; table-layout: fixed; }
   th, td { padding: 9px 10px; font-size: 13px; line-height: 1.35; }
-  th:first-child, td.ck { width: 48px; min-width: 48px; }
-  .ckbox{ width:22px; height:22px; }
   .legs th, .legs td{ word-break: break-word; overflow-wrap:anywhere; }
 }
 
