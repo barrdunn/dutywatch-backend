@@ -104,6 +104,50 @@ tr.details>td::before{content:"";position:absolute;left:var(--ckcol);right:0;top
 
 .legs td.bt{font-variant-numeric:tabular-nums;white-space:nowrap}
 .leg-done td{text-decoration:line-through;color:var(--strike)}
+/* ===== Legs table tweaks ===== */
+.legs {
+  table-layout: auto;                /* keeps natural column widths */
+}
+
+/* 1) Flight column left-aligned */
+.legs th:first-child,
+.legs td:first-child {
+  text-align: left;
+}
+
+/* 2) Bring Block Times closer to Route */
+.legs th:nth-child(3),
+.legs td:nth-child(3) {
+  padding-left: 10px;                /* was ~8–12; pull it closer */
+}
+
+/* Make sure Route doesn’t add extra gap */
+.legs th:nth-child(2),
+.legs td:nth-child(2) {
+  padding-right: 6px;
+}
+
+/* 3) Mobile wrapping rules */
+@media (max-width: 640px) {
+  /* Flight number: never wrap */
+  .legs td:first-child {
+    white-space: nowrap;
+    word-break: normal;              /* avoid mid-code breaks */
+  }
+
+  /* Block Times: allow wrapping at spaces */
+  .legs td:nth-child(3) {
+    white-space: normal;             /* wrap at spaces */
+    word-break: normal;              /* don't break inside the time tokens */
+    overflow-wrap: anywhere;         /* only kicks in for super-long strings */
+  }
+}
+
+/* Optional: use tabular numbers for nicer time alignment */
+.legs td:nth-child(3),
+.legs th:nth-child(3) {
+  font-variant-numeric: tabular-nums;
+}
 
 /* pills */
 .pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700;white-space:nowrap;color:#021216;background:var(--green);padding:3px 8px;border-radius:999px;margin-left:8px}
