@@ -3,7 +3,7 @@
   const apiBase = cfg.apiBase || '';
   const HOME_BASE = (cfg.baseAirport || 'DFW').toUpperCase();
 
-  // iOS detection for minor CSS tweaks (kept)
+  // iOS tweak flag (kept)
   const IS_IOS = /iP(ad|hone|od)/.test(navigator.platform)
     || (navigator.userAgent.includes('Mac') && 'ontouchend' in document);
   document.documentElement.classList.toggle('ios', IS_IOS);
@@ -14,7 +14,48 @@
     clockMode: cfg.clockMode === '24' ? 24 : 12,
     onlyReports: cfg.onlyReports !== false,
     _zeroKick: 0,
+    rows: [],              // <-- cache rows here
   };
+
+  // --- Time helpers (client-side only) ---
+  function fmtClock(hhmm, is24) {
+    if (hhmm == null || hhmm === '') return '';
+    const s = String(hhmm).padStart(4, '0');
+    if (!/^\d{3,4}$/.test(s)) return String(hhmm); // if not pure HHMM, show as-is
+    const h = parseInt(s.slice(0, -2), 10);
+    const m = parseInt(s.slice(-2), 10);
+    if (Number.isNaN(h) || Number.isNaN(m)) return String(hhmm);
+    if (is24) return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    const hh12 = (h % 12) || 12;
+    const ampm = h < 12 ? 'AM' : 'PM';
+    return `${hh12}:${String(m).padStart(2, '0')} ${ampm}`;
+  }
+  function fmtFromRow(row, keyBase) {
+    // Prefer raw HHMM fields the server passes "without touching them":
+    //   display.report_hhmm / row.report_hhmm / display.report / row.report
+    const disp = row.display || {};
+    const is24 = state.clockMode === 24;
+
+    const raw =
+      disp[`${keyBase}_hhmm`] || row[`${keyBase}_hhmm`] ||
+      disp[keyBase] || row[keyBase];
+
+    if (/^\d{3,4}$/.test(String(raw || ''))) {
+      return fmtClock(raw, is24);
+    }
+    // Fallback to any prebuilt string the server sent (if raw missing)
+    return (disp[`${keyBase}_str`] || disp[keyBase] || row[`${keyBase}_str`] || row[keyBase] || '');
+  }
+
+  // Legs: accept multiple possible raw keys
+  function fmtLegTime(leg, which) {
+    // try *_hhmm first, then *_time, then *_time_str
+    const is24 = state.clockMode === 24;
+    const raw = leg[`${which}_hhmm`] ?? leg[`${which}_time`] ?? leg[`${which}_local_hhmm`];
+    if (/^\d{3,4}$/.test(String(raw || ''))) return fmtClock(raw, is24);
+    const fallback = leg[`${which}_time_str`] ?? leg[`${which}_str`] ?? leg[which];
+    return fallback || '';
+  }
 
   // Public action
   window.dwManualRefresh = async function () {
@@ -43,17 +84,16 @@
     clockSel.value = String(state.clockMode);
     clockSel.addEventListener('change', async () => {
       state.clockMode = parseInt(clockSel.value, 10) === 12 ? 12 : 24;
-      // Re-render by re-fetching all rows with is_24h flag to get report/release/legs in correct format
-      await renderOnce();
-      // If the plan modal is open, re-open/redraw it with new time format on next click.
-      // (We purposely keep modal content simple: it is regenerated every time you open it.)
+      // No refetch: just repaint from cached data
+      renderTable(state.rows);
+      // Also keep header "Last pull / Next refresh" as-is (unchanged by clock)
     });
   }
 
-  // First paint
+  // First paint (fetch once)
   renderOnce();
 
-  // SSE
+  // SSE – fetch fresh rows only when data actually changes server-side
   try {
     const es = new EventSource(apiBase + '/api/events');
     es.addEventListener('hello', () => {});
@@ -103,13 +143,11 @@
       const reportIso = ckBtn.getAttribute('data-report') || '';
 
       if (stateAttr === 'off') {
-        // Show plan modal when window is not open
         await openPlan(pairingId, reportIso);
         return;
       }
 
       if (stateAttr === 'pending') {
-        // Acknowledge immediately
         try {
           await fetch(`${apiBase}/api/ack/acknowledge`, {
             method: 'POST',
@@ -119,21 +157,18 @@
         } catch (err) {
           console.error('ack failed', err);
         }
-        await renderOnce();
+        await renderOnce(); // reflect changes from server
         return;
       }
 
-      // 'ok' -> do nothing
       return;
     }
 
-    // Plan modal close buttons
+    // Plan modal close or backdrop
     if (e.target.id === 'plan-close-1' || e.target.id === 'plan-close-2') {
       showModal(false);
       return;
     }
-
-    // Click on backdrop closes
     if (e.target.classList.contains('modal')) {
       showModal(false);
       return;
@@ -145,10 +180,10 @@
     if (e.key === 'Escape') showModal(false);
   });
 
-  // Core render
+  // Fetch & cache once per change from server
   async function renderOnce() {
     const params = new URLSearchParams({
-      is_24h: String(state.clockMode === 24 ? 1 : 0),
+      is_24h: String(state.clockMode === 24 ? 1 : 0), // harmless; backend can ignore
       only_reports: String(state.onlyReports ? 1 : 0),
     });
 
@@ -179,8 +214,14 @@
     const nextEl = qs('#next-refresh');
     if (nextEl) nextEl.innerHTML = `${esc(base)} <span id="next-refresh-eta"></span>`;
 
+    // cache rows and render with current clock mode
+    state.rows = data.rows || [];
+    renderTable(state.rows);
+  }
+
+  function renderTable(rows) {
     const tbody = qs('#pairings-body');
-    tbody.innerHTML = (data.rows || []).map(row => renderRowHTML(row, HOME_BASE)).join('');
+    tbody.innerHTML = (rows || []).map(row => renderRowHTML(row, HOME_BASE)).join('');
   }
 
   // Helpers for start airport / out-of-base pill
@@ -196,7 +237,7 @@
   }
 
   function renderRowHTML(row, homeBase) {
-    /* OFF row: put duration in Release column (kept) */
+    // OFF row
     if (row.kind === 'off') {
       return `
         <tr class="off">
@@ -215,6 +256,10 @@
     const showOOB = !!(startDep && startDep !== homeBase);
     const oobPill = showOOB ? `<span class="pill pill-red">${esc(startDep)}</span>` : '';
 
+    // Client-side formatted report/release (12/24h aware) from *raw* fields
+    const reportStr  = fmtFromRow(row, 'report');
+    const releaseStr = fmtFromRow(row, 'release');
+
     const checkCell = renderCheckCell(row);
     const details = (row.days || []).map((day, i) => renderDayHTML(day, i)).join('');
 
@@ -227,8 +272,8 @@
           ${oobPill}
           ${inProg}
         </td>
-        <td>${esc(row.display?.report_str || '')}</td>
-        <td>${esc(row.display?.release_str || '')}</td>
+        <td>${esc(reportStr)}</td>
+        <td>${esc(releaseStr)}</td>
         <td class="muted">click to expand days</td>
       </tr>
       <tr class="details">
@@ -266,14 +311,18 @@
   }
 
   function renderDayHTML(day, idx) {
-    const legs = (day.legs || []).map(leg => `
-      <tr class="leg-row ${leg.done ? 'leg-done' : ''}">
-        <td>${esc(leg.flight || '')}</td>
-        <td>${esc(leg.dep || '')}–${esc(leg.arr || '')}</td>
-        <td>${esc(leg.dep_time_str || leg.dep_time || '')}
-            &nbsp;→&nbsp;
-            ${esc(leg.arr_time_str || leg.arr_time || '')}</td>
-      </tr>`).join('');
+    const legs = (day.legs || []).map(leg => {
+      const depStr = fmtLegTime(leg, 'dep');  // uses *_hhmm or *_time
+      const arrStr = fmtLegTime(leg, 'arr');
+      const route = `${esc(leg.dep || '')}–${esc(leg.arr || '')}`;
+      const times = `${esc(depStr)}&nbsp;→&nbsp;${esc(arrStr)}`;
+      return `
+        <tr class="leg-row ${leg.done ? 'leg-done' : ''}">
+          <td>${esc(leg.flight || '')}</td>
+          <td>${route}</td>
+          <td>${times}</td>
+        </tr>`;
+    }).join('');
 
     return `
       <div class="day">
@@ -295,15 +344,13 @@
       </div>`;
   }
 
-  // ---- Time + Date helpers for the plan modal (12h / 24h aware)
+  // ---- Plan modal (client 12/24h aware; no reload) ----
   function fmtTime(d, is24) {
     if (is24) {
-      // 24h HH:MM
       const hh = String(d.getHours()).padStart(2, '0');
       const mm = String(d.getMinutes()).padStart(2, '0');
       return `${hh}:${mm}`;
     }
-    // 12h h:MM AM/PM
     const h = d.getHours();
     const hh12 = (h % 12) || 12;
     const mm = String(d.getMinutes()).padStart(2, '0');
@@ -312,7 +359,6 @@
   }
   const fmtDate = (d) => `${d.getMonth() + 1}/${d.getDate()}`;
 
-  // Plan modal (When column shows TIME then DATE; 12/24h according to state.clockMode)
   async function openPlan(pairingId, reportIso) {
     try {
       const res = await fetch(`${apiBase}/api/ack/plan?pairing_id=${encodeURIComponent(pairingId)}&report_local_iso=${encodeURIComponent(reportIso)}`);
@@ -328,7 +374,6 @@
         const showDate = dateStr !== lastDateKey;
         if (showDate) lastDateKey = dateStr;
 
-        // TIME first; show DATE only when it changes (and always after time)
         const whenHTML = showDate
           ? `<span class="plan-when"><span class="plan-time">${esc(timeStr)}</span><span class="plan-date"> ${esc(dateStr)}</span></span>`
           : `<span class="plan-when"><span class="plan-time">${esc(timeStr)}</span></span>`;
@@ -379,7 +424,7 @@
       const now = Date.now();
       if (!state._zeroKick || now - state._zeroKick > 4000) {
         state._zeroKick = now;
-        renderOnce();
+        renderOnce(); // gentle poll when countdown hits zero
       }
     }
   }
@@ -389,7 +434,7 @@
   function setText(sel, v) { const el = qs(sel); if (el) el.textContent = v; }
   function esc(s) {
     return String(s).replace(/[&<>"'`=\/]/g, (ch) =>
-      ({'&':'&amp;','<':'&#x3E;','"':'&quot;',"'":'&#39;','/':'&#x2F;','`':'&#x60;','=':'&#x3D;'}[ch])
+      ({'&':'&amp;','<':'&#x3E;','"':'&quot;','\'':'&#39;','/':'&#x2F;','`':'&#x60;','=':'&#x3D;'}[ch])
     );
   }
   function preciseAgo(d){
