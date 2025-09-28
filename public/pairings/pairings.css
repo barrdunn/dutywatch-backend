@@ -335,3 +335,38 @@ tr.details > td::before {
 }
 .plan-when .when-date { font-weight: 700; }
 .plan-when .when-sep { opacity: .75; }
+
+/* ----- iPhone: make "When" column wider and let "Type" yield ----- */
+.ios .plan-table { table-layout: auto; }
+
+/* Default iPhone boost */
+.ios .plan-table th:first-child,
+.ios .plan-table td:first-child {
+  min-width: 12.5rem;   /* was 10rem */
+  text-align: left;
+  white-space: normal;   /* can wrap/stack within the cell */
+  word-break: keep-all;
+}
+
+/* Make "Type" skinny so "When" gets the space it needs */
+.ios .plan-table th:nth-child(2),
+.ios .plan-table td:nth-child(2) {
+  width: 0.1%;          /* shrink-to-fit */
+  min-width: 4.75rem;   /* was 6.5rem */
+  white-space: nowrap;  /* keep short labels on one line */
+}
+
+/* Details column flexes */
+.ios .plan-table th:nth-child(3),
+.ios .plan-table td:nth-child(3) { width: auto; }
+
+/* Extra-tight devices */
+@media (max-width: 430px) {
+  .ios .plan-table th:first-child,
+  .ios .plan-table td:first-child { min-width: 13.5rem; }
+}
+@media (max-width: 390px) {
+  .ios .plan-table th:first-child,
+  .ios .plan-table td:first-child { min-width: 14.5rem; }
+  .ios .plan-when { font-size: 13px; line-height: 1.25; }
+}
