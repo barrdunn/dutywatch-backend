@@ -281,6 +281,11 @@
 
         <div class="legs-wrap">
           <table class="legs" style="display:none">
+            <!-- lock columns: 1/3 | 2/3 -->
+            <colgroup>
+              <col style="width: 33.3333%">
+              <col style="width: 66.6667%">
+            </colgroup>
             <thead>
               <tr>
                 <th>Flight</th>
