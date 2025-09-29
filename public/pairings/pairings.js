@@ -16,7 +16,6 @@
   };
 
   // ====== TIME/DATE FORMAT HELPERS (no column reflow) ======
-  // Find the first clock-looking time in a string and swap just that piece.
   const TIME_12_RE = /\b([0-9]{1,2}):([0-9]{2})\s?(AM|PM)\b/i;
   const TIME_24_RE = /\b([01]?\d|2[0-3]):?([0-5]\d)\b/;
 
@@ -31,11 +30,39 @@
     return withColon ? `${hh}:${mm}` : `${hh}${mm}`;
   }
 
+  // ✅ robust raw HHMM selector — prefers numeric sources, never formatted strings
+  function pickHHMM(...candidates) {
+    for (const c of candidates) {
+      if (c == null) continue;
+      const s = String(c).trim();
+
+      // 1) pure 4-digit HHMM (e.g., "1513")
+      if (/^\d{4}$/.test(s)) return s;
+
+      // 2) "HH:MM"
+      const mColon = s.match(/^(\d{1,2}):(\d{2})$/);
+      if (mColon) {
+        const h = mColon[1].padStart(2,'0');
+        const m = mColon[2];
+        return `${h}${m}`;
+      }
+
+      // 3) "H:MM AM/PM"
+      const m12 = s.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+      if (m12) {
+        let h = parseInt(m12[1],10) % 12;
+        const m = parseInt(m12[2],10);
+        if (m12[3].toUpperCase() === 'PM') h += 12;
+        return `${h.toString().padStart(2,'0')}${m.toString().padStart(2,'0')}`;
+      }
+    }
+    return '';
+  }
+
   // Replace the FIRST time in str with desired format; keep weekday+date prefix intact.
   function swapFirstTime(str, want24, colon24=true) {
     if (!str) return str;
 
-    // If string already has 12h with AM/PM
     const m12 = str.match(TIME_12_RE);
     if (m12) {
       const h = parseInt(m12[1],10), m = parseInt(m12[2],10);
@@ -44,7 +71,6 @@
       return str.replace(TIME_12_RE, repl);
     }
 
-    // Else a 24h time (with or without colon)
     const m24 = str.match(TIME_24_RE);
     if (m24) {
       const h = parseInt(m24[1],10), m = parseInt(m24[2],10);
@@ -229,13 +255,13 @@
       el.textContent = text;
     });
 
-    // block times in legs table
+    // block times in legs table — use stored raw HHMMs
     document.querySelectorAll('[data-dw="bt"]').forEach(el => {
       const dep = el.getAttribute('data-dep') || '';
       const arr = el.getAttribute('data-arr') || '';
       const left  = fmtHHMM(dep, want24, /*colon24*/false);
       const right = fmtHHMM(arr, want24, /*colon24*/false);
-      el.textContent = `${left} → ${right}`;
+      el.textContent = arr ? `${left} → ${right}` : left;
     });
   }
 
@@ -324,12 +350,12 @@
 
   function renderDayHTML(day, idx) {
     const want24 = state.clockMode === 24; // initial paint uses current mode for leg attrs
+
     const legs = (day.legs || []).map(leg => {
-      const depRaw = leg.dep_time_str || leg.dep_time || leg.dep_hhmm || '';
-      const arrRaw = leg.arr_time_str || leg.arr_time || leg.arr_hhmm || '';
-      // store raw HHMM (numbers if available) on the cell for later repaint
-      const depHHMM = String(depRaw).replace(':','');
-      const arrHHMM = String(arrRaw).replace(':','');
+      // ✅ Use raw HHMM sources; never parse *_time_str (preformatted)
+      const depHHMM = pickHHMM(leg.dep_hhmm, leg.dep_time);
+      const arrHHMM = pickHHMM(leg.arr_hhmm, leg.arr_time);
+
       const left  = fmtHHMM(depHHMM, want24, /*colon24*/false);
       const right = fmtHHMM(arrHHMM, want24, /*colon24*/false);
 
@@ -342,8 +368,8 @@
     }).join('');
 
     // Day header report/release — keep raw HHMM in data-hhmm for repaint
-    const dayRepRaw = (day.report_hhmm || day.report || '').toString().replace(':','');
-    const dayRelRaw = (day.release_hhmm || day.release || '').toString().replace(':','');
+    const dayRepRaw = pickHHMM(day.report_hhmm, day.report);
+    const dayRelRaw = pickHHMM(day.release_hhmm, day.release);
     const repDisp = fmtHHMM(dayRepRaw, want24, /*colon24*/false);
     const relDisp = fmtHHMM(dayRelRaw, want24, /*colon24*/false);
 
@@ -360,7 +386,6 @@
         ${legs ? `
           <div class="legs-wrap">
             <table class="legs" style="display:none">
-              <colgroup><col><col><col></colgroup>
               <thead><tr><th>Flight</th><th>Route</th><th>Block Times</th></tr></thead>
               <tbody>${legs}</tbody>
             </table>
@@ -376,13 +401,11 @@
 
       // build rows; When cell will be repainted by repaintTimesOnly via data attrs
       const rows = (data.attempts||[]).map(a => {
-        // store HHMM so toggle works without reload
         const d = new Date(a.at_iso);
         const hh = d.getHours(), mm = d.getMinutes();
         const hhmm = `${hh.toString().padStart(2,'0')}${mm.toString().padStart(2,'0')}`;
         const want24 = state.clockMode === 24;
         const timeText = fmtHHMM(hhmm, want24, /*colon24*/false);
-        // show date after time when it changes — keep original simple (browser) date
         const dateText = `${d.toLocaleDateString(undefined,{month:'short'})} ${d.getDate()}`;
         return `<tr>
           <td><span data-dw="bt" data-dep="${esc(hhmm)}" data-arr="">${esc(timeText)}</span> ${esc(dateText)}</td>
