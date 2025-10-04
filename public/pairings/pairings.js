@@ -10,12 +10,13 @@
   const state = {
     lastPullIso: null,
     nextRefreshIso: null,
-    clockMode: cfg.clockMode === '24' ? 24 : 12,   // default 12h
-    onlyReports: cfg.onlyReports !== false,
+    clockMode: cfg.clockMode === '24' ? 24 : 12,
+    onlyReports: false, // include non-pairings like N/L
+    hiddenCount: 0,
     _zeroKick: 0,
   };
 
-  // ====== TIME/DATE FORMAT HELPERS (no column reflow) ======
+  // ====== TIME HELPERS ======
   const TIME_12_RE = /\b([0-9]{1,2}):([0-9]{2})\s?(AM|PM)\b/i;
   const TIME_24_RE = /\b([01]?\d|2[0-3]):?([0-5]\d)\b/;
 
@@ -29,16 +30,14 @@
     const mm = m.toString().padStart(2,'0');
     return withColon ? `${hh}:${mm}` : `${hh}${mm}`;
   }
-
-  // Prefer numeric/raw HHMM
   function pickHHMM(...candidates) {
     for (const c of candidates) {
       if (c == null) continue;
       const s = String(c).trim();
-      if (/^\d{4}$/.test(s)) return s;                 // "1513"
-      const mColon = s.match(/^(\d{1,2}):(\d{2})$/);    // "15:13"
+      if (/^\d{4}$/.test(s)) return s;
+      const mColon = s.match(/^(\d{1,2}):(\d{2})$/);
       if (mColon) return `${mColon[1].padStart(2,'0')}${mColon[2]}`;
-      const m12 = s.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i); // "3:13 PM"
+      const m12 = s.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
       if (m12) {
         let h = parseInt(m12[1],10) % 12;
         const m = parseInt(m12[2],10);
@@ -48,7 +47,6 @@
     }
     return '';
   }
-
   function swapFirstTime(str, want24, colon24=true) {
     if (!str) return str;
     const m12 = str.match(TIME_12_RE);
@@ -66,7 +64,6 @@
     }
     return str;
   }
-
   function fmtHHMM(hhmm, want24, colon24=true) {
     if (!hhmm) return '';
     const s = String(hhmm).replace(':','').padStart(4,'0');
@@ -74,13 +71,13 @@
     return want24 ? to24(hh,mm, colon24) : to12(hh,mm);
   }
 
-  // ====== Public action ======
+  // ====== ACTIONS ======
   window.dwManualRefresh = async function () {
     try { await fetch(apiBase + '/api/refresh', { method: 'POST' }); }
     catch (e) { console.error(e); }
   };
 
-  // Controls
+  // ====== CONTROLS ======
   const refreshSel = document.getElementById('refresh-mins');
   if (refreshSel) {
     if (cfg.refreshMinutes) refreshSel.value = String(cfg.refreshMinutes);
@@ -99,13 +96,23 @@
   const clockSel = document.getElementById('clock-mode');
   if (clockSel) {
     clockSel.value = String(state.clockMode);
-    clockSel.addEventListener('change', async () => {
+    clockSel.addEventListener('change', () => {
       state.clockMode = parseInt(clockSel.value, 10) === 24 ? 24 : 12;
       repaintTimesOnly();
     });
   }
 
-  // First paint + live updates
+  // ====== HIDDEN CHIP ======
+  function applyHiddenCount(n) {
+    state.hiddenCount = Number(n)||0;
+    const chip = qs('#hidden-chip');
+    const countEl = qs('#hidden-count');
+    if (!chip || !countEl) return;
+    countEl.textContent = `Hidden: ${state.hiddenCount}`;
+    chip.classList.toggle('hidden', !(state.hiddenCount > 0));
+  }
+
+  // ====== LIVE UPDATES ======
   renderOnce();
   try {
     const es = new EventSource(apiBase + '/api/events');
@@ -116,9 +123,22 @@
 
   setInterval(tickStatusLine, 1000);
 
-  // Clicks
+  // ====== CLICKS ======
   document.addEventListener('click', async (e) => {
-    // expand/collapse
+    const unhide = e.target.closest('[data-unhide-all]');
+    if (unhide) {
+      e.preventDefault();
+      try { await fetch(`${apiBase}/api/hidden/unhide_all`, { method:'POST' }); }
+      catch (err) { console.error('unhide all failed', err); }
+      await renderOnce();
+      return;
+    }
+
+    // prevent summary toggle from clicks inside the details message
+    if (e.target.closest('[data-stop-toggle]')) {
+      e.stopPropagation();
+    }
+
     const sum = e.target.closest('tr.summary');
     if (sum && !e.target.closest('[data-ck]')) {
       sum.classList.toggle('open');
@@ -130,55 +150,43 @@
       return;
     }
 
-    // day header own toggle
-    const hdr = e.target.closest('.dayhdr');
-    if (hdr) {
-      const day = hdr.closest('.day');
-      const legs = day?.querySelector('.legs');
-      if (!legs) return;
-      const shown = legs.style.display !== 'none';
-      legs.style.display = shown ? 'none' : 'table';
-      const helper = day.querySelector('.helper');
-      if (helper) helper.textContent = shown ? 'click to show legs' : 'click to hide legs';
-      return;
-    }
+    // Hide button for “no legs” events
+    const hideBtn = e.target.closest('[data-hide-pairing]');
+    if (hideBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      const pairingId = hideBtn.getAttribute('data-hide-pairing') || '';
+      const reportIso = hideBtn.getAttribute('data-report') || '';
 
-    // checkbox behavior
-    const ckBtn = e.target.closest('[data-ck]');
-    if (ckBtn) {
-      const stateAttr = ckBtn.getAttribute('data-ck');
-      const pairingId = ckBtn.getAttribute('data-pairing') || '';
-      const reportIso = ckBtn.getAttribute('data-report') || '';
-
-      if (stateAttr === 'off') { await openPlan(pairingId, reportIso); return; }
-      if (stateAttr === 'pending') {
-        try {
-          await fetch(`${apiBase}/api/ack/acknowledge`, {
-            method:'POST', headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({ pairing_id: pairingId, report_local_iso: reportIso }),
-          });
-        } catch (err) { console.error('ack failed', err); }
-        await renderOnce();
+      // optimistic UI remove
+      const details = hideBtn.closest('tr.details');
+      const summary = details?.previousElementSibling;
+      if (summary?.classList.contains('summary')) {
+        summary.remove();
+        details.remove();
+        applyHiddenCount(state.hiddenCount + 1);
       }
-      return;
-    }
 
-    // plan modal close
-    if (e.target.id === 'plan-close-1' || e.target.id === 'plan-close-2' || e.target.classList.contains('modal')) {
-      showModal(false);
+      try {
+        await fetch(`${apiBase}/api/hidden/hide`, {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ pairing_id: pairingId, report_local_iso: reportIso }),
+        });
+      } catch (err) {
+        console.error('hide failed', err);
+      }
+      // pull fresh list/count
+      await renderOnce();
       return;
     }
   });
 
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') showModal(false);
-  });
-
-  // ====== Render from API ======
+  // ====== RENDER ======
   async function renderOnce() {
     const params = new URLSearchParams({
       is_24h: '0',
-      only_reports: String(state.onlyReports ? 1 : 0),
+      only_reports: '0',
     });
 
     let data;
@@ -192,6 +200,9 @@
 
     state.lastPullIso    = data.last_pull_local_iso || null;
     state.nextRefreshIso = data.next_pull_local_iso || null;
+
+    const hintedHidden = (data && (data.hidden_count ?? (data.hidden && data.hidden.count)));
+    applyHiddenCount(typeof hintedHidden === 'number' ? hintedHidden : state.hiddenCount);
 
     if (refreshSel && data.refresh_minutes) refreshSel.value = String(data.refresh_minutes);
 
@@ -211,7 +222,6 @@
     repaintTimesOnly();
   }
 
-  // ====== Repaint any time strings in-place ======
   function repaintTimesOnly() {
     const want24 = state.clockMode === 24;
     document.querySelectorAll('[data-dw="report"]').forEach(el => {
@@ -241,7 +251,7 @@
     });
   }
 
-  // ====== Helpers ======
+  // ====== TEMPLATES ======
   function firstDepartureAirport(row) {
     const days = row?.days || [];
     for (const d of days) {
@@ -250,27 +260,28 @@
     }
     return null;
   }
-
-  // helper to wrap a trailing token with non-bold style
   function wrapNotBoldBits(text, token) {
     if (!text) return '';
     const re = new RegExp(`\\s*\\(${token}\\)`,`i`);
     if (re.test(text)) {
       const base = text.replace(re, '').trim();
-      // add inline style + class (belt & suspenders)
       return `${esc(base)} <span class="fw-normal" style="font-weight:400">(${token})</span>`;
     }
     return esc(text);
+  }
+  function legsCount(row) {
+    let n = 0;
+    const days = row?.days || [];
+    for (const d of days) n += (d.legs || []).length;
+    return n;
   }
 
   function renderRowHTML(row, homeBase) {
     if (row.kind === 'off') {
       const rawLabel = (row.display && row.display.off_label) ? String(row.display.off_label) : 'OFF';
       const labelHTML = wrapNotBoldBits(rawLabel, 'Current');
-
       const rawDur = String(row.display?.off_dur || '');
       const durHTML = wrapNotBoldBits(rawDur, 'Remaining');
-
       return `
         <tr class="off">
           <td class="ck"></td>
@@ -281,32 +292,40 @@
         </tr>`;
     }
 
-    const daysCount = row.days ? row.days.length : 0;
+    const totalLegs = legsCount(row);
+    const hasLegs = totalLegs > 0;
+
     const startDep = firstDepartureAirport(row);
     const showOOB = !!(startDep && startDep !== homeBase);
     const oobPill = showOOB ? `<span class="pill pill-red">${esc(startDep)}</span>` : '';
 
-    const checkCell = renderCheckCell(row);
-    const details = (row.days || []).map((day, i) => renderDayHTML(day, i)).join('');
+    const detailsDays = hasLegs ? (row.days || []).map((day, i) => renderDayHTML(day, i)).join('') : '';
 
-    const repStr = esc(row.display?.report_str || '');
-    const relStr = esc(row.display?.release_str || '');
+    // Centered message + Hide button for no-legs rows
+    const noLegsBlock = !hasLegs
+      ? `<div data-stop-toggle style="display:flex;justify-content:center;align-items:center;gap:12px;padding:18px;text-align:center">
+           <span class="muted">No legs found.</span>
+           <button class="btn" data-hide-pairing="${esc(row.pairing_id || '')}" data-report="${esc(row.report_local_iso || '')}">
+             Hide Event
+           </button>
+         </div>`
+      : '';
 
     return `
-      <tr class="summary">
-        ${checkCell}
+      <tr class="summary" data-row-id="${esc(row.pairing_id || '')}">
+        ${renderCheckCell(row)}
         <td class="sum-first">
           <strong>${esc(row.pairing_id || '')}</strong>
-          ${daysCount ? `<span class="pill">${daysCount} day</span>` : ``}
+          ${hasLegs ? `<span class="pill">${(row.days||[]).length} day</span>` : ``}
           ${oobPill}
         </td>
-        <td data-dw="report">${repStr}</td>
-        <td data-dw="release">${relStr}</td>
-        <td class="muted">click to expand days</td>
+        <td data-dw="report">${esc(row.display?.report_str || '')}</td>
+        <td data-dw="release">${esc(row.display?.release_str || '')}</td>
+        <td class="muted">${hasLegs ? 'click to expand days' : 'click to hide'}</td>
       </tr>
       <tr class="details">
         <td colspan="5">
-          <div class="daysbox">${details || `<div class="muted subnote">No legs parsed.</div>`}</div>
+          <div class="daysbox">${hasLegs ? detailsDays : noLegsBlock}</div>
         </td>
       </tr>`;
   }
@@ -316,10 +335,8 @@
     const acknowledged = !!ack.acknowledged;
     const windowOpen = !!ack.window_open;
     const stateAttr = acknowledged ? 'ok' : (windowOpen ? 'pending' : 'off');
-
     const ariaChecked = acknowledged ? 'true' : 'false';
     const ariaDisabled = acknowledged ? 'true' : 'false';
-
     return `
       <td class="ck ${stateAttr}">
         <div class="ck-wrapper">
@@ -340,14 +357,11 @@
 
   function renderDayHTML(day, idx) {
     const want24 = state.clockMode === 24;
-
     const legs = (day.legs || []).map(leg => {
       const depHHMM = pickHHMM(leg.dep_hhmm, leg.dep_time);
       const arrHHMM = pickHHMM(leg.arr_hhmm, leg.arr_time);
-
       const left  = fmtHHMM(depHHMM, want24, false);
       const right = fmtHHMM(arrHHMM, want24, false);
-
       return `
         <tr class="leg-row ${leg.done ? 'leg-done' : ''}">
           <td>${esc(leg.flight || '')}</td>
@@ -355,12 +369,10 @@
           <td class="bt" data-dw="bt" data-dep="${esc(depHHMM)}" data-arr="${esc(arrHHMM)}">${left} → ${right}</td>
         </tr>`;
     }).join('');
-
     const dayRepRaw = pickHHMM(day.report_hhmm, day.report);
     const dayRelRaw = pickHHMM(day.release_hhmm, day.release);
     const repDisp = fmtHHMM(dayRepRaw, want24, false);
     const relDisp = fmtHHMM(dayRelRaw, want24, false);
-
     return `
       <div class="day">
         <div class="dayhdr">
@@ -381,47 +393,9 @@
       </div>`;
   }
 
-  // ====== Plan modal ======
-  async function openPlan(pairingId, reportIso) {
-    try {
-      const res = await fetch(`${apiBase}/api/ack/plan?pairing_id=${encodeURIComponent(pairingId)}&report_local_iso=${encodeURIComponent(reportIso)}`);
-      const data = await res.json();
-
-      const rows = (data.attempts||[]).map(a => {
-        const d = new Date(a.at_iso);
-        const hh = d.getHours(), mm = d.getMinutes();
-        const hhmm = `${hh.toString().padStart(2,'0')}${mm.toString().padStart(2,'0')}`;
-        const want24 = state.clockMode === 24;
-        const timeText = fmtHHMM(hhmm, want24, false);
-        const dateText = `${d.toLocaleDateString(undefined,{month:'short'})} ${d.getDate()}`;
-        return `<tr>
-          <td><span data-dw="bt" data-dep="${esc(hhmm)}" data-arr="">${esc(timeText)}</span> ${esc(dateText)}</td>
-          <td>${esc((a.kind||'').toUpperCase())}</td>
-          <td>${esc(a.label||'')}</td>
-        </tr>`;
-      }).join('');
-
-      qs('#plan-rows').innerHTML = rows || `<tr><td colspan="3" class="muted">No upcoming attempts.</td></tr>`;
-      qs('#plan-meta').textContent =
-        `Calls from T-${data.policy.call_start_hours}h every ${data.policy.call_interval_minutes}m (2 rings/attempt)`;
-
-      showModal(true);
-      repaintTimesOnly();
-    } catch (e) { console.error(e); }
-  }
-
-  function showModal(show) {
-    const m = qs('#plan-modal'); if (!m) return;
-    m.classList.toggle('hidden', !show);
-    document.body.classList.toggle('modal-open', show);
-  }
-
-  // status line
+  // ====== STATUS LINE ======
   function tickStatusLine() {
-    if (state.lastPullIso) {
-      const ago = preciseAgo(new Date(state.lastPullIso));
-      setText('#last-pull', ago);
-    }
+    if (state.lastPullIso) setText('#last-pull', preciseAgo(new Date(state.lastPullIso)));
     const etaEl = qs('#next-refresh-eta');
     if (!etaEl || !state.nextRefreshIso) return;
     const diff = Math.floor((new Date(state.nextRefreshIso).getTime() - Date.now()) / 1000);
@@ -439,14 +413,10 @@
     }
   }
 
-  // utils
+  // ====== UTILS ======
   function qs(sel){return document.querySelector(sel)}
   function setText(sel,v){const el=qs(sel); if(el) el.textContent=v;}
-  function esc(s){
-    return String(s).replace(/[&<>"'`=\/]/g,(ch)=>({
-      '&':'&amp;','<':'&lt;','>':'&#x3E;','"':'&quot;',"'":'&#39;','/':'&#x2F;','`':'&#x60','=':'&#x3D;'
-    }[ch]))
-  }
+  function esc(s){return String(s).replace(/[&<>"'`=\/]/g,(ch)=>({'&':'&amp;','<':'&lt;','>':'&#x3E;','"':'&quot;',"'":'&#39;','/':'&#x2F;','`':'&#x60','=':'&#x3D;'}[ch]))}
   function preciseAgo(d){const sec=Math.max(0,Math.floor((Date.now()-d.getTime())/1000));const m=Math.floor(sec/60),s=sec%60;return m?`${m}m ${s}s ago`:`${s}s ago`}
   function safeParseJSON(s){try{return JSON.parse(s||'{}')}catch{return null}}
 })();

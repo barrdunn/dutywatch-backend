@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <title>Pairings</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="stylesheet" href="/pairings/pairings.css?v=14">
+  <link rel="stylesheet" href="/pairings/pairings.css?v=15">
   <style>.hidden{display:none!important}</style>
 </head>
 <body>
@@ -16,12 +16,11 @@
         <span class="chip">Looking through <strong id="looking-through">—</strong></span>
         <span class="chip">Last pull: <strong id="last-pull">—</strong></span>
         <span class="chip">Next refresh: <strong id="next-refresh">—</strong> <span class="muted" id="next-refresh-eta"></span></span>
-
-        <!-- NEW: off + remaining chips -->
-        <span class="chip" id="off-chip" style="display:none">Off block: <strong id="off-total">—</strong></span>
-        <span class="chip" id="remain-chip" style="display:none">Remaining: <strong id="remain-count">—</strong></span>
-
-        <span class="chip" id="hidden-chip" style="display:none">Hidden: <strong id="hidden-count">0</strong> <a href="#" id="unhide-all" style="margin-left:6px;">Unhide all</a></span>
+        <!-- Always render a Hidden chip; JS updates count/visibility -->
+        <span class="chip" id="hidden-chip">
+          <span id="hidden-count">Hidden: 0</span>
+          <a href="#" data-unhide-all style="color:var(--accent);text-decoration:none;margin-left:6px">Unhide all</a>
+        </span>
       </div>
 
       <div class="controls">
@@ -67,14 +66,14 @@
   <!-- Static boot config for the viewer-only frontend -->
   <script id="dw-boot" type="application/json">{
     "clockMode":"12",
-    "onlyReports": true,
+    "onlyReports": false,            <!-- IMPORTANT: let N/L and other non-pairings show -->
     "tz": "CT",
     "refreshMinutes": 30,
     "apiBase": "",
     "baseAirport": "DFW"
   }</script>
 
-  <!-- Plan modal -->
+  <!-- Plan modal (unchanged) -->
   <div id="plan-modal" class="modal hidden" role="dialog" aria-modal="true" aria-label="Check-in & Reminder Plan">
     <div class="modal-card">
       <div class="modal-header">
@@ -94,6 +93,6 @@
     </div>
   </div>
 
-  <script src="/pairings/pairings.js?v=14" defer></script>
+  <script src="/pairings/pairings.js?v=15" defer></script>
 </body>
 </html>

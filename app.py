@@ -25,8 +25,9 @@ from db import get_db, init_db
 
 # ---- Optional DB helpers (server-side hidden + sticky rows) ----
 try:
-    from db import hide_uid, list_hidden_uids, hidden_count, unhide_all
-except Exception:  # safe fallbacks
+    # Hidden-store is keyed by individual iCloud VEVENT UIDs
+    from db import hide_uid, list_hidden_uids, hidden_count, unhide_all, hidden_all  # /* CHANGED */
+except Exception:  # safe fallbacks if db.py hasn't added these yet
     def hide_uid(uid: str) -> None:  # type: ignore
         pass
     def list_hidden_uids() -> List[str]:  # type: ignore
@@ -35,8 +36,11 @@ except Exception:  # safe fallbacks
         return 0
     def unhide_all() -> None:  # type: ignore
         pass
+    def hidden_all() -> List[str]:  # type: ignore  # /* ADDED */
+        return []  # /* ADDED */
 
 try:
+    # Sticky "live" rows so an in-progress pairing isn't dropped mid-fly
     from db import upsert_live_row, list_live_rows, purge_expired_live
 except Exception:  # safe fallbacks
     def upsert_live_row(row: Dict[str, Any]) -> None:  # type: ignore
@@ -226,9 +230,7 @@ async def pull_and_update_once() -> bool:
         events = await run_in_threadpool(fetch_current_to_next_eom)
         meta = await run_in_threadpool(read_cache_meta)
 
-        old_events = meta.get("events", [])
         old_digest = meta.get("events_digest", "")
-
         new_digest = _events_digest(events)
         changed = (new_digest != old_digest)
 
@@ -411,7 +413,7 @@ async def api_pairings(
 ):
     """
     Builds visible rows:
-      - Filters hidden zero-leg items (by UID).
+      - Filters hidden zero-leg items (by UID) and pairing_id hides.            /* CHANGED */
       - Keeps real (has legs) in-progress pairings sticky until release.
       - Recomputes OFF rows after hide/unhide and on every paint.
       - TOP OFF row when 'now' < first report shows: 'OFF (Current)' and 'Xd Yh (Remaining)' or 'Xh (Remaining)'.
@@ -438,7 +440,7 @@ async def api_pairings(
         # Build rows fresh *every time* to reflect inner parse changes.
         rows = await run_in_threadpool(build_pairing_rows, window_events, bool(is_24h), bool(only_reports))
 
-        # Map pairing -> uids
+        # Map pairing -> uids (used for hide/unhide and filtering)
         pid_to_uids: Dict[str, List[str]] = {}
         for ev in window_events:
             pid = grouping_key(ev)
@@ -446,7 +448,8 @@ async def api_pairings(
             if uid:
                 pid_to_uids.setdefault(pid, []).append(uid)
 
-        hidden = await run_in_threadpool(list_hidden_uids)
+        hidden_uids = await run_in_threadpool(list_hidden_uids)      # /* CHANGED */
+        hidden_pids = set(await run_in_threadpool(hidden_all))       # /* ADDED */
         use_24h = bool(is_24h)
 
         visible: List[Dict[str, Any]] = []
@@ -476,9 +479,10 @@ async def api_pairings(
                     if leg.get("arr_time") and not leg.get("arr_time_str"):
                         leg["arr_time_str"] = _fmt_time(str(leg["arr_time"]).zfill(4), use_24h)
 
-            # hide logic
-            all_hidden = (len(r["uids"]) > 0) and all(uid in hidden for uid in r["uids"])
-            if all_hidden and (r["can_hide"] or not r.get("in_progress")):
+            # hide logic: hide if ALL UIDs are hidden OR if pairing_id is hidden  /* CHANGED */
+            all_hidden = (len(r["uids"]) > 0) and all(uid in hidden_uids for uid in r["uids"])  # /* CHANGED */
+            pid_hidden = pid in hidden_pids                                                     # /* ADDED */
+            if (pid_hidden or all_hidden) and (r["can_hide"] or not r.get("in_progress")):      # /* CHANGED */
                 continue
 
             visible.append(r)
@@ -663,6 +667,10 @@ async def sse_events():
 # ----- Hide/Unhide endpoints -----
 @app.post("/api/hide")
 async def api_hide(payload: Dict[str, Any] = Body(...)):
+    """
+    Hide a single VEVENT by UID (server-side).
+    Frontend should send one UID (e.g., from a zero-leg event).
+    """
     uid = str(payload.get("uid") or "").strip()
     if not uid:
         raise HTTPException(400, "uid required")
@@ -674,7 +682,44 @@ async def api_hide(payload: Dict[str, Any] = Body(...)):
 
 @app.post("/api/unhide_all")
 async def api_unhide_all():
+    """
+    Clear all hidden UIDs.
+    """
     await run_in_threadpool(unhide_all)
     state.version += 1
     await _emit("hidden_update", {"cleared": True})
     return {"ok": True}
+
+
+# ---- Hidden endpoints (pairing_id) -----------------------------------------  /* ADDED */
+from pydantic import BaseModel                                                # /* ADDED */
+from fastapi import HTTPException                                             # /* ADDED */
+import logging                                                                # /* ADDED */
+
+# DB helpers (pairing_id-based hide)
+from db import hidden_add, hidden_clear_all, hidden_count                     # /* ADDED */
+
+log = logging.getLogger("dutywatch")                                          # /* ADDED */
+
+class _HideReq(BaseModel):                                                    # /* ADDED */
+    pairing_id: str                                                           # /* ADDED */
+    report_local_iso: str | None = None                                       # /* ADDED */
+
+# Support both with and without trailing slash to prevent 404s                 /* ADDED */
+@app.post("/api/hidden/hide")                                                 # /* ADDED */
+@app.post("/api/hidden/hide/")                                                # /* ADDED */
+def api_hidden_hide(req: _HideReq):                                           # /* ADDED */
+    if not req.pairing_id:                                                    # /* ADDED */
+        raise HTTPException(status_code=400, detail="pairing_id required")    # /* ADDED */
+    log.info("POST /api/hidden/hide -> %s", req.pairing_id)                   # /* ADDED */
+    hidden_add(req.pairing_id, req.report_local_iso)                          # /* ADDED */
+    return {"ok": True, "hidden_count": hidden_count()}                       # /* ADDED */
+
+@app.post("/api/hidden/unhide_all")                                           # /* ADDED */
+@app.post("/api/hidden/unhide_all/")                                          # /* ADDED */
+def api_hidden_unhide_all():                                                  # /* ADDED */
+    before = hidden_count()                                                   # /* ADDED */
+    log.info("POST /api/hidden/unhide_all -> %d", before)                     # /* ADDED */
+    hidden_clear_all()                                                        # /* ADDED */
+    return {"ok": True, "cleared": before, "hidden_count": 0}                 # /* ADDED */
+# ---------------------------------------------------------------------------  /* ADDED */
