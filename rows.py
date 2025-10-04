@@ -93,7 +93,7 @@ def build_pairing_rows(
                     if not str(leg.get("flight", "")).startswith("FFT"):
                         nums = re.findall(r"\d{3,4}", str(leg.get("flight", ""))) or []
                         if nums:
-                            leg["flight"] = f"FFT{nums[0]}"
+                            leg["flight"] = f"{nums[0]}"
                     leg["dep_time_str"] = time_display(leg.get("dep_time"), is_24h)
                     leg["arr_time_str"] = time_display(leg.get("arr_time"), is_24h)
             parsed_days.extend(days)
@@ -147,6 +147,10 @@ def build_pairing_rows(
         report_disp = f"{dword(pairing_report_local)} {(_to_12h(hhmm_or_blank(pairing_report_local)) if pairing_report_local else '')}".strip() if pairing_report_local else ""
         release_disp = f"{dword(pairing_release_local)} {(_to_12h(hhmm_or_blank(pairing_release_local)) if pairing_release_local else '')}".strip() if pairing_release_local else ""
 
+        # /* ADDED */  include Apple UID on the pairing row for stable identity
+        uid = (evs_sorted[0].get("uid") if evs_sorted else None)  # Apple VEVENT UID
+        # /* ADDED END */
+
         pairings.append(
             {
                 "kind": "pairing",
@@ -156,6 +160,7 @@ def build_pairing_rows(
                 "release_local_iso": pairing_release_local.isoformat() if pairing_release_local else None,
                 "display": {"report_str": report_disp, "release_str": release_disp},
                 "days": days_with_flags,
+                "uid": uid,  # /* ADDED */
             }
         )
 

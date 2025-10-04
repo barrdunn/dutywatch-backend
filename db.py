@@ -1,4 +1,3 @@
-# db.py
 """
 DutyWatch SQLite helpers
 
@@ -88,6 +87,15 @@ def init_db() -> None:
                 key TEXT PRIMARY KEY,
                 value TEXT
             );
+
+            /* ADDED */ 
+            CREATE TABLE IF NOT EXISTS hidden_items(
+                key TEXT PRIMARY KEY,      -- Apple UID preferred; fallback to ack_id
+                fpr TEXT NOT NULL,         -- fingerprint when hidden
+                created_utc TEXT NOT NULL,
+                last_update_utc TEXT NOT NULL
+            );
+            /* ADDED END */
             """
         )
 

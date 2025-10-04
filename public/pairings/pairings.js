@@ -1,3 +1,4 @@
+// public/pairings/pairings.js
 (function () {
   const cfg = safeParseJSON(document.getElementById('dw-boot')?.textContent) || {};
   const apiBase = cfg.apiBase || '';
@@ -127,6 +128,7 @@
     const es = new EventSource(apiBase + '/api/events');
     es.addEventListener('change', async () => { await renderOnce(); });
     es.addEventListener('schedule_update', async () => { await renderOnce(); });
+    es.addEventListener('hidden_update', async () => { await renderOnce(); }); /* ADDED */
   } catch {}
 
   setInterval(tickStatusLine, 1000);
@@ -140,8 +142,13 @@
       const details = sum.nextElementSibling;
       if (!details || !details.classList.contains('details')) return;
       const open = sum.classList.contains('open');
-      details.querySelectorAll('.day .legs').forEach(tbl => { tbl.style.display = open ? 'table' : 'none'; });
-      details.querySelectorAll('.day .helper').forEach(h => { h.textContent = open ? 'click to hide legs' : 'click to show legs'; });
+
+      // If this is a zero-legs row, details body is just the hide panel; nothing to toggle per-day.
+      const zeroPanel = details.querySelector('[data-zero-legs-panel]');
+      if (!zeroPanel) {
+        details.querySelectorAll('.day .legs').forEach(tbl => { tbl.style.display = open ? 'table' : 'none'; });
+        details.querySelectorAll('.day .helper').forEach(h => { h.textContent = open ? 'click to hide legs' : 'click to show legs'; });
+      }
       return;
     }
 
@@ -183,6 +190,28 @@
       showModal(false);
       return;
     }
+
+    // ADDED: Hide button inside zero-legs panel
+    const hideBtn = e.target.closest('[data-action="hide-row"]'); /* ADDED */
+    if (hideBtn) { /* ADDED */
+      try { /* ADDED */
+        const rowJson = hideBtn.getAttribute('data-row') || '{}'; /* ADDED */
+        const row = JSON.parse(rowJson); /* ADDED */
+        const payload = { uid: row.uid || '', row }; /* ADDED */
+        await fetch(`${apiBase}/api/hide`, { /* ADDED */
+          method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) /* ADDED */
+        }); /* ADDED */
+      } catch (err) { console.error('hide failed', err); } /* ADDED */
+      await renderOnce(); /* ADDED */
+      return; /* ADDED */
+    } /* ADDED */
+
+    // ADDED: Unhide all chip button
+    if (e.target && e.target.id === 'unhide-all') { /* ADDED */
+      try { await fetch(`${apiBase}/api/unhide_all`, { method:'POST' }); } catch (e) { console.error(e); } /* ADDED */
+      await renderOnce(); /* ADDED */
+      return; /* ADDED */
+    } /* ADDED */
   });
 
   document.addEventListener('keydown', (e) => {
@@ -207,6 +236,12 @@
 
     state.lastPullIso    = data.last_pull_local_iso || null;
     state.nextRefreshIso = data.next_pull_local_iso || null;
+
+    // ADDED: hidden chip
+    const hChip = qs('#hidden-chip'); /* ADDED */
+    const hCountEl = qs('#hidden-count'); /* ADDED */
+    if (hCountEl && Number.isFinite(data.hidden_count)) { hCountEl.textContent = String(data.hidden_count); } /* ADDED */
+    if (hChip) hChip.classList.toggle('hidden', !(data.hidden_count > 0)); /* ADDED */
 
     if (refreshSel && data.refresh_minutes) refreshSel.value = String(data.refresh_minutes);
 
@@ -275,6 +310,14 @@
     return null;
   }
 
+  function totalLegs(row){ /* ADDED */
+    let n = 0;
+    for (const d of (row?.days||[])) n += (d?.legs||[]).length;
+    return n;
+  } /* ADDED */
+
+  function plural(n, one, many){ return n === 1 ? one : many; } /* ADDED */
+
   function renderRowHTML(row, homeBase) {
     if (row.kind === 'off') {
       return `
@@ -288,6 +331,7 @@
     }
 
     const daysCount = row.days ? row.days.length : 0;
+    const legsCount = totalLegs(row); /* ADDED */
     const inProg = row.in_progress ? `<span class="progress">(In progress)</span>` : '';
 
     const startDep = firstDepartureAirport(row);
@@ -295,24 +339,44 @@
     const oobPill = showOOB ? `<span class="pill pill-red">${esc(startDep)}</span>` : '';
 
     const checkCell = renderCheckCell(row);
-    const details = (row.days || []).map((day, i) => renderDayHTML(day, i)).join('');
 
     // Preserve server-provided date+time string, but mark for client-time swapping
     const repStr = esc(row.display?.report_str || '');
     const relStr = esc(row.display?.release_str || '');
+
+    // CHANGED: show day pill only if > 0, and pluralize
+    const dayPill = daysCount > 0
+      ? `<span class="pill">${daysCount} ${plural(daysCount,'day','days')}</span>` /* ADDED */
+      : ''; /* ADDED */
+
+    // Details area:
+    const details = (legsCount === 0) /* ADDED: Zero-flight “hide” panel */
+      ? `
+        <div class="daysbox" data-zero-legs-panel>
+          <div class="muted" style="margin-bottom:8px;">No flights found for this item.</div>
+          <button class="btn" type="button"
+                  data-action="hide-row"
+                  data-row="${esc(JSON.stringify(row))}">
+            Hide this item
+          </button>
+        </div>`
+      : (row.days || []).map((day, i) => renderDayHTML(day, i)).join('');
+
+    // CHANGED: tweak details hint
+    const hint = (legsCount === 0) ? 'click to hide' : 'click to expand days'; /* ADDED */
 
     return `
       <tr class="summary">
         ${checkCell}
         <td class="sum-first">
           <strong>${esc(row.pairing_id || '')}</strong>
-          <span class="pill">${daysCount} day</span>
+          ${dayPill}  <!-- CHANGED -->
           ${oobPill}
           ${inProg}
         </td>
         <td data-dw="report">${repStr}</td>
         <td data-dw="release">${relStr}</td>
-        <td class="muted">click to expand days</td>
+        <td class="muted">${esc(hint)}</td> <!-- CHANGED -->
       </tr>
       <tr class="details">
         <td colspan="5">
@@ -416,8 +480,7 @@
 
       qs('#plan-rows').innerHTML = rows || `<tr><td colspan="3" class="muted">No upcoming attempts.</td></tr>`;
       qs('#plan-meta').textContent =
-        `Policy: push at T-${data.policy.window_open_hours}h and T-${data.policy.second_push_at_hours}h; ` +
-        `calls from T-${data.policy.call_start_hours}h every ${data.policy.call_interval_minutes}m (2 rings/attempt)`;
+        `Calls from T-${data.policy.call_start_hours}h every ${data.policy.call_interval_minutes}m (2 rings/attempt)`; /* CHANGED: shortened to match current server policy keys */
 
       showModal(true);
       repaintTimesOnly();

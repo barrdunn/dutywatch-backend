@@ -1,3 +1,4 @@
+<!-- public/pairings/index.html -->
 <!doctype html>
 <html lang="en">
 <head>
@@ -16,6 +17,10 @@
         <span class="chip">Looking through <strong id="looking-through">—</strong></span>
         <span class="chip">Last pull: <strong id="last-pull">—</strong></span>
         <span class="chip">Next refresh: <strong id="next-refresh">—</strong> <span class="muted" id="next-refresh-eta"></span></span>
+        <span class="chip hidden" id="hidden-chip">  <!-- ADDED -->
+          Hidden: <strong id="hidden-count">0</strong>
+          <button class="link-btn" id="unhide-all" type="button" title="Show all hidden items">Unhide all</button>
+        </span> <!-- ADDED -->
       </div>
 
       <div class="controls">

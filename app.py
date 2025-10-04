@@ -213,6 +213,9 @@ async def poller_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    # /* ADDED */ _ensure_hidden_table()
+    _ensure_hidden_table()  # /* ADDED */
+    # /* ADDED END */
     state.poll_task = asyncio.create_task(poller_loop())
     try:
         yield
@@ -223,20 +226,28 @@ async def lifespan(app: FastAPI):
             with suppress(asyncio.CancelledError):
                 await state.poll_task
 
-app.router.lifespan_context = lifespan
-
-# ---------------- Ack / Check-in policy (simulation only) ----------------
+# ---------------- Ack / Check-in policy (updated + quiet hours) ----------------
 ACK_POLICY = {
-    "window_open_hours": 12,      # initial push at T-12h
-    "second_push_at_hours": 6,    # second push at T-6h
-    "call_start_hours": 3,        # start calls at T-3h
-    "call_interval_minutes": 15,  # every 15 min
-    "calls_per_attempt": 2,       # ring twice per attempt
+    # Push notifications: hourly from T-12h until T-4h (exclusive)
+    "push_start_hours": 12,            # begin pushes at T-12h
+    "push_stop_hours": 4,              # stop pushes at T-4h
+    "push_interval_minutes": 60,       # hourly pushes
+
+    # Calls (default cadence)
+    "call_start_hours": 4,             # begin calls at T-4h
+    "call_interval_minutes": 30,       # every 30 minutes
+    "calls_per_attempt": 2,            # ring twice per attempt
+
+    # Quiet-hours rule (local time)
+    "quiet_start_hour": 0,             # 00:00 local
+    "quiet_end_hour": 6,               # 06:00 local (exclusive)
+    "quiet_last_hour_minutes": 60,     # within last 60 min to report we allow calls
+    "quiet_interval_minutes": 15,      # cadence during quiet last-hour window
 }
 
 def _ack_id(pairing_id: str, report_local_iso: str) -> str:
     base = f"{pairing_id}|{report_local_iso}"
-    return hashlib.sha256(base.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256(base.encode("utf-8")).encode("utf-8").hex()[:16]  # /* CHANGED */  /* CHANGED */
 
 def _read_ack_state(ack_id: str) -> Optional[str]:
     with get_db() as c:
@@ -255,24 +266,95 @@ def _write_ack_state(ack_id: str, state_val: str, deadline_utc: Optional[str] = 
                 (ack_id, "", deadline_utc or "", state_val, now_iso),
             )
 
+def _is_quiet_hour(t_local: dt.datetime) -> bool:
+    """Return True if local time is within [quiet_start_hour, quiet_end_hour)."""
+    qs = ACK_POLICY["quiet_start_hour"]
+    qe = ACK_POLICY["quiet_end_hour"]
+    h = t_local.hour
+    # supports ranges that may cross midnight (not used here, but future-proof)
+    if qs <= qe:
+        return qs <= h < qe
+    else:
+        return h >= qs or h < qe
+
 def _plan_attempts(report_local: dt.datetime) -> List[Dict[str, Any]]:
     p = ACK_POLICY
     items: List[Dict[str, Any]] = []
-    items.append({"kind":"push","label":"Initial push","at_iso":(report_local - dt.timedelta(hours=p["window_open_hours"])).isoformat(),"meta":{}})
-    items.append({"kind":"push","label":"Second push","at_iso":(report_local - dt.timedelta(hours=p["second_push_at_hours"])).isoformat(),"meta":{}})
-    t = report_local - dt.timedelta(hours=p["call_start_hours"])
+
+    # ---- Pushes every hour: [report - push_start, report - push_stop)
+    t_start = report_local - dt.timedelta(hours=p["push_start_hours"])
+    t_stop  = report_local - dt.timedelta(hours=p["push_stop_hours"])
+    t = t_start
+    while t < t_stop:
+        items.append({"kind": "push", "label": "Push reminder", "at_iso": t.isoformat(), "meta": {}})
+        t += dt.timedelta(minutes=p["push_interval_minutes"])
+
+    # ---- Calls:
+    # Base cadence: every call_interval_minutes from T-4h to report (two rings per attempt).
+    # Quiet hours override:
+    #   - If candidate call time is between 00:00–06:00 local, skip it unless it's within the last 60 min.
+    #   - Within last 60 min AND in quiet hours, switch to 15-minute cadence.
+    base_interval = dt.timedelta(minutes=p["call_interval_minutes"])
+    quiet_interval = dt.timedelta(minutes=p["quiet_interval_minutes"])
+    last_hour = dt.timedelta(minutes=p["quiet_last_hour_minutes"])
+
+    call_window_start = report_local - dt.timedelta(hours=p["call_start_hours"])
+
+    # Phase A: standard 30-min calls across the whole window (skipping quiet-hour times > 60m from report)
+    t = call_window_start
     while t < report_local:
-        items.append({"kind":"call","label":"Call attempt (ring 1/2)","at_iso":t.isoformat(),"meta":{"ring":1}})
-        items.append({"kind":"call","label":"Call attempt (ring 2/2)","at_iso":(t + dt.timedelta(minutes=1)).isoformat(),"meta":{"ring":2}})
-        t = t + dt.timedelta(minutes=p["call_interval_minutes"])
+        t_local = t.astimezone(LOCAL_TZ)
+        until_report = report_local - t
+        if _is_quiet_hour(t_local) and until_report > last_hour:
+            # In quiet hours and not within last hour: skip
+            t += base_interval
+            continue
+
+        # schedule this attempt (two rings, 1 min apart)
+        for ring in range(1, p["calls_per_attempt"] + 1):
+            ts = t if ring == 1 else (t + dt.timedelta(minutes=1))
+            items.append({
+                "kind": "call",
+                "label": f"Call attempt (ring {ring}/{p['calls_per_attempt']})",
+                "at_iso": ts.isoformat(),
+                "meta": {"ring": ring}
+            })
+
+        t += base_interval
+
+    # Phase B: ensure 15-min cadence inside the last hour *when the time falls in quiet hours*
+    t0 = max(call_window_start, report_local - last_hour)
+    t = t0
+    seen = set(i["at_iso"] for i in items)  # dedupe
+    while t < report_local:
+        t_local = t.astimezone(LOCAL_TZ)
+        if _is_quiet_hour(t_local):
+            for ring in range(1, p["calls_per_attempt"] + 1):
+                ts = t if ring == 1 else (t + dt.timedelta(minutes=1))
+                iso = ts.isoformat()
+                if iso not in seen:
+                    seen.add(iso)
+                    items.append({
+                        "kind": "call",
+                        "label": f"Call attempt (ring {ring}/{p['calls_per_attempt']})",
+                        "at_iso": iso,
+                        "meta": {"ring": ring}
+                    })
+        t += quiet_interval
+
     items.sort(key=lambda x: x["at_iso"])
     return items
 
 def _window_state(report_local: Optional[dt.datetime]) -> Dict[str, Any]:
+    """
+    Window is considered "open" from the first push time (report - push_start_hours)
+    until the report time.
+    """
     now_local = dt.datetime.now(LOCAL_TZ)
     if not report_local:
         return {"window_open": False, "seconds_until_open": None, "seconds_until_report": None}
-    open_at = report_local - dt.timedelta(hours=ACK_POLICY["window_open_hours"])
+
+    open_at = report_local - dt.timedelta(hours=ACK_POLICY["push_start_hours"])
     return {
         "window_open": open_at <= now_local <= report_local,
         "seconds_until_open": max(0, int((open_at - now_local).total_seconds())) if now_local < open_at else 0,
@@ -306,6 +388,78 @@ def window_bounds_utc() -> Tuple[dt.datetime, dt.datetime, dt.datetime, dt.datet
     start_utc = to_utc(start_local)
     end_utc = to_utc(end_local)
     return start_utc, end_utc, start_local, end_local, label
+
+# ============================
+# /* ADDED: Hidden items (server-side persistence) */
+# ============================
+def _ensure_hidden_table():  # /* ADDED */
+    with get_db() as c:
+        c.execute("""CREATE TABLE IF NOT EXISTS hidden_items (
+            key TEXT PRIMARY KEY,
+            fpr TEXT NOT NULL,
+            created_utc TEXT NOT NULL,
+            last_update_utc TEXT NOT NULL
+        )""")
+
+def _stable_row_key(row: Dict[str, Any]) -> Optional[str]:  # /* ADDED */
+    uid = row.get("uid") or row.get("event_uid")
+    if uid:
+        return str(uid)
+    ack = row.get("ack") or {}
+    if ack.get("ack_id"):
+        return str(ack["ack_id"])
+    pid = str(row.get("pairing_id") or "")
+    riso = str((row.get("ack") or {}).get("report_local_iso") or row.get("report_local_iso") or "")
+    if pid or riso:
+        base = f"{pid}|{riso}"
+        return hashlib.sha256(base.encode("utf-8")).hexdigest()[:16]
+    return None
+
+def _row_fingerprint(row: Dict[str, Any]) -> str:  # /* ADDED */
+    def legs_of(day):
+        legs = day.get("legs") or []
+        return [[
+            (l.get("flight") or ""),
+            (l.get("dep") or ""),
+            (l.get("arr") or ""),
+            (l.get("dep_hhmm") or l.get("dep_time") or ""),
+            (l.get("arr_hhmm") or l.get("arr_time") or "")
+        ] for l in legs]
+    pick = {
+        "pairing_id": row.get("pairing_id") or "",
+        "display": {
+            "report": ((row.get("display") or {}).get("report_str") or ""),
+            "release": ((row.get("display") or {}).get("release_str") or ""),
+        },
+        "days": [{
+            "hotel": (d.get("hotel") or ""),
+            "legs": legs_of(d)
+        } for d in (row.get("days") or [])]
+    }
+    blob = json.dumps(pick, sort_keys=True, separators=(",", ":"))
+    h = 2166136261  # FNV-like simple hash
+    for ch in blob:
+        h ^= ord(ch)
+        h = (h * 16777619) & 0xFFFFFFFF
+    return format(h, "08x")
+
+def _hidden_map() -> Dict[str, str]:  # /* ADDED */
+    with get_db() as c:
+        rows = c.execute("SELECT key, fpr FROM hidden_items").fetchall()
+    return {r["key"]: r["fpr"] for r in rows}
+
+def _hidden_set(key: str, fpr: str):  # /* ADDED */
+    now_iso = _now_utc().isoformat()
+    with get_db() as c:
+        c.execute("""
+            INSERT INTO hidden_items(key, fpr, created_utc, last_update_utc)
+            VALUES (?,?,?,?)
+            ON CONFLICT(key) DO UPDATE SET fpr=excluded.fpr, last_update_utc=excluded.last_update_utc
+        """, (key, fpr, now_iso, now_iso))
+
+def _hidden_clear_all():  # /* ADDED */
+    with get_db() as c:
+        c.execute("DELETE FROM hidden_items")
 
 # ---------------- API Routes ----------------
 @app.get("/health")
@@ -383,6 +537,20 @@ async def api_pairings(
             }
             enriched.append(r)
 
+        # /* ADDED: server-side hidden filtering */
+        hidden_map = _hidden_map()  # {key: fpr}
+        visible: List[Dict[str, Any]] = []
+        for r in enriched:
+            key = _stable_row_key(r)
+            if not key:
+                visible.append(r)
+                continue
+            fpr = _row_fingerprint(r)
+            if hidden_map.get(key) == fpr:
+                continue  # stay hidden (unchanged)
+            visible.append(r)
+        # /* ADDED END */
+
         # meta display — header shows the SAME window we used
         lp_iso = meta.get("last_pull_utc")
         nr_iso = meta.get("next_run_utc")
@@ -402,6 +570,10 @@ async def api_pairings(
             "label": window_label,
         }
 
+        # /* ADDED */
+        hidden_count = len(hidden_map)
+        # /* ADDED END */
+
         return {
             "window": window_obj,
             "window_config": {"mode": VIEW_WINDOW_MODE, "tz": str(LOCAL_TZ)},
@@ -413,11 +585,12 @@ async def api_pairings(
             "next_pull_local_iso": nr_local.isoformat() if nr_local else "",
             "seconds_to_next": seconds_to_next,
             "tz_label": "CT",
-            "rows": enriched,
+            "rows": visible,  # /* CHANGED */
             "version": state.version,
             "refresh_minutes": int(meta.get("refresh_minutes", max(1, state.refresh_seconds // 60))),
             "ack_policy": ACK_POLICY,
             "is_24h": use_24h,  # debug/visibility
+            "hidden_count": hidden_count,  # /* ADDED */
         }
     except Exception as e:
         tb = traceback.format_exc(limit=12)
@@ -446,6 +619,44 @@ def api_ack_acknowledge(payload: Dict[str, Any] = Body(...)):
     deadline_utc = report_local.astimezone(dt.timezone.utc).isoformat() if report_local else None
     _write_ack_state(ackid, "ack", deadline_utc)
     return {"ok": True, "ack_id": ackid}
+
+# /* ADDED: Hidden items API */
+@app.post("/api/hide")
+def api_hide_item(payload: Dict[str, Any] = Body(...)):  # /* ADDED */
+    """
+    Payload:
+      - uid: Apple event UID (preferred)
+      - ack_id: fallback key
+      - row: full pairing row (used to compute fingerprint)
+    """
+    uid = (payload.get("uid") or "").strip()
+    ack_id = (payload.get("ack_id") or "").strip()
+    row = payload.get("row") or {}
+
+    key = uid or ack_id or _stable_row_key(row)
+    if not key:
+        raise HTTPException(400, "uid or ack_id or identifiable row is required")
+    if not isinstance(row, dict) or not row:
+        raise HTTPException(400, "row object required to compute fingerprint")
+
+    fpr = _row_fingerprint(row)
+    _hidden_set(key, fpr)
+    state.version += 1
+    asyncio.create_task(_emit("hidden_update", {"key": key}))
+    return {"ok": True, "key": key, "fpr": fpr}
+
+@app.post("/api/unhide_all")
+def api_unhide_all():  # /* ADDED */
+    _hidden_clear_all()
+    state.version += 1
+    asyncio.create_task(_emit("hidden_update", {"cleared": True}))
+    return {"ok": True}
+
+@app.get("/api/hidden")
+def api_hidden_list():  # /* ADDED */
+    m = _hidden_map()
+    return {"count": len(m), "hidden": m}
+# /* ADDED END */
 
 @app.get("/api/status")
 async def api_status():

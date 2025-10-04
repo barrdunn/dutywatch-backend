@@ -1,3 +1,4 @@
+/* public/pairings/pairings.css */
 :root{
   color-scheme:dark;
 
@@ -29,6 +30,17 @@ h1{margin:0 0 8px;font-size:22px}
 .controls form{display:inline-flex;gap:8px;align-items:center}
 .btn{background:var(--accent);color:#031323;border:0;border-radius:10px;padding:8px 12px;font-weight:600;cursor:pointer}
 .toggle,select.toggle{background:transparent;color:var(--text);border:1px solid var(--border);border-radius:10px;padding:6px 10px;cursor:pointer}
+
+/* ADDED: link-like button inside chips */
+.link-btn{ /* ADDED */
+  background:transparent; /* ADDED */
+  border:0;              /* ADDED */
+  color:var(--accent);   /* ADDED */
+  cursor:pointer;        /* ADDED */
+  font-weight:800;       /* ADDED */
+  margin-left:8px;       /* ADDED */
+  padding:0;             /* ADDED */
+} /* ADDED */
 
 /* =========================
    Main table (LOCKED widths)
