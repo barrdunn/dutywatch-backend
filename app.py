@@ -20,16 +20,37 @@ from zoneinfo import ZoneInfo
 
 import cal_client as cal
 from cache_meta import read_cache_meta, write_cache_meta, normalize_cached_events
-from rows import build_pairing_rows, end_of_next_month_local
+from rows import build_pairing_rows, end_of_next_month_local, grouping_key
 from db import get_db, init_db
+
+# ---- Optional DB helpers (server-side hidden + sticky rows) ----
+try:
+    from db import hide_uid, list_hidden_uids, hidden_count, unhide_all
+except Exception:  # safe fallbacks
+    def hide_uid(uid: str) -> None:  # type: ignore
+        pass
+    def list_hidden_uids() -> List[str]:  # type: ignore
+        return []
+    def hidden_count() -> int:  # type: ignore
+        return 0
+    def unhide_all() -> None:  # type: ignore
+        pass
+
+try:
+    from db import upsert_live_row, list_live_rows, purge_expired_live
+except Exception:  # safe fallbacks
+    def upsert_live_row(row: Dict[str, Any]) -> None:  # type: ignore
+        pass
+    def list_live_rows() -> List[Dict[str, Any]]:  # type: ignore
+        return []
+    def purge_expired_live(now_iso: str) -> None:  # type: ignore
+        pass
 
 # ---------------- Paths / Static ----------------
 BASE_DIR = Path(__file__).parent.resolve()
 PAIRINGS_DIR = BASE_DIR / "public" / "pairings"
 
 app = FastAPI(title="DutyWatch Backend (Viewer-Only)")
-
-# Serve static front-end
 app.mount("/pairings", StaticFiles(directory=PAIRINGS_DIR, html=True), name="pairings")
 
 @app.get("/pairings", include_in_schema=False)
@@ -63,10 +84,6 @@ async def timing_and_errors(request, call_next):
 
 # ---------------- Config / Time ----------------
 LOCAL_TZ = ZoneInfo(os.getenv("LOCAL_TZ", "America/Chicago"))
-
-# SINGLE SOURCE OF TRUTH for the viewing window
-# Supported:
-#   - TODAY_TO_END_OF_NEXT_MONTH  (default)
 VIEW_WINDOW_MODE = os.getenv("VIEW_WINDOW_MODE", "TODAY_TO_END_OF_NEXT_MONTH").upper().strip()
 
 class State:
@@ -136,7 +153,6 @@ def human_ago(from_dt: Optional[dt.datetime]) -> str:
     days = hours // 24
     return f"{days} day{'s' if days != 1 else ''} ago"
 
-# --- time formatting helper (added) ---
 def _fmt_time(hhmm: str, use_24h: bool) -> str:
     if not hhmm:
         return ""
@@ -165,6 +181,33 @@ async def _emit(event_type: str, payload: dict | None = None):
     except Exception:
         pass
 
+def _hash_event(ev: Dict[str, Any]) -> str:
+    """
+    Stable hash over event fields that affect parsing / rendering.
+    If any of these change (uid, start/end, last-modified, summary, location, description),
+    the hash changes -> we treat as a changed snapshot.
+    """
+    material = {
+        "uid": ev.get("uid") or "",
+        "start_utc": ev.get("start_utc") or "",
+        "end_utc": ev.get("end_utc") or "",
+        "last_modified": ev.get("last_modified") or "",
+        "summary": ev.get("summary") or "",
+        "location": ev.get("location") or "",
+        "description": ev.get("description") or "",
+    }
+    blob = json.dumps(material, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+def _events_digest(events: List[Dict[str, Any]]) -> str:
+    # order-independent digest (sort by uid then start)
+    keyed = sorted(
+        [{"k": f"{e.get('uid','')}|{e.get('start_utc','')}", "h": _hash_event(e)} for e in events],
+        key=lambda x: x["k"],
+    )
+    blob = json.dumps(keyed, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
 def _next_from_meta(meta: Dict[str, Any]) -> dt.datetime:
     mins = int(meta.get("refresh_minutes", max(1, state.refresh_seconds // 60)))
     nxt = iso_to_dt(meta.get("next_run_utc"))
@@ -175,13 +218,22 @@ def _next_from_meta(meta: Dict[str, Any]) -> dt.datetime:
     return nxt
 
 async def pull_and_update_once() -> bool:
+    """
+    Pull fresh iCloud events and mark 'changed' if *any* parse-relevant field
+    differs, so the frontend repaints even when only legs/times moved.
+    """
     try:
         events = await run_in_threadpool(fetch_current_to_next_eom)
         meta = await run_in_threadpool(read_cache_meta)
 
-        changed = json.dumps(meta.get("events", []), sort_keys=True) != json.dumps(events, sort_keys=True)
+        old_events = meta.get("events", [])
+        old_digest = meta.get("events_digest", "")
+
+        new_digest = _events_digest(events)
+        changed = (new_digest != old_digest)
 
         meta["events"] = events
+        meta["events_digest"] = new_digest
         meta["last_pull_utc"] = _now_utc().isoformat()
         meta.setdefault("refresh_minutes", max(1, state.refresh_seconds // 60))
         mins = int(meta.get("refresh_minutes", 30))
@@ -190,7 +242,6 @@ async def pull_and_update_once() -> bool:
 
         if changed:
             state.version += 1
-
         await _emit("change", {"changed": changed})
         return changed
     except Exception as e:
@@ -213,9 +264,6 @@ async def poller_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    # /* ADDED */ _ensure_hidden_table()
-    _ensure_hidden_table()  # /* ADDED */
-    # /* ADDED END */
     state.poll_task = asyncio.create_task(poller_loop())
     try:
         yield
@@ -226,28 +274,25 @@ async def lifespan(app: FastAPI):
             with suppress(asyncio.CancelledError):
                 await state.poll_task
 
-# ---------------- Ack / Check-in policy (updated + quiet hours) ----------------
+app.router.lifespan_context = lifespan
+
+# ---------------- Ack / Check-in policy ----------------
 ACK_POLICY = {
-    # Push notifications: hourly from T-12h until T-4h (exclusive)
-    "push_start_hours": 12,            # begin pushes at T-12h
-    "push_stop_hours": 4,              # stop pushes at T-4h
-    "push_interval_minutes": 60,       # hourly pushes
-
-    # Calls (default cadence)
-    "call_start_hours": 4,             # begin calls at T-4h
-    "call_interval_minutes": 30,       # every 30 minutes
-    "calls_per_attempt": 2,            # ring twice per attempt
-
-    # Quiet-hours rule (local time)
-    "quiet_start_hour": 0,             # 00:00 local
-    "quiet_end_hour": 6,               # 06:00 local (exclusive)
-    "quiet_last_hour_minutes": 60,     # within last 60 min to report we allow calls
-    "quiet_interval_minutes": 15,      # cadence during quiet last-hour window
+    "push_start_hours": 12,
+    "push_stop_hours": 4,
+    "push_interval_minutes": 60,
+    "call_start_hours": 4,
+    "call_interval_minutes": 30,
+    "calls_per_attempt": 2,
+    "quiet_start_hour": 0,
+    "quiet_end_hour": 6,
+    "quiet_last_hour_minutes": 60,
+    "quiet_interval_minutes": 15,
 }
 
 def _ack_id(pairing_id: str, report_local_iso: str) -> str:
     base = f"{pairing_id}|{report_local_iso}"
-    return hashlib.sha256(base.encode("utf-8")).encode("utf-8").hex()[:16]  # /* CHANGED */  /* CHANGED */
+    return hashlib.sha256(base.encode("utf-8")).hexdigest()[:16]
 
 def _read_ack_state(ack_id: str) -> Optional[str]:
     with get_db() as c:
@@ -267,11 +312,9 @@ def _write_ack_state(ack_id: str, state_val: str, deadline_utc: Optional[str] = 
             )
 
 def _is_quiet_hour(t_local: dt.datetime) -> bool:
-    """Return True if local time is within [quiet_start_hour, quiet_end_hour)."""
     qs = ACK_POLICY["quiet_start_hour"]
     qe = ACK_POLICY["quiet_end_hour"]
     h = t_local.hour
-    # supports ranges that may cross midnight (not used here, but future-proof)
     if qs <= qe:
         return qs <= h < qe
     else:
@@ -280,8 +323,6 @@ def _is_quiet_hour(t_local: dt.datetime) -> bool:
 def _plan_attempts(report_local: dt.datetime) -> List[Dict[str, Any]]:
     p = ACK_POLICY
     items: List[Dict[str, Any]] = []
-
-    # ---- Pushes every hour: [report - push_start, report - push_stop)
     t_start = report_local - dt.timedelta(hours=p["push_start_hours"])
     t_stop  = report_local - dt.timedelta(hours=p["push_stop_hours"])
     t = t_start
@@ -289,43 +330,26 @@ def _plan_attempts(report_local: dt.datetime) -> List[Dict[str, Any]]:
         items.append({"kind": "push", "label": "Push reminder", "at_iso": t.isoformat(), "meta": {}})
         t += dt.timedelta(minutes=p["push_interval_minutes"])
 
-    # ---- Calls:
-    # Base cadence: every call_interval_minutes from T-4h to report (two rings per attempt).
-    # Quiet hours override:
-    #   - If candidate call time is between 00:00–06:00 local, skip it unless it's within the last 60 min.
-    #   - Within last 60 min AND in quiet hours, switch to 15-minute cadence.
     base_interval = dt.timedelta(minutes=p["call_interval_minutes"])
     quiet_interval = dt.timedelta(minutes=p["quiet_interval_minutes"])
     last_hour = dt.timedelta(minutes=p["quiet_last_hour_minutes"])
-
     call_window_start = report_local - dt.timedelta(hours=p["call_start_hours"])
 
-    # Phase A: standard 30-min calls across the whole window (skipping quiet-hour times > 60m from report)
     t = call_window_start
     while t < report_local:
         t_local = t.astimezone(LOCAL_TZ)
         until_report = report_local - t
         if _is_quiet_hour(t_local) and until_report > last_hour:
-            # In quiet hours and not within last hour: skip
             t += base_interval
             continue
-
-        # schedule this attempt (two rings, 1 min apart)
         for ring in range(1, p["calls_per_attempt"] + 1):
             ts = t if ring == 1 else (t + dt.timedelta(minutes=1))
-            items.append({
-                "kind": "call",
-                "label": f"Call attempt (ring {ring}/{p['calls_per_attempt']})",
-                "at_iso": ts.isoformat(),
-                "meta": {"ring": ring}
-            })
-
+            items.append({"kind": "call", "label": f"Call attempt (ring {ring}/{p['calls_per_attempt']})", "at_iso": ts.isoformat(), "meta": {"ring": ring}})
         t += base_interval
 
-    # Phase B: ensure 15-min cadence inside the last hour *when the time falls in quiet hours*
     t0 = max(call_window_start, report_local - last_hour)
     t = t0
-    seen = set(i["at_iso"] for i in items)  # dedupe
+    seen = set(i["at_iso"] for i in items)
     while t < report_local:
         t_local = t.astimezone(LOCAL_TZ)
         if _is_quiet_hour(t_local):
@@ -334,26 +358,16 @@ def _plan_attempts(report_local: dt.datetime) -> List[Dict[str, Any]]:
                 iso = ts.isoformat()
                 if iso not in seen:
                     seen.add(iso)
-                    items.append({
-                        "kind": "call",
-                        "label": f"Call attempt (ring {ring}/{p['calls_per_attempt']})",
-                        "at_iso": iso,
-                        "meta": {"ring": ring}
-                    })
+                    items.append({"kind": "call", "label": f"Call attempt (ring {ring}/{p['calls_per_attempt']})", "at_iso": iso, "meta": {"ring": ring}})
         t += quiet_interval
 
     items.sort(key=lambda x: x["at_iso"])
     return items
 
 def _window_state(report_local: Optional[dt.datetime]) -> Dict[str, Any]:
-    """
-    Window is considered "open" from the first push time (report - push_start_hours)
-    until the report time.
-    """
     now_local = dt.datetime.now(LOCAL_TZ)
     if not report_local:
         return {"window_open": False, "seconds_until_open": None, "seconds_until_report": None}
-
     open_at = report_local - dt.timedelta(hours=ACK_POLICY["push_start_hours"])
     return {
         "window_open": open_at <= now_local <= report_local,
@@ -361,12 +375,8 @@ def _window_state(report_local: Optional[dt.datetime]) -> Dict[str, Any]:
         "seconds_until_report": max(0, int((report_local - now_local).total_seconds())) if now_local < report_local else 0,
     }
 
-# ---------------- Viewing window (single source of truth) ----------------
+# ---------------- Viewing window ----------------
 def compute_window_bounds_local() -> Tuple[dt.datetime, dt.datetime, str]:
-    """
-    Computes the viewing window in LOCAL time based on VIEW_WINDOW_MODE.
-    Returns (start_local, end_local, label).
-    """
     mode = VIEW_WINDOW_MODE
     now_local = dt.datetime.now(LOCAL_TZ)
 
@@ -376,90 +386,16 @@ def compute_window_bounds_local() -> Tuple[dt.datetime, dt.datetime, str]:
         label = f"Today – {end_local.strftime('%b %d (%a)')}"
         return start_local, end_local, label
 
-    # Fallback: default behavior
     start_local = now_local
     end_local = end_of_next_month_local()
     label = f"Today – {end_local.strftime('%b %d (%a)')}"
     return start_local, end_local, label
 
 def window_bounds_utc() -> Tuple[dt.datetime, dt.datetime, dt.datetime, dt.datetime, str]:
-    """Return (start_utc, end_utc, start_local, end_local, label)."""
     start_local, end_local, label = compute_window_bounds_local()
     start_utc = to_utc(start_local)
     end_utc = to_utc(end_local)
     return start_utc, end_utc, start_local, end_local, label
-
-# ============================
-# /* ADDED: Hidden items (server-side persistence) */
-# ============================
-def _ensure_hidden_table():  # /* ADDED */
-    with get_db() as c:
-        c.execute("""CREATE TABLE IF NOT EXISTS hidden_items (
-            key TEXT PRIMARY KEY,
-            fpr TEXT NOT NULL,
-            created_utc TEXT NOT NULL,
-            last_update_utc TEXT NOT NULL
-        )""")
-
-def _stable_row_key(row: Dict[str, Any]) -> Optional[str]:  # /* ADDED */
-    uid = row.get("uid") or row.get("event_uid")
-    if uid:
-        return str(uid)
-    ack = row.get("ack") or {}
-    if ack.get("ack_id"):
-        return str(ack["ack_id"])
-    pid = str(row.get("pairing_id") or "")
-    riso = str((row.get("ack") or {}).get("report_local_iso") or row.get("report_local_iso") or "")
-    if pid or riso:
-        base = f"{pid}|{riso}"
-        return hashlib.sha256(base.encode("utf-8")).hexdigest()[:16]
-    return None
-
-def _row_fingerprint(row: Dict[str, Any]) -> str:  # /* ADDED */
-    def legs_of(day):
-        legs = day.get("legs") or []
-        return [[
-            (l.get("flight") or ""),
-            (l.get("dep") or ""),
-            (l.get("arr") or ""),
-            (l.get("dep_hhmm") or l.get("dep_time") or ""),
-            (l.get("arr_hhmm") or l.get("arr_time") or "")
-        ] for l in legs]
-    pick = {
-        "pairing_id": row.get("pairing_id") or "",
-        "display": {
-            "report": ((row.get("display") or {}).get("report_str") or ""),
-            "release": ((row.get("display") or {}).get("release_str") or ""),
-        },
-        "days": [{
-            "hotel": (d.get("hotel") or ""),
-            "legs": legs_of(d)
-        } for d in (row.get("days") or [])]
-    }
-    blob = json.dumps(pick, sort_keys=True, separators=(",", ":"))
-    h = 2166136261  # FNV-like simple hash
-    for ch in blob:
-        h ^= ord(ch)
-        h = (h * 16777619) & 0xFFFFFFFF
-    return format(h, "08x")
-
-def _hidden_map() -> Dict[str, str]:  # /* ADDED */
-    with get_db() as c:
-        rows = c.execute("SELECT key, fpr FROM hidden_items").fetchall()
-    return {r["key"]: r["fpr"] for r in rows}
-
-def _hidden_set(key: str, fpr: str):  # /* ADDED */
-    now_iso = _now_utc().isoformat()
-    with get_db() as c:
-        c.execute("""
-            INSERT INTO hidden_items(key, fpr, created_utc, last_update_utc)
-            VALUES (?,?,?,?)
-            ON CONFLICT(key) DO UPDATE SET fpr=excluded.fpr, last_update_utc=excluded.last_update_utc
-        """, (key, fpr, now_iso, now_iso))
-
-def _hidden_clear_all():  # /* ADDED */
-    with get_db() as c:
-        c.execute("DELETE FROM hidden_items")
 
 # ---------------- API Routes ----------------
 @app.get("/health")
@@ -468,99 +404,161 @@ def health():
 
 @app.get("/api/pairings")
 async def api_pairings(
-    # legacy params kept; ignored for windowed view
     year: Optional[int] = Query(default=None, ge=1970, le=2100),
     month: Optional[int] = Query(default=None, ge=1, le=12),
     only_reports: int = Query(default=1),
     is_24h: int = Query(default=0),
 ):
+    """
+    Builds visible rows:
+      - Filters hidden zero-leg items (by UID).
+      - Keeps real (has legs) in-progress pairings sticky until release.
+      - Recomputes OFF rows after hide/unhide and on every paint.
+      - TOP OFF row when 'now' < first report shows: 'OFF (Current)' and 'Xd Yh (Remaining)' or 'Xh (Remaining)'.
+    """
     try:
         meta = await run_in_threadpool(read_cache_meta)
         events = normalize_cached_events(meta)
 
-        # EXACT window used for both filtering and UI, from single source of truth
+        # exact window (let in-progress that started earlier still appear)
         start_utc, end_utc, start_local, end_local, window_label = window_bounds_utc()
-
         UTC_MIN = dt.datetime.min.replace(tzinfo=dt.timezone.utc)
+        UTC_MAX = dt.datetime.max.replace(tzinfo=dt.timezone.utc)
+
         def safe_start(ev: Dict[str, Any]) -> dt.datetime:
             s = iso_to_dt(ev.get("start_utc"))
-            try:
-                return s if (s and s.tzinfo) else (s or UTC_MIN).replace(tzinfo=dt.timezone.utc)
-            except Exception:
-                return UTC_MIN
+            return s if (s and s.tzinfo) else (s or UTC_MIN).replace(tzinfo=dt.timezone.utc)
 
-        window_events = [e for e in events if start_utc <= safe_start(e) < end_utc]
+        def safe_end(ev: Dict[str, Any]) -> dt.datetime:
+            e = iso_to_dt(ev.get("end_utc"))
+            return e if (e and e.tzinfo) else (e or UTC_MAX).replace(tzinfo=dt.timezone.utc)
+
+        window_events = [e for e in events if (safe_end(e) > start_utc) and (safe_start(e) < end_utc)]
+
+        # Build rows fresh *every time* to reflect inner parse changes.
         rows = await run_in_threadpool(build_pairing_rows, window_events, bool(is_24h), bool(only_reports))
 
-        # --- normalize display strings to requested clock mode (added) ---
+        # Map pairing -> uids
+        pid_to_uids: Dict[str, List[str]] = {}
+        for ev in window_events:
+            pid = grouping_key(ev)
+            uid = str(ev.get("uid") or "")
+            if uid:
+                pid_to_uids.setdefault(pid, []).append(uid)
+
+        hidden = await run_in_threadpool(list_hidden_uids)
         use_24h = bool(is_24h)
+
+        visible: List[Dict[str, Any]] = []
+
+        def fmt_top(disp_map: Dict[str, Any], r: Dict[str, Any]):
+            rep = disp_map.get("report_hhmm") or r.get("report_hhmm") or r.get("report")
+            rel = disp_map.get("release_hhmm") or r.get("release_hhmm") or r.get("release")
+            if isinstance(rep, str) and rep.isdigit():
+                disp_map["report_str"] = _fmt_time(rep, use_24h)
+            if isinstance(rel, str) and rel.isdigit():
+                disp_map["release_str"] = _fmt_time(rel, use_24h)
+
         for r in rows:
             if r.get("kind") != "pairing":
                 continue
-            disp = r.setdefault("display", {})
-            # pairing-level report/release display (if raw HHMM present)
-            rep = disp.get("report_hhmm") or r.get("report_hhmm") or r.get("report")
-            rel = disp.get("release_hhmm") or r.get("release_hhmm") or r.get("release")
-            if isinstance(rep, str) and rep.isdigit():
-                disp["report_str"] = _fmt_time(rep, use_24h)
-            if isinstance(rel, str) and rel.isdigit():
-                disp["release_str"] = _fmt_time(rel, use_24h)
-            # legs per day
+            pid = str(r.get("pairing_id") or "")
+            r["uids"] = pid_to_uids.get(pid, [])
+            total_legs = sum(len((d.get("legs") or [])) for d in (r.get("days") or []))
+            r["can_hide"] = (total_legs == 0)
+
+            fmt_top(r.setdefault("display", {}), r)
+
             for d in (r.get("days") or []):
                 for leg in (d.get("legs") or []):
-                    dep_raw = leg.get("dep_time") or leg.get("dep_hhmm")
-                    arr_raw = leg.get("arr_time") or leg.get("arr_hhmm")
-                    if dep_raw and not leg.get("dep_time_str"):
-                        leg["dep_time_str"] = _fmt_time(dep_raw, use_24h)
-                    if arr_raw and not leg.get("arr_time_str"):
-                        leg["arr_time_str"] = _fmt_time(arr_raw, use_24h)
+                    if leg.get("dep_time") and not leg.get("dep_time_str"):
+                        leg["dep_time_str"] = _fmt_time(str(leg["dep_time"]).zfill(4), use_24h)
+                    if leg.get("arr_time") and not leg.get("arr_time_str"):
+                        leg["arr_time_str"] = _fmt_time(str(leg["arr_time"]).zfill(4), use_24h)
 
-        # ack enrichment
-        enriched: List[Dict[str, Any]] = []
-        for r in rows:
-            if r.get("kind") != "pairing":
-                enriched.append(r)
+            # hide logic
+            all_hidden = (len(r["uids"]) > 0) and all(uid in hidden for uid in r["uids"])
+            if all_hidden and (r["can_hide"] or not r.get("in_progress")):
                 continue
-            pairing_id = str(r.get("pairing_id") or "")
-            report_iso = r.get("report_local_iso") or ""
-            report_local = to_local(iso_to_dt(report_iso)) if report_iso else None
-            win = _window_state(report_local)
-            ackid = _ack_id(pairing_id, report_iso)
-            ack_state = _read_ack_state(ackid)
-            r["ack"] = {
-                "ack_id": ackid,
-                "window_open": bool(win["window_open"]),
-                "acknowledged": (ack_state == "ack"),
-                "seconds_until_open": win["seconds_until_open"],
-                "seconds_until_report": win["seconds_until_report"],
-                "report_local_iso": report_iso,
-            }
-            enriched.append(r)
 
-        # /* ADDED: server-side hidden filtering */
-        hidden_map = _hidden_map()  # {key: fpr}
-        visible: List[Dict[str, Any]] = []
-        for r in enriched:
-            key = _stable_row_key(r)
-            if not key:
-                visible.append(r)
-                continue
-            fpr = _row_fingerprint(r)
-            if hidden_map.get(key) == fpr:
-                continue  # stay hidden (unchanged)
             visible.append(r)
-        # /* ADDED END */
 
-        # meta display — header shows the SAME window we used
+        # Sticky in-progress real pairings
+        now_local = dt.datetime.now(LOCAL_TZ)
+        live_rows = await run_in_threadpool(list_live_rows)
+        existing_pids = set(str(p.get("pairing_id") or "") for p in visible)
+        for lr in live_rows:
+            pid = str(lr.get("pairing_id") or "")
+            if not pid or pid in existing_pids:
+                continue
+            rel_iso = lr.get("release_local_iso")
+            rel_dt = to_local(iso_to_dt(rel_iso)) if rel_iso else None
+            if rel_dt and rel_dt >= now_local and not lr.get("can_hide"):
+                visible.append(lr)
+
+        # Keep live rows up-to-date; purge expired
+        for r in visible:
+            if r.get("in_progress") and not r.get("can_hide"):
+                await run_in_threadpool(upsert_live_row, r)
+        await run_in_threadpool(purge_expired_live, now_local.isoformat())
+
+        # ---- Rebuild OFF rows across final visible
+        def _dt(s):
+            return iso_to_dt(s) if s else None
+
+        visible.sort(key=lambda x: x.get("report_local_iso") or "")
+        final_rows: List[Dict[str, Any]] = []
+
+        # (A) TOP OFF: OFF (Current) + Remaining
+        if visible:
+            first_report_iso = visible[0].get("report_local_iso")
+            first_report = to_local(iso_to_dt(first_report_iso)) if first_report_iso else None
+            if first_report and now_local < first_report:
+                remaining = first_report - now_local
+                hrs = int(remaining.total_seconds() // 3600)
+                if hrs >= 24:
+                    d = hrs // 24
+                    h = hrs % 24
+                    off_str = f"{d}d {h}h (Remaining)"
+                else:
+                    off_str = f"{hrs}h (Remaining)"
+                final_rows.append({
+                    "kind": "off",
+                    "display": {"off_dur": off_str, "off_label": "OFF (Current)"}
+                })
+
+        # (B) Pairings + OFF between pairings
+        for i, p in enumerate(visible):
+            final_rows.append(p)
+            if i + 1 < len(visible):
+                release = _dt(p.get("release_local_iso"))
+                nxt_rep = _dt(visible[i + 1].get("report_local_iso"))
+                gap = dt.timedelta(0)
+                if release and nxt_rep:
+                    gap = max(dt.timedelta(0), nxt_rep - release)
+                total_h = int(gap.total_seconds() // 3600)
+                if total_h >= 24:
+                    d = total_h // 24
+                    h = total_h % 24
+                    off_str = f"{d}d {h}h"
+                else:
+                    off_str = f"{total_h}h"
+                final_rows.append({"kind": "off", "display": {"off_dur": off_str}})
+
+        # ---- Header meta (guard next_run in future to avoid rapid refresh loop)
         lp_iso = meta.get("last_pull_utc")
         nr_iso = meta.get("next_run_utc")
-
         lp_local = to_local(iso_to_dt(lp_iso)) if lp_iso else None
         nr_local = to_local(iso_to_dt(nr_iso)) if nr_iso else None
+        guard_now = dt.datetime.now(LOCAL_TZ)
+        if not nr_local or nr_local <= guard_now:
+            mins = int(meta.get("refresh_minutes", max(1, state.refresh_seconds // 60)))
+            nr_local = guard_now + dt.timedelta(minutes=mins)
+            meta["next_run_utc"] = to_utc(nr_local).replace(microsecond=0).isoformat()
+            await run_in_threadpool(write_cache_meta, meta)
 
         last_pull_local = human_ago_precise(lp_local)
         last_pull_human_simple = human_ago(lp_local)
-
         next_refresh_local_clock = nr_local.strftime("%I:%M %p").lstrip("0") if nr_local else ""
         seconds_to_next = max(0, int((nr_local - dt.datetime.now(LOCAL_TZ)).total_seconds())) if nr_local else 0
 
@@ -570,14 +568,12 @@ async def api_pairings(
             "label": window_label,
         }
 
-        # /* ADDED */
-        hidden_count = len(hidden_map)
-        # /* ADDED END */
+        hc = await run_in_threadpool(hidden_count)
 
         return {
             "window": window_obj,
             "window_config": {"mode": VIEW_WINDOW_MODE, "tz": str(LOCAL_TZ)},
-            "looking_through": window_label,  # legacy compatibility
+            "looking_through": window_label,
             "last_pull_local": last_pull_local,
             "last_pull_local_simple": last_pull_human_simple,
             "last_pull_local_iso": lp_local.isoformat() if lp_local else "",
@@ -585,12 +581,12 @@ async def api_pairings(
             "next_pull_local_iso": nr_local.isoformat() if nr_local else "",
             "seconds_to_next": seconds_to_next,
             "tz_label": "CT",
-            "rows": visible,  # /* CHANGED */
+            "rows": final_rows,
             "version": state.version,
             "refresh_minutes": int(meta.get("refresh_minutes", max(1, state.refresh_seconds // 60))),
             "ack_policy": ACK_POLICY,
-            "is_24h": use_24h,  # debug/visibility
-            "hidden_count": hidden_count,  # /* ADDED */
+            "is_24h": use_24h,
+            "hidden_count": int(hc),
         }
     except Exception as e:
         tb = traceback.format_exc(limit=12)
@@ -619,44 +615,6 @@ def api_ack_acknowledge(payload: Dict[str, Any] = Body(...)):
     deadline_utc = report_local.astimezone(dt.timezone.utc).isoformat() if report_local else None
     _write_ack_state(ackid, "ack", deadline_utc)
     return {"ok": True, "ack_id": ackid}
-
-# /* ADDED: Hidden items API */
-@app.post("/api/hide")
-def api_hide_item(payload: Dict[str, Any] = Body(...)):  # /* ADDED */
-    """
-    Payload:
-      - uid: Apple event UID (preferred)
-      - ack_id: fallback key
-      - row: full pairing row (used to compute fingerprint)
-    """
-    uid = (payload.get("uid") or "").strip()
-    ack_id = (payload.get("ack_id") or "").strip()
-    row = payload.get("row") or {}
-
-    key = uid or ack_id or _stable_row_key(row)
-    if not key:
-        raise HTTPException(400, "uid or ack_id or identifiable row is required")
-    if not isinstance(row, dict) or not row:
-        raise HTTPException(400, "row object required to compute fingerprint")
-
-    fpr = _row_fingerprint(row)
-    _hidden_set(key, fpr)
-    state.version += 1
-    asyncio.create_task(_emit("hidden_update", {"key": key}))
-    return {"ok": True, "key": key, "fpr": fpr}
-
-@app.post("/api/unhide_all")
-def api_unhide_all():  # /* ADDED */
-    _hidden_clear_all()
-    state.version += 1
-    asyncio.create_task(_emit("hidden_update", {"cleared": True}))
-    return {"ok": True}
-
-@app.get("/api/hidden")
-def api_hidden_list():  # /* ADDED */
-    m = _hidden_map()
-    return {"count": len(m), "hidden": m}
-# /* ADDED END */
 
 @app.get("/api/status")
 async def api_status():
@@ -701,3 +659,22 @@ async def sse_events():
             evt_type = msg.get("type", "change")
             yield f"event: {evt_type}\ndata: {json.dumps(msg)}\n\n"
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+# ----- Hide/Unhide endpoints -----
+@app.post("/api/hide")
+async def api_hide(payload: Dict[str, Any] = Body(...)):
+    uid = str(payload.get("uid") or "").strip()
+    if not uid:
+        raise HTTPException(400, "uid required")
+    await run_in_threadpool(hide_uid, uid)
+    hc = await run_in_threadpool(hidden_count)
+    state.version += 1
+    await _emit("hidden_update", {"uid": uid, "hidden_count": int(hc)})
+    return {"ok": True, "hidden_count": int(hc)}
+
+@app.post("/api/unhide_all")
+async def api_unhide_all():
+    await run_in_threadpool(unhide_all)
+    state.version += 1
+    await _emit("hidden_update", {"cleared": True})
+    return {"ok": True}

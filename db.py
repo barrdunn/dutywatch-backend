@@ -3,9 +3,11 @@ DutyWatch SQLite helpers
 
 Tables
 ------
-devices, policy, acks, notifications      # original app tables
+devices, policy, acks, notifications
 events_cache(scope TEXT PK, uid_hash, json, updated_at)
-kv(key TEXT PK, value TEXT)               # tiny key/value for metadata
+kv(key TEXT PK, value TEXT)
+hidden_items(uid TEXT PRIMARY KEY, created_at TEXT)
+live_pairings(pairing_id TEXT PRIMARY KEY, row_json TEXT, release_local_iso TEXT, updated_at TEXT)
 
 Key helpers
 -----------
@@ -16,6 +18,16 @@ write_uid_hash(scope, uid_hash) -> None
 read_last_pull_utc(scope) -> str | None
 set_last_pull_utc(scope, iso_ts) -> None
 clear_events_cache(scope) -> None
+
+hide_uid(uid: str) -> None
+list_hidden_uids() -> set[str]
+hidden_count() -> int
+unhide_all() -> None
+
+upsert_live_row(row: dict) -> None
+list_live_rows() -> list[dict]
+purge_expired_live(now_iso: str) -> None
+delete_live_pairing(pairing_id: str) -> None
 """
 
 from __future__ import annotations
@@ -24,7 +36,7 @@ import os
 import json
 import sqlite3
 import datetime as dt
-from typing import Any
+from typing import Any, List, Dict
 
 # Store DB under ./data/
 DB_DIR = os.path.join(os.path.dirname(__file__), "data")
@@ -74,28 +86,31 @@ def init_db() -> None:
                 sent INTEGER DEFAULT 0
             );
 
-            -- Snapshots of calendar pulls (rolling or month scopes)
             CREATE TABLE IF NOT EXISTS events_cache(
                 scope TEXT PRIMARY KEY,
                 uid_hash TEXT,
-                json TEXT,          -- JSON array of event dicts
+                json TEXT,
                 updated_at TEXT
             );
 
-            -- Tiny KV for misc metadata (e.g., last pull time per scope)
             CREATE TABLE IF NOT EXISTS kv(
                 key TEXT PRIMARY KEY,
                 value TEXT
             );
 
-            /* ADDED */ 
             CREATE TABLE IF NOT EXISTS hidden_items(
-                key TEXT PRIMARY KEY,      -- Apple UID preferred; fallback to ack_id
-                fpr TEXT NOT NULL,         -- fingerprint when hidden
-                created_utc TEXT NOT NULL,
-                last_update_utc TEXT NOT NULL
+                uid TEXT PRIMARY KEY,
+                created_at TEXT
             );
-            /* ADDED END */
+
+            -- Sticky cache of in-progress pairings, so they remain visible
+            -- until their release_local_iso passes.
+            CREATE TABLE IF NOT EXISTS live_pairings(
+                pairing_id TEXT PRIMARY KEY,
+                row_json TEXT NOT NULL,
+                release_local_iso TEXT,
+                updated_at TEXT
+            );
             """
         )
 
@@ -114,7 +129,6 @@ def read_events_cache(scope: str) -> list[dict[str, Any]]:
 
 
 def overwrite_events_cache(scope: str, events: list[dict[str, Any]], *, uid_hash: str | None = None) -> None:
-    """Replace the entire snapshot for a scope."""
     payload = json.dumps(events)
     now = dt.datetime.utcnow().isoformat()
     with get_db() as c:
@@ -138,23 +152,16 @@ def read_uid_hash(scope: str) -> str | None:
 
 
 def write_uid_hash(scope: str, uid_hash: str | None) -> None:
-    """Upsert just the uid_hash for a scope (creates row if missing)."""
     now = dt.datetime.utcnow().isoformat()
     with get_db() as c:
         cur = c.execute("SELECT 1 FROM events_cache WHERE scope=?", (scope,)).fetchone()
         if cur:
-            c.execute(
-                "UPDATE events_cache SET uid_hash=?, updated_at=? WHERE scope=?",
-                (uid_hash, now, scope),
-            )
+            c.execute("UPDATE events_cache SET uid_hash=?, updated_at=? WHERE scope=?", (uid_hash, now, scope))
         else:
-            c.execute(
-                "INSERT INTO events_cache(scope, uid_hash, json, updated_at) VALUES(?,?,?,?)",
-                (scope, uid_hash, "[]", now),
-            )
+            c.execute("INSERT INTO events_cache(scope, uid_hash, json, updated_at) VALUES(?,?,?,?)", (scope, uid_hash, "[]", now))
 
 
-# -------------------- kv helpers (last pull time) --------------------
+# -------------------- kv helpers --------------------
 
 def read_last_pull_utc(scope: str) -> str | None:
     key = f"{scope}:last_pull_utc"
@@ -175,9 +182,74 @@ def set_last_pull_utc(scope: str, iso_ts: str | None = None) -> None:
         )
 
 
-# -------------------- misc --------------------
+# -------------------- hidden items helpers --------------------
 
-def list_scopes() -> list[str]:
+def hide_uid(uid: str) -> None:
+    if not uid:
+        return
+    now = dt.datetime.utcnow().isoformat()
     with get_db() as c:
-        rows = c.execute("SELECT scope FROM events_cache ORDER BY scope").fetchall()
-        return [r["scope"] for r in rows]
+        c.execute(
+            "INSERT INTO hidden_items(uid, created_at) VALUES(?, ?) "
+            "ON CONFLICT(uid) DO NOTHING",
+            (uid, now),
+        )
+
+
+def list_hidden_uids() -> set[str]:
+    with get_db() as c:
+        rows = c.execute("SELECT uid FROM hidden_items").fetchall()
+        return {r["uid"] for r in rows}
+
+
+def hidden_count() -> int:
+    with get_db() as c:
+        row = c.execute("SELECT COUNT(*) AS n FROM hidden_items").fetchone()
+        return int(row["n"] if row and row["n"] is not None else 0)
+
+
+def unhide_all() -> None:
+    with get_db() as c:
+        c.execute("DELETE FROM hidden_items")
+
+
+# -------------------- live pairings (sticky until release) --------------------
+
+def upsert_live_row(row: Dict[str, Any]) -> None:
+    """Persist the current enriched row for an in-progress pairing."""
+    pairing_id = str(row.get("pairing_id") or "")
+    if not pairing_id:
+        return
+    rel_iso = str(row.get("release_local_iso") or "")
+    now = dt.datetime.utcnow().isoformat()
+    payload = json.dumps(row)
+    with get_db() as c:
+        c.execute(
+            "INSERT INTO live_pairings(pairing_id, row_json, release_local_iso, updated_at) "
+            "VALUES(?,?,?,?) "
+            "ON CONFLICT(pairing_id) DO UPDATE SET row_json=excluded.row_json, release_local_iso=excluded.release_local_iso, updated_at=excluded.updated_at",
+            (pairing_id, payload, rel_iso, now),
+        )
+
+
+def list_live_rows() -> List[Dict[str, Any]]:
+    with get_db() as c:
+        rows = c.execute("SELECT row_json FROM live_pairings").fetchall()
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            try:
+                out.append(json.loads(r["row_json"]))
+            except Exception:
+                pass
+        return out
+
+
+def purge_expired_live(now_iso: str) -> None:
+    """Drop any sticky rows with release_local_iso < now."""
+    with get_db() as c:
+        c.execute("DELETE FROM live_pairings WHERE release_local_iso <> '' AND release_local_iso < ?", (now_iso,))
+
+
+def delete_live_pairing(pairing_id: str) -> None:
+    with get_db() as c:
+        c.execute("DELETE FROM live_pairings WHERE pairing_id=?", (pairing_id,))
