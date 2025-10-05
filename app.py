@@ -26,7 +26,7 @@ from db import get_db, init_db
 # ---- Optional DB helpers (server-side hidden + sticky rows) ----
 try:
     # Hidden-store is keyed by individual iCloud VEVENT UIDs
-    from db import hide_uid, list_hidden_uids, hidden_count, unhide_all, hidden_all  # /* CHANGED */
+    from db import hide_uid, list_hidden_uids, hidden_count, unhide_all, hidden_all
 except Exception:  # safe fallbacks if db.py hasn't added these yet
     def hide_uid(uid: str) -> None:  # type: ignore
         pass
@@ -36,8 +36,8 @@ except Exception:  # safe fallbacks if db.py hasn't added these yet
         return 0
     def unhide_all() -> None:  # type: ignore
         pass
-    def hidden_all() -> List[str]:  # type: ignore  # /* ADDED */
-        return []  # /* ADDED */
+    def hidden_all() -> List[str]:  # type: ignore
+        return []
 
 try:
     # Sticky "live" rows so an in-progress pairing isn't dropped mid-fly
@@ -304,7 +304,7 @@ def _read_ack_state(ack_id: str) -> Optional[str]:
 def _write_ack_state(ack_id: str, state_val: str, deadline_utc: Optional[str] = None):
     now_iso = _now_utc().isoformat()
     with get_db() as c:
-        cur = c.execute("SELECT 1 FROM acks WHERE ack_id=?", (ack_id,)).fetchone()
+        cur = c.execute("SELECT 1 FROM acks WHERE ack_id=?", (ack_id)).fetchone()
         if cur:
             c.execute("UPDATE acks SET state=?, last_update_utc=? WHERE ack_id=?", (state_val, now_iso, ack_id))
         else:
@@ -413,10 +413,11 @@ async def api_pairings(
 ):
     """
     Builds visible rows:
-      - Filters hidden zero-leg items (by UID) and pairing_id hides.            /* CHANGED */
+      - Filters hidden zero-leg items (by UID) and pairing_id hides.
       - Keeps real (has legs) in-progress pairings sticky until release.
       - Recomputes OFF rows after hide/unhide and on every paint.
-      - TOP OFF row when 'now' < first report shows: 'OFF (Current)' and 'Xd Yh (Remaining)' or 'Xh (Remaining)'.
+      - TOP OFF row when 'now' < first report shows: 'OFF (Now)' and 'Xd Yh (Remaining)' or 'Xh (Remaining)'.
+      - OFF rows show the previous pairing’s release time under the "Report" column.
     """
     try:
         meta = await run_in_threadpool(read_cache_meta)
@@ -448,8 +449,8 @@ async def api_pairings(
             if uid:
                 pid_to_uids.setdefault(pid, []).append(uid)
 
-        hidden_uids = await run_in_threadpool(list_hidden_uids)      # /* CHANGED */
-        hidden_pids = set(await run_in_threadpool(hidden_all))       # /* ADDED */
+        hidden_uids = await run_in_threadpool(list_hidden_uids)
+        hidden_pids = set(await run_in_threadpool(hidden_all))
         use_24h = bool(is_24h)
 
         visible: List[Dict[str, Any]] = []
@@ -479,10 +480,10 @@ async def api_pairings(
                     if leg.get("arr_time") and not leg.get("arr_time_str"):
                         leg["arr_time_str"] = _fmt_time(str(leg["arr_time"]).zfill(4), use_24h)
 
-            # hide logic: hide if ALL UIDs are hidden OR if pairing_id is hidden  /* CHANGED */
-            all_hidden = (len(r["uids"]) > 0) and all(uid in hidden_uids for uid in r["uids"])  # /* CHANGED */
-            pid_hidden = pid in hidden_pids                                                     # /* ADDED */
-            if (pid_hidden or all_hidden) and (r["can_hide"] or not r.get("in_progress")):      # /* CHANGED */
+            # hide logic: hide if ALL UIDs are hidden OR if pairing_id is hidden
+            all_hidden = (len(r["uids"]) > 0) and all(uid in hidden_uids for uid in r["uids"])
+            pid_hidden = pid in hidden_pids
+            if (pid_hidden or all_hidden) and (r["can_hide"] or not r.get("in_progress")):
                 continue
 
             visible.append(r)
@@ -513,7 +514,7 @@ async def api_pairings(
         visible.sort(key=lambda x: x.get("report_local_iso") or "")
         final_rows: List[Dict[str, Any]] = []
 
-        # (A) TOP OFF: OFF (Current) + Remaining
+        # (A) TOP OFF: OFF (Now) + Remaining
         if visible:
             first_report_iso = visible[0].get("report_local_iso")
             first_report = to_local(iso_to_dt(first_report_iso)) if first_report_iso else None
@@ -528,10 +529,18 @@ async def api_pairings(
                     off_str = f"{hrs}h (Remaining)"
                 final_rows.append({
                     "kind": "off",
-                    "display": {"off_dur": off_str, "off_label": "OFF (Current)"}
+                    "display": {"off_dur": off_str, "off_label": "OFF (Now)"}
                 })
 
-        # (B) Pairings + OFF between pairings
+        # (B) Pairings + OFF between pairings, with OFF showing the previous release time in "Report" column
+        def _hhmm_from_iso_local(iso: Optional[str]) -> str:
+            if not iso:
+                return ""
+            d = to_local(iso_to_dt(iso))
+            if not d:
+                return ""
+            return d.strftime("%H%M")
+
         for i, p in enumerate(visible):
             final_rows.append(p)
             if i + 1 < len(visible):
@@ -547,7 +556,14 @@ async def api_pairings(
                     off_str = f"{d}d {h}h"
                 else:
                     off_str = f"{total_h}h"
-                final_rows.append({"kind": "off", "display": {"off_dur": off_str}})
+
+                rel_hhmm = _hhmm_from_iso_local(p.get("release_local_iso"))
+                off_display = {
+                    "off_dur": off_str,
+                }
+                if rel_hhmm:
+                    off_display["report_str"] = _fmt_time(rel_hhmm, use_24h)
+                final_rows.append({"kind": "off", "display": off_display})
 
         # ---- Header meta (guard next_run in future to avoid rapid refresh loop)
         lp_iso = meta.get("last_pull_utc")
@@ -690,36 +706,34 @@ async def api_unhide_all():
     await _emit("hidden_update", {"cleared": True})
     return {"ok": True}
 
-
-# ---- Hidden endpoints (pairing_id) -----------------------------------------  /* ADDED */
-from pydantic import BaseModel                                                # /* ADDED */
-from fastapi import HTTPException                                             # /* ADDED */
-import logging                                                                # /* ADDED */
+# ---- Hidden endpoints (pairing_id) -----------------------------------------
+from pydantic import BaseModel
+from fastapi import HTTPException as _HTTPExceptionAlias  # avoid shadowing
+import logging as _logging
 
 # DB helpers (pairing_id-based hide)
-from db import hidden_add, hidden_clear_all, hidden_count                     # /* ADDED */
+from db import hidden_add, hidden_clear_all, hidden_count as hidden_pairing_count
 
-log = logging.getLogger("dutywatch")                                          # /* ADDED */
+log = _logging.getLogger("dutywatch")
 
-class _HideReq(BaseModel):                                                    # /* ADDED */
-    pairing_id: str                                                           # /* ADDED */
-    report_local_iso: str | None = None                                       # /* ADDED */
+class _HideReq(BaseModel):
+    pairing_id: str
+    report_local_iso: str | None = None
 
-# Support both with and without trailing slash to prevent 404s                 /* ADDED */
-@app.post("/api/hidden/hide")                                                 # /* ADDED */
-@app.post("/api/hidden/hide/")                                                # /* ADDED */
-def api_hidden_hide(req: _HideReq):                                           # /* ADDED */
-    if not req.pairing_id:                                                    # /* ADDED */
-        raise HTTPException(status_code=400, detail="pairing_id required")    # /* ADDED */
-    log.info("POST /api/hidden/hide -> %s", req.pairing_id)                   # /* ADDED */
-    hidden_add(req.pairing_id, req.report_local_iso)                          # /* ADDED */
-    return {"ok": True, "hidden_count": hidden_count()}                       # /* ADDED */
+# Support both with and without trailing slash to prevent 404s
+@app.post("/api/hidden/hide")
+@app.post("/api/hidden/hide/")
+def api_hidden_hide(req: _HideReq):
+    if not req.pairing_id:
+        raise _HTTPExceptionAlias(status_code=400, detail="pairing_id required")
+    log.info("POST /api/hidden/hide -> %s", req.pairing_id)
+    hidden_add(req.pairing_id, req.report_local_iso)
+    return {"ok": True, "hidden_count": hidden_pairing_count()}
 
-@app.post("/api/hidden/unhide_all")                                           # /* ADDED */
-@app.post("/api/hidden/unhide_all/")                                          # /* ADDED */
-def api_hidden_unhide_all():                                                  # /* ADDED */
-    before = hidden_count()                                                   # /* ADDED */
-    log.info("POST /api/hidden/unhide_all -> %d", before)                     # /* ADDED */
-    hidden_clear_all()                                                        # /* ADDED */
-    return {"ok": True, "cleared": before, "hidden_count": 0}                 # /* ADDED */
-# ---------------------------------------------------------------------------  /* ADDED */
+@app.post("/api/hidden/unhide_all")
+@app.post("/api/hidden/unhide_all/")
+def api_hidden_unhide_all():
+    before = hidden_pairing_count()
+    log.info("POST /api/hidden/unhide_all -> %d", before)
+    hidden_clear_all()
+    return {"ok": True, "cleared": before, "hidden_count": 0}

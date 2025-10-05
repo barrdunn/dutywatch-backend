@@ -2,21 +2,20 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Pairings</title>
+  <title>Pairings for Barry Dunn</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="stylesheet" href="/pairings/pairings.css?v=15">
+  <link rel="stylesheet" href="/pairings/pairings.css?v=22">
   <style>.hidden{display:none!important}</style>
 </head>
 <body>
   <div class="wrap">
     <div class="card">
-      <h1>Pairings</h1>
+      <h1>Pairings for Barry Dunn</h1>
 
       <div class="sub" id="status-line">
         <span class="chip">Looking through <strong id="looking-through">—</strong></span>
         <span class="chip">Last pull: <strong id="last-pull">—</strong></span>
         <span class="chip">Next refresh: <strong id="next-refresh">—</strong> <span class="muted" id="next-refresh-eta"></span></span>
-        <!-- Always render a Hidden chip; JS updates count/visibility -->
         <span class="chip" id="hidden-chip">
           <span id="hidden-count">Hidden: 0</span>
           <a href="#" data-unhide-all style="color:var(--accent);text-decoration:none;margin-left:6px">Unhide all</a>
@@ -63,17 +62,16 @@
     </div>
   </div>
 
-  <!-- Static boot config for the viewer-only frontend -->
   <script id="dw-boot" type="application/json">{
-    "clockMode":"12",
-    "onlyReports": false,            <!-- IMPORTANT: let N/L and other non-pairings show -->
+    "clockMode": "12",
+    "onlyReports": false,
     "tz": "CT",
     "refreshMinutes": 30,
     "apiBase": "",
     "baseAirport": "DFW"
   }</script>
 
-  <!-- Plan modal (unchanged) -->
+  <!-- Plan modal -->
   <div id="plan-modal" class="modal hidden" role="dialog" aria-modal="true" aria-label="Check-in & Reminder Plan">
     <div class="modal-card">
       <div class="modal-header">
@@ -93,6 +91,6 @@
     </div>
   </div>
 
-  <script src="/pairings/pairings.js?v=15" defer></script>
+  <script src="/pairings/pairings.js?v=22" defer></script>
 </body>
 </html>

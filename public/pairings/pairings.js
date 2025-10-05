@@ -5,13 +5,14 @@
 
   const IS_IOS = /iP(ad|hone|od)/.test(navigator.platform)
     || (navigator.userAgent.includes('Mac') && 'ontouchend' in document);
+  const IS_TOUCH = IS_IOS || (matchMedia && matchMedia('(pointer: coarse)').matches);
   document.documentElement.classList.toggle('ios', IS_IOS);
 
   const state = {
     lastPullIso: null,
     nextRefreshIso: null,
     clockMode: cfg.clockMode === '24' ? 24 : 12,
-    onlyReports: false, // include non-pairings like N/L
+    onlyReports: !!cfg.onlyReports,
     hiddenCount: 0,
     _zeroKick: 0,
   };
@@ -70,6 +71,22 @@
     const hh = parseInt(s.slice(0,2),10), mm = parseInt(s.slice(2),10);
     return want24 ? to24(hh,mm, colon24) : to12(hh,mm);
   }
+  function combineDateTimeISO(dateIso, hhmm){
+    if (!dateIso || !hhmm) return null;
+    const s = hhmm.replace(':','').padStart(4,'0');
+    const h = parseInt(s.slice(0,2),10);
+    const m = parseInt(s.slice(2),10);
+    const d = new Date(dateIso);
+    if (isNaN(d)) return null;
+    d.setHours(h, m, 0, 0);
+    return d;
+  }
+  function addDaysISO(iso, days){
+    const d = new Date(iso);
+    if (isNaN(d)) return null;
+    d.setDate(d.getDate() + days);
+    return d.toISOString();
+  }
 
   // ====== ACTIONS ======
   window.dwManualRefresh = async function () {
@@ -123,6 +140,38 @@
 
   setInterval(tickStatusLine, 1000);
 
+  // ====== MODAL HELPERS (Plan) ======
+  const planModal = qs('#plan-modal');
+  const planClose1 = qs('#plan-close-1');
+  const planClose2 = qs('#plan-close-2');
+  [planClose1, planClose2].forEach(btn => btn && btn.addEventListener('click', closePlan));
+  function openPlan(pairingId, reportIso) {
+    if (!planModal) return;
+    planModal.classList.remove('hidden');
+    document.body.classList.add('modal-open');
+    const url = `${apiBase}/api/ack/plan?pairing_id=${encodeURIComponent(pairingId)}&report_local_iso=${encodeURIComponent(reportIso||'')}`;
+    setText('#plan-meta','Loading…');
+    qs('#plan-rows').innerHTML = '';
+    fetch(url)
+      .then(r=>r.json())
+      .then(data=>{
+        const attempts = data.attempts||[];
+        setText('#plan-meta', `Window: starts ${(data.policy?.push_start_hours||12)}h before report; includes calls during non-quiet hours.`);
+        qs('#plan-rows').innerHTML = attempts.map(a=>{
+          const when = new Date(a.at_iso);
+          const label = a.kind === 'push' ? 'Push' : 'Call';
+          const details = a.kind === 'call' ? `Ring ${a?.meta?.ring || 1}` : '';
+          return `<tr><td>${when.toLocaleString()}</td><td style="text-align:center">${label}</td><td>${details}</td></tr>`;
+        }).join('');
+      })
+      .catch(()=>setText('#plan-meta','Unable to load plan.'));
+  }
+  function closePlan(){
+    if (!planModal) return;
+    planModal.classList.add('hidden');
+    document.body.classList.remove('modal-open');
+  }
+
   // ====== CLICKS ======
   document.addEventListener('click', async (e) => {
     const unhide = e.target.closest('[data-unhide-all]');
@@ -134,7 +183,6 @@
       return;
     }
 
-    // prevent summary toggle from clicks inside the details message
     if (e.target.closest('[data-stop-toggle]')) {
       e.stopPropagation();
     }
@@ -146,11 +194,18 @@
       if (!details || !details.classList.contains('details')) return;
       const open = sum.classList.contains('open');
       details.querySelectorAll('.day .legs').forEach(tbl => { tbl.style.display = open ? 'table' : 'none'; });
-      details.querySelectorAll('.day .helper').forEach(h => { h.textContent = open ? 'click to hide legs' : 'click to show legs'; });
       return;
     }
 
-    // Hide button for “no legs” events
+    const ck = e.target.closest('[data-ck]');
+    if (ck) {
+      e.preventDefault();
+      const pairingId = ck.getAttribute('data-pairing') || '';
+      const reportIso = ck.getAttribute('data-report') || '';
+      openPlan(pairingId, reportIso);
+      return;
+    }
+
     const hideBtn = e.target.closest('[data-hide-pairing]');
     if (hideBtn) {
       e.preventDefault();
@@ -158,7 +213,6 @@
       const pairingId = hideBtn.getAttribute('data-hide-pairing') || '';
       const reportIso = hideBtn.getAttribute('data-report') || '';
 
-      // optimistic UI remove
       const details = hideBtn.closest('tr.details');
       const summary = details?.previousElementSibling;
       if (summary?.classList.contains('summary')) {
@@ -176,7 +230,6 @@
       } catch (err) {
         console.error('hide failed', err);
       }
-      // pull fresh list/count
       await renderOnce();
       return;
     }
@@ -186,7 +239,7 @@
   async function renderOnce() {
     const params = new URLSearchParams({
       is_24h: '0',
-      only_reports: '0',
+      only_reports: state.onlyReports ? '1' : '0',
     });
 
     let data;
@@ -208,8 +261,8 @@
 
     const label = (data.window && data.window.label) || data.looking_through || '—';
     setText('#looking-through', label);
-    setText('#last-pull', data.last_pull_local ?? '—');
 
+    setText('#last-pull', minutesOnlyAgo(state.lastPullIso));
     const base = (data.next_pull_local && data.tz_label)
       ? `${data.next_pull_local} (${data.tz_label})`
       : '—';
@@ -251,7 +304,42 @@
     });
   }
 
-  // ====== TEMPLATES ======
+  // ====== DATE HELPERS ======
+  function dayDateFromRow(row, dayIndex, dayObj){
+    const keys = ['date_local_iso','local_iso','start_local_iso','date_iso'];
+    for (const k of keys){
+      if (dayObj && dayObj[k]) return dayObj[k];
+    }
+    const leg = (dayObj && dayObj.legs && dayObj.legs[0]) || null;
+    if (leg){
+      const legKeys = ['dep_local_iso','dep_iso','dep_dt_iso','local_iso'];
+      for (const k of legKeys){
+        if (leg[k]) return leg[k];
+      }
+    }
+    if (row && row.report_local_iso){
+      const shifted = addDaysISO(row.report_local_iso, dayIndex);
+      if (shifted) return shifted;
+    }
+    return null;
+  }
+  function weekdayFromISO(iso){
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d)) return '';
+    return d.toLocaleDateString(undefined, { weekday: 'short' });
+  }
+  function isSameLocalDay(iso){
+    if (!iso) return false;
+    const d = new Date(iso);
+    if (isNaN(d)) return false;
+    const now = new Date();
+    return (d.getFullYear()===now.getFullYear()
+      && d.getMonth()===now.getMonth()
+      && d.getDate()===now.getDate());
+  }
+
+  // ====== TEMPLATE HELPERS ======
   function firstDepartureAirport(row) {
     const days = row?.days || [];
     for (const d of days) {
@@ -260,12 +348,14 @@
     }
     return null;
   }
-  function wrapNotBoldBits(text, token) {
+  function wrapNotBoldBits(text, token, smallToken) {
     if (!text) return '';
     const re = new RegExp(`\\s*\\(${token}\\)`,`i`);
     if (re.test(text)) {
       const base = text.replace(re, '').trim();
-      return `${esc(base)} <span class="fw-normal" style="font-weight:400">(${token})</span>`;
+      const isSmall = window.matchMedia && window.matchMedia('(max-width: 640px)').matches;
+      const shown = isSmall && smallToken ? smallToken : token;
+      return `${esc(base)} <span class="fw-normal">(${shown})</span>`;
     }
     return esc(text);
   }
@@ -275,19 +365,24 @@
     for (const d of days) n += (d.legs || []).length;
     return n;
   }
+  function pairingNowTag(row){
+    return row?.in_progress ? ' <span class="fw-normal">(Now)</span>' : '';
+  }
 
+  // ====== RENDERERS ======
   function renderRowHTML(row, homeBase) {
+    // --- OFF rows: Remaining in Release column (Report empty), no detail text
     if (row.kind === 'off') {
       const rawLabel = (row.display && row.display.off_label) ? String(row.display.off_label) : 'OFF';
-      const labelHTML = wrapNotBoldBits(rawLabel, 'Current');
+      const labelHTML = wrapNotBoldBits(rawLabel, 'Now');
       const rawDur = String(row.display?.off_dur || '');
-      const durHTML = wrapNotBoldBits(rawDur, 'Remaining');
+      const durHTML = wrapNotBoldBits(rawDur, 'Remaining', 'Rem.');
       return `
         <tr class="off">
           <td class="ck"></td>
           <td class="sum-first"><span class="off-label">${labelHTML}</span></td>
-          <td class="muted"></td>
-          <td class="off-dur">${durHTML}</td>
+          <td data-dw="report"></td>
+          <td class="off-dur" data-dw="release">${durHTML}</td>
           <td class="muted"></td>
         </tr>`;
     }
@@ -299,9 +394,9 @@
     const showOOB = !!(startDep && startDep !== homeBase);
     const oobPill = showOOB ? `<span class="pill pill-red">${esc(startDep)}</span>` : '';
 
-    const detailsDays = hasLegs ? (row.days || []).map((day, i) => renderDayHTML(day, i)).join('') : '';
+    const days = row.days || [];
+    const detailsDays = hasLegs ? days.map((day, i) => renderDayHTML(row, day, i, days)).join('') : '';
 
-    // Centered message + Hide button for no-legs rows
     const noLegsBlock = !hasLegs
       ? `<div data-stop-toggle style="display:flex;justify-content:center;align-items:center;gap:12px;padding:18px;text-align:center">
            <span class="muted">No legs found.</span>
@@ -311,17 +406,19 @@
          </div>`
       : '';
 
+    const detailMsg = IS_TOUCH ? 'tap to expand' : 'click to expand';
+
     return `
       <tr class="summary" data-row-id="${esc(row.pairing_id || '')}">
         ${renderCheckCell(row)}
         <td class="sum-first">
-          <strong>${esc(row.pairing_id || '')}</strong>
-          ${hasLegs ? `<span class="pill">${(row.days||[]).length} day</span>` : ``}
+          <strong>${esc(row.pairing_id || '')}</strong>${pairingNowTag(row)}
+          ${hasLegs ? `<span class="pill">${days.length} day</span>` : ``}
           ${oobPill}
         </td>
         <td data-dw="report">${esc(row.display?.report_str || '')}</td>
         <td data-dw="release">${esc(row.display?.release_str || '')}</td>
-        <td class="muted">${hasLegs ? 'click to expand days' : 'click to hide'}</td>
+        <td class="muted">${detailMsg}</td>
       </tr>
       <tr class="details">
         <td colspan="5">
@@ -345,64 +442,103 @@
                   role="checkbox"
                   aria-checked="${ariaChecked}"
                   aria-disabled="${ariaDisabled}"
-                  title="${stateAttr === 'ok' ? 'Acknowledged' : (stateAttr === 'pending' ? 'Click to acknowledge now' : 'Click to view reminder plan')}"
+                  title="${stateAttr === 'ok' ? 'Acknowledged' : (stateAttr === 'pending' ? 'Click to view plan / acknowledge' : 'Click to view reminder plan')}"
                   data-ck="${stateAttr}"
                   data-pairing="${esc(row.pairing_id || '')}"
-                  data-report="${esc((ack && ack.report_local_iso) || '')}">
+                  data-report="${esc((ack && ack.report_local_iso) || row.report_local_iso || '')}">
             <span class="ckbox" aria-hidden="true"></span>
           </button>
         </div>
       </td>`;
   }
 
-  function renderDayHTML(day, idx) {
+  function renderDayHTML(row, day, idx, days) {
     const want24 = state.clockMode === 24;
+
+    // Robust day date (fallback to pairing report date + offset)
+    const dayISO = dayDateFromRow(row, idx, day);
+    const dow = weekdayFromISO(dayISO);
+
     const legs = (day.legs || []).map(leg => {
       const depHHMM = pickHHMM(leg.dep_hhmm, leg.dep_time);
       const arrHHMM = pickHHMM(leg.arr_hhmm, leg.arr_time);
       const left  = fmtHHMM(depHHMM, want24, false);
       const right = fmtHHMM(arrHHMM, want24, false);
+
+      const callsign = normalizeCallsign(leg.flight || '');
+      let trackCell = '';
+      if (dayISO && isSameLocalDay(dayISO) && callsign) {
+        trackCell = `<a href="https://www.flightaware.com/live/flight/${encodeURIComponent(callsign)}" target="_blank" rel="noopener">FlightAware</a>`;
+      } else if (dayISO) {
+        const d = new Date(dayISO);
+        trackCell = `Avail. ${d.getMonth()+1}/${d.getDate()}`;
+      }
+
       return `
         <tr class="leg-row ${leg.done ? 'leg-done' : ''}">
           <td>${esc(leg.flight || '')}</td>
           <td>${esc(leg.dep || '')}–${esc(leg.arr || '')}</td>
           <td class="bt" data-dw="bt" data-dep="${esc(depHHMM)}" data-arr="${esc(arrHHMM)}">${left} → ${right}</td>
+          <td>${trackCell}</td>
         </tr>`;
     }).join('');
+
     const dayRepRaw = pickHHMM(day.report_hhmm, day.report);
     const dayRelRaw = pickHHMM(day.release_hhmm, day.release);
     const repDisp = fmtHHMM(dayRepRaw, want24, false);
     const relDisp = fmtHHMM(dayRelRaw, want24, false);
+
+    // Overnight hours: this day's release → next day's report
+    let overnightHTML = '';
+    if (idx + 1 < days.length) {
+      const nextDay = days[idx + 1];
+      const relDt = combineDateTimeISO(dayISO, dayRelRaw);
+      const nextISO = dayDateFromRow(row, idx+1, nextDay);
+      const nextRepDt = combineDateTimeISO(nextISO, pickHHMM(nextDay.report_hhmm, nextDay.report));
+      if (relDt && nextRepDt && nextRepDt > relDt) {
+        const hours = Math.round((nextRepDt - relDt) / 3600000);
+        overnightHTML = ` · Overnight: ${hours}h`;
+      }
+    }
+
     return `
       <div class="day">
         <div class="dayhdr">
           <span class="dot"></span>
           <span class="daytitle">Day ${idx + 1}</span>
-          ${dayRepRaw ? `· Report <span data-dw="day-report" data-hhmm="${esc(dayRepRaw)}">${esc(repDisp)}</span>` : ''}
-          ${dayRelRaw ? ` · Release <span data-dw="day-release" data-hhmm="${esc(dayRelRaw)}">${esc(relDisp)}</span>` : ''}
-          ${day.hotel ? ` · ${esc(day.hotel)}` : ''}
-          <span class="helper">click to show legs</span>
+          ${dayRepRaw ? `· Report: ${esc(dow)} <span data-dw="day-report" data-hhmm="${esc(dayRepRaw)}">${esc(repDisp)}</span>` : ''}
+          ${dayRelRaw ? ` · Release: <span data-dw="day-release" data-hhmm="${esc(dayRelRaw)}">${esc(relDisp)}</span>` : ''}
+          ${day.hotel ? ` · Hotel: ${esc(day.hotel)}` : ''}
+          ${overnightHTML}
         </div>
         ${legs ? `
           <div class="legs-wrap">
             <table class="legs" style="display:none">
-              <thead><tr><th>Flight</th><th>Route</th><th>Block Times</th></tr></thead>
+              <thead><tr><th>Flight</th><th>Route</th><th>Block Times</th><th>Flight Tracking</th></tr></thead>
               <tbody>${legs}</tbody>
             </table>
           </div>` : ``}
       </div>`;
   }
 
+  function normalizeCallsign(f) {
+    if (!f) return '';
+    const s = String(f).trim().toUpperCase();
+    if (/^FFT\d+$/.test(s)) return s;
+    const digits = s.replace(/\D+/g,'');
+    if (!digits) return '';
+    return `FFT${digits}`;
+  }
+
   // ====== STATUS LINE ======
   function tickStatusLine() {
-    if (state.lastPullIso) setText('#last-pull', preciseAgo(new Date(state.lastPullIso)));
+    if (state.lastPullIso) setText('#last-pull', minutesOnlyAgo(state.lastPullIso));
     const etaEl = qs('#next-refresh-eta');
     if (!etaEl || !state.nextRefreshIso) return;
-    const diff = Math.floor((new Date(state.nextRefreshIso).getTime() - Date.now()) / 1000);
-    const left = Math.max(0, diff);
-    if (left > 0) {
-      const m = Math.floor(left / 60), s = left % 60;
-      etaEl.textContent = `in ${m}m ${s}s`;
+    const leftSec = Math.max(0, Math.floor((new Date(state.nextRefreshIso).getTime() - Date.now()) / 1000));
+    if (leftSec > 0) {
+      const m = Math.ceil(leftSec / 60);
+      etaEl.textContent = `in ${m}m`;
     } else {
       etaEl.textContent = '(refreshing…)';
       const now = Date.now();
@@ -416,7 +552,19 @@
   // ====== UTILS ======
   function qs(sel){return document.querySelector(sel)}
   function setText(sel,v){const el=qs(sel); if(el) el.textContent=v;}
-  function esc(s){return String(s).replace(/[&<>"'`=\/]/g,(ch)=>({'&':'&amp;','<':'&lt;','>':'&#x3E;','"':'&quot;',"'":'&#39;','/':'&#x2F;','`':'&#x60','=':'&#x3D;'}[ch]))}
-  function preciseAgo(d){const sec=Math.max(0,Math.floor((Date.now()-d.getTime())/1000));const m=Math.floor(sec/60),s=sec%60;return m?`${m}m ${s}s ago`:`${s}s ago`}
+  function esc(s){
+    return String(s).replace(/[&<>"'`=\/]/g,(ch)=>({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','/':'&#x2F;','`':'&#x60;','=':'&#x3D;'
+    }[ch]));
+  }
+  function minutesOnlyAgo(iso){
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (isNaN(d)) return '—';
+    const sec = Math.max(0, Math.floor((Date.now() - d.getTime())/1000));
+    const m = Math.max(0, Math.floor(sec/60));
+    if (m <= 0) return 'just now';
+    return `${m}m ago`;
+  }
   function safeParseJSON(s){try{return JSON.parse(s||'{}')}catch{return null}}
 })();

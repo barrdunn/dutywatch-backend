@@ -8,9 +8,8 @@
 
   --ck-off:#62717f; --ck-pending:#ffd166; --ck-ok:#57e389;
 
-  /* column widths */
-  --ckcol-desktop: 90px;    /* wide enough for “Check In” one line */
-  --ckcol-mobile: 60px;     /* mobile can wrap */
+  --ckcol-desktop: 90px;
+  --ckcol-mobile: 60px;
   --ckcol: var(--ckcol-desktop);
 }
 
@@ -31,21 +30,21 @@ h1{margin:0 0 8px;font-size:22px}
 .toggle,select.toggle{background:transparent;color:var(--text);border:1px solid var(--border);border-radius:10px;padding:6px 10px;cursor:pointer}
 
 /* =========================
-   Main table (LOCKED widths)
+   Main table
    ========================= */
 #pairings{width:100%;border-collapse:separate;border-spacing:0 10px;table-layout:fixed}
 #pairings th,#pairings td{padding:10px 12px;vertical-align:middle;text-align:left}
 #pairings th{color:var(--muted);font-weight:600;border-bottom:1px solid var(--border);white-space:nowrap}
 
-#pairings th:nth-child(1),#pairings td:nth-child(1){width:var(--ckcol);min-width:var(--ckcol);text-align:center;padding-left:0;padding-right:0}
-#pairings th:nth-child(2),#pairings td:nth-child(2){width:28%}  /* Pairing/Off */
-#pairings th:nth-child(3),#pairings td:nth-child(3){width:22%}  /* Report */
-#pairings th:nth-child(4),#pairings td:nth-child(4){width:22%}  /* Release */
-#pairings th:nth-child(5),#pairings td:nth-child(5){width:28%}  /* Details hint */
+/* col widths */
+#pairings th:nth-child(1), #pairings td:nth-child(1){width:var(--ckcol);min-width:var(--ckcol);padding-left:0;padding-right:0}
+#pairings th:nth-child(2), #pairings td:nth-child(2){width:25%}  /* Pairing */
+#pairings th:nth-child(3), #pairings td:nth-child(3){width:25%}  /* Report */
+#pairings th:nth-child(4), #pairings td:nth-child(4){width:25%}  /* Release */
+#pairings th:nth-child(5), #pairings td:nth-child(5){width:25%}  /* Detail */
 
 @media (max-width:640px){
   :root{--ckcol:var(--ckcol-mobile)}
-  /* allow “Check In” to wrap to 2 lines only */
   #pairings th:first-child{white-space:normal}
 }
 
@@ -54,8 +53,7 @@ tr.summary,tr.summary td{cursor:pointer}
 .dayhdr{cursor:pointer}
 
 /* checkbox cell */
-td.ck{padding:0!important;text-align:center}
-td.ck .ck-wrapper{display:flex;align-items:center;justify-content:center;width:100%;height:100%}
+td.ck{padding:0!important}
 
 /* checkbox visuals */
 .ckbox{width:24px;height:24px;border-radius:6px;background:transparent;border:2px solid var(--ck-off);display:inline-flex;align-items:center;justify-content:center;position:relative;transition:transform .06s ease}
@@ -63,10 +61,9 @@ td.ck .ck-wrapper{display:flex;align-items:center;justify-content:center;width:1
 .ck.pending .ckbox{border-color:var(--ck-pending)}
 .ck.ok .ckbox{border-color:var(--ck-ok);background:var(--ck-ok)}
 .ck.ok .ckbox::after{content:"✓";font-weight:900;font-size:14px;line-height:1;color:#0b1510;transform:translateY(-1px)}
-.ckbtn{appearance:none;background:transparent;border:0;padding:0;margin:0;cursor:pointer;line-height:0;display:inline-flex;align-items:center;justify-content:center}
-.ckbtn[aria-disabled="true"]{cursor:default;opacity:.9}
+.ckbtn{appearance:none;background:transparent;border:0;padding:0;margin:0;cursor:pointer;line-height:0;display:inline-flex;align-items:center;justify-content:flex-start}
 
-/* capsules (start after checkbox) */
+/* capsules (rounded ends) */
 tr.summary td:not(.ck){background:var(--pairing-bg);border-top:1px solid var(--pairing-border);border-bottom:1px solid var(--pairing-border)}
 tr.summary:hover td:not(.ck){background:var(--pairing-bg-hover)}
 tr.summary td.sum-first{border-left:1px solid var(--pairing-border);border-top-left-radius:12px;border-bottom-left-radius:12px}
@@ -77,9 +74,8 @@ tr.off td:not(.ck){background:var(--row);border-top:1px solid var(--border);bord
 tr.off td.sum-first{border-left:1px solid var(--border);border-top-left-radius:12px;border-bottom-left-radius:12px}
 tr.off td:last-child{border-right:1px solid var(--border);border-top-right-radius:12px;border-bottom-right-radius:12px}
 .off-label,.off-dur{font-weight:800;color:var(--off)}
-/* ensure "(Current)" and "(Remaining)" are NOT bold even inside bold parents */
-.off-label .fw-normal,
-.off-dur .fw-normal{font-weight:400!important}
+.off-dur{white-space:nowrap}
+.off-label .fw-normal,.off-dur .fw-normal{font-weight:400!important}
 
 /* details capsule */
 tr.details{display:none}
@@ -92,109 +88,23 @@ tr.details>td::before{content:"";position:absolute;left:var(--ckcol);right:0;top
 .day{margin:8px 0 14px}
 .dayhdr{background:rgba(73,179,124,.14);border:0;border-radius:10px;padding:8px 10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-weight:600}
 .dayhdr .daytitle{font-weight:600}
-.dayhdr .helper{margin-left:auto;font-weight:500;color:var(--muted)}
 .dot{width:6px;height:6px;border-radius:999px;background:#7ee2a1;display:inline-block;margin-right:4px}
 
-/* Legs table: 3 fixed columns (Flight | Route | Block Times) */
-.legs-wrap{margin:6px 0 0 0}
+/* Legs table (includes Flight Tracking col) */
 .legs{width:100%;border-collapse:collapse;table-layout:fixed}
-.legs th,.legs td{padding:6px 8px;border-bottom:1px solid var(--border);vertical-align:middle}
+.legs th,.legs td{padding:6px 8px;border-bottom:1px solid var(--border);vertical-align:middle;text-align:left}
 .legs th{color:var(--muted);font-size:12px;white-space:nowrap}
-
-.legs colgroup col:nth-child(1){width:20%}
-.legs colgroup col:nth-child(2){width:38%}
-.legs colgroup col:nth-child(3){width:42%}
-
-.legs td.bt{font-variant-numeric:tabular-nums;white-space:nowrap}
+.legs th:first-child,.legs td:first-child{width:26%!important;white-space:nowrap}
+.legs th:nth-child(2),.legs td:nth-child(2){width:30%!important;padding-right:8px}
+.legs th:nth-child(3),.legs td:nth-child(3){width:26%!important;padding-left:12px;font-variant-numeric:tabular-nums}
+.legs th:nth-child(4),.legs td:nth-child(4){width:18%!important} /* Flight Tracking */
 .leg-done td{text-decoration:line-through;color:var(--strike)}
-/* ===== Legs table tweaks ===== */
-.legs {
-  table-layout: auto;                /* keeps natural column widths */
-}
+.legs td.bt{font-variant-numeric:tabular-nums;white-space:nowrap}
 
-/* 1) Flight column left-aligned */
-.legs th:first-child,
-.legs td:first-child {
-  text-align: left;
-}
-
-/* 2) Bring Block Times closer to Route */
-.legs th:nth-child(3),
-.legs td:nth-child(3) {
-  padding-left: 10px;                /* was ~8–12; pull it closer */
-}
-
-/* Make sure Route doesn’t add extra gap */
-.legs th:nth-child(2),
-.legs td:nth-child(2) {
-  padding-right: 6px;
-}
-
-/* 3) Mobile wrapping rules */
-@media (max-width: 640px) {
-  /* Flight number: never wrap */
-  .legs td:first-child {
-    white-space: nowrap;
-    word-break: normal;              /* avoid mid-code breaks */
-  }
-
-  /* Block Times: allow wrapping at spaces */
-  .legs td:nth-child(3) {
-    white-space: normal;             /* wrap at spaces */
-    word-break: normal;              /* don't break inside the time tokens */
-    overflow-wrap: anywhere;         /* only kicks in for super-long strings */
-  }
-}
-
-/* --- Legs table: lock alignment + column widths --- */
-.legs {
-  width: 100%;
-  table-layout: fixed;                 /* predictable column positions */
-}
-
-.legs th,
-.legs td {
-  text-align: left !important;         /* kill any inherited centering */
-}
-
-/* Column widths: Flight | Route | Block Times */
-.legs th:first-child,
-.legs td:first-child {
-  width: 26% !important;               /* Flight (left, never centered) */
-  white-space: nowrap;                  /* keeps FFT1234 on one line */
-}
-
-.legs th:nth-child(2),
-.legs td:nth-child(2) {
-  width: 34% !important;               /* Route */
-  padding-right: 8px;
-}
-
-.legs th:nth-child(3),
-.legs td:nth-child(3) {
-  width: 40% !important;               /* Block Times */
-  padding-left: 12px;                  /* brings it closer to Route */
-  font-variant-numeric: tabular-nums;
-}
-
-/* Mobile: keep Flight single line; let Block Times wrap at spaces */
-@media (max-width: 640px) {
-  .legs td:first-child {
-    white-space: nowrap;
-    word-break: normal;
-  }
-  .legs td:nth-child(3) {
-    white-space: normal;
-    word-break: normal;
-    overflow-wrap: anywhere;           /* wrap only if needed */
-  }
-}
-
-
-/* Optional: use tabular numbers for nicer time alignment */
-.legs td:nth-child(3),
-.legs th:nth-child(3) {
-  font-variant-numeric: tabular-nums;
+/* Mobile wrapping */
+@media (max-width:640px){
+  .legs td:first-child{white-space:nowrap;word-break:normal}
+  .legs td:nth-child(3){white-space:normal;word-break:normal;overflow-wrap:anywhere}
 }
 
 /* pills */
@@ -212,7 +122,7 @@ body.modal-open{overflow:hidden}
 .modal-close{margin-left:auto;background:transparent;border:0;color:#fff;font-size:20px;cursor:pointer}
 .modal-content{padding:14px}
 
-/* Plan table stays equal thirds */
+/* Plan table */
 .plan-table{width:100%;border-collapse:collapse;table-layout:fixed}
 .plan-table th,.plan-table td{border-bottom:1px solid var(--border);padding:8px 10px;width:33.3333%}
 .plan-table th:nth-child(1),.plan-table td:nth-child(1){text-align:left}
@@ -224,13 +134,8 @@ body.modal-open{overflow:hidden}
 .muted{color:var(--muted)}
 .hidden{display:none!important}
 
-/* iOS table safety */
 .ios table{table-layout:fixed}
 .ios th,.ios td{word-break:break-word;overflow-wrap:anywhere}
 
-/* generic helper to force normal text weight inline */
 .fw-normal{font-weight:400!important}
-
-/* ensure "(Current)" and "(Remaining)" are NOT bold no matter what */
-.off .off-dur .fw-normal,
-.off .sum-first .fw-normal { font-weight:400 !important; }
+.off .off-dur .fw-normal,.off .sum-first .fw-normal{font-weight:400!important}
