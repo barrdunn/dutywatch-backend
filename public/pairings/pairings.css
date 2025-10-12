@@ -8,8 +8,9 @@
 
   --ck-off:#62717f; --ck-pending:#ffd166; --ck-ok:#57e389;
 
-  --ckcol-desktop: 90px;
-  --ckcol-mobile: 60px;
+  /* Check-in spacer column width */
+  --ckcol-desktop: 76px;
+  --ckcol-mobile: 56px;
   --ckcol: var(--ckcol-desktop);
 }
 
@@ -33,15 +34,14 @@ h1{margin:0 0 8px;font-size:22px}
    Main table
    ========================= */
 #pairings{width:100%;border-collapse:separate;border-spacing:0 10px;table-layout:fixed}
-#pairings th,#pairings td{padding:10px 12px;vertical-align:middle;text-align:left}
+#pairings th,#pairings td{padding:10px 10px;vertical-align:middle;text-align:left}
 #pairings th{color:var(--muted);font-weight:600;border-bottom:1px solid var(--border);white-space:nowrap}
 
-/* col widths */
+/* 4 columns: (blank header), Pairing, Report, Release */
 #pairings th:nth-child(1), #pairings td:nth-child(1){width:var(--ckcol);min-width:var(--ckcol);padding-left:0;padding-right:0}
-#pairings th:nth-child(2), #pairings td:nth-child(2){width:25%}  /* Pairing */
-#pairings th:nth-child(3), #pairings td:nth-child(3){width:25%}  /* Report */
-#pairings th:nth-child(4), #pairings td:nth-child(4){width:25%}  /* Release */
-#pairings th:nth-child(5), #pairings td:nth-child(5){width:25%}  /* Detail */
+#pairings th:nth-child(2), #pairings td:nth-child(2){width:48%}   /* Pairing */
+#pairings th:nth-child(3), #pairings td:nth-child(3){width:26%}   /* Report (a bit closer) */
+#pairings th:nth-child(4), #pairings td:nth-child(4){width:26%}   /* Release */
 
 @media (max-width:640px){
   :root{--ckcol:var(--ckcol-mobile)}
@@ -52,32 +52,33 @@ h1{margin:0 0 8px;font-size:22px}
 tr.summary,tr.summary td{cursor:pointer}
 .dayhdr{cursor:pointer}
 
-/* checkbox cell */
-td.ck{padding:0!important}
+/* spacer / checkbox column */
+td.ckcol{padding:0!important}
 
-/* checkbox visuals */
-.ckbox{width:24px;height:24px;border-radius:6px;background:transparent;border:2px solid var(--ck-off);display:inline-flex;align-items:center;justify-content:center;position:relative;transition:transform .06s ease}
+/* checkbox visuals (in Check In column) */
+.ckbtn{appearance:none;background:transparent;border:0;padding:0;margin:0;cursor:pointer;line-height:0;display:inline-flex;align-items:center;justify-content:center}
+.ck{display:inline-flex;align-items:center;justify-content:center;width:100%}
+.ckbox{width:22px;height:22px;border-radius:6px;background:transparent;border:2px solid var(--ck-off);display:inline-flex;align-items:center;justify-content:center;position:relative;transition:transform .06s ease}
 .ck.off .ckbox{border-color:var(--ck-off)}
 .ck.pending .ckbox{border-color:var(--ck-pending)}
 .ck.ok .ckbox{border-color:var(--ck-ok);background:var(--ck-ok)}
 .ck.ok .ckbox::after{content:"✓";font-weight:900;font-size:14px;line-height:1;color:#0b1510;transform:translateY(-1px)}
-.ckbtn{appearance:none;background:transparent;border:0;padding:0;margin:0;cursor:pointer;line-height:0;display:inline-flex;align-items:center;justify-content:flex-start}
 
 /* capsules (rounded ends) */
-tr.summary td:not(.ck){background:var(--pairing-bg);border-top:1px solid var(--pairing-border);border-bottom:1px solid var(--pairing-border)}
-tr.summary:hover td:not(.ck){background:var(--pairing-bg-hover)}
+tr.summary td:not(.ckcol){background:var(--pairing-bg);border-top:1px solid var(--pairing-border);border-bottom:1px solid var(--pairing-border)}
+tr.summary:hover td:not(.ckcol){background:var(--pairing-bg-hover)}
 tr.summary td.sum-first{border-left:1px solid var(--pairing-border);border-top-left-radius:12px;border-bottom-left-radius:12px}
 tr.summary td:last-child{border-right:1px solid var(--pairing-border);border-top-right-radius:12px;border-bottom-right-radius:12px}
 
 /* OFF rows */
-tr.off td:not(.ck){background:var(--row);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+tr.off td:not(.ckcol){background:var(--row);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
 tr.off td.sum-first{border-left:1px solid var(--border);border-top-left-radius:12px;border-bottom-left-radius:12px}
 tr.off td:last-child{border-right:1px solid var(--border);border-top-right-radius:12px;border-bottom-right-radius:12px}
 .off-label,.off-dur{font-weight:800;color:var(--off)}
 .off-dur{white-space:nowrap}
 .off-label .fw-normal,.off-dur .fw-normal{font-weight:400!important}
 
-/* details capsule */
+/* details capsule (aligned after spacer col) */
 tr.details{display:none}
 tr.summary.open+tr.details{display:table-row}
 tr.details>td{position:relative;background:transparent;border:0;padding:0}
@@ -139,3 +140,4 @@ body.modal-open{overflow:hidden}
 
 .fw-normal{font-weight:400!important}
 .off .off-dur .fw-normal,.off .sum-first .fw-normal{font-weight:400!important}
+tr.off td.off-dur .fw-normal { font-weight:400 !important; }

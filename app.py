@@ -11,8 +11,9 @@ import traceback
 from typing import Any, Dict, List, Optional, Tuple
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
+from uuid import uuid4  # for mock event uids
 
-from fastapi import FastAPI, Query, HTTPException, Body
+from fastapi import FastAPI, Query, HTTPException, Body, Request
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
@@ -41,13 +42,15 @@ except Exception:  # safe fallbacks if db.py hasn't added these yet
 
 try:
     # Sticky "live" rows so an in-progress pairing isn't dropped mid-fly
-    from db import upsert_live_row, list_live_rows, purge_expired_live
+    from db import upsert_live_row, list_live_rows, purge_expired_live, delete_live_row
 except Exception:  # safe fallbacks
     def upsert_live_row(row: Dict[str, Any]) -> None:  # type: ignore
         pass
     def list_live_rows() -> List[Dict[str, Any]]:  # type: ignore
         return []
     def purge_expired_live(now_iso: str) -> None:  # type: ignore
+        pass
+    def delete_live_row(pairing_id: str) -> None:  # type: ignore
         pass
 
 # ---------------- Paths / Static ----------------
@@ -89,6 +92,8 @@ async def timing_and_errors(request, call_next):
 # ---------------- Config / Time ----------------
 LOCAL_TZ = ZoneInfo(os.getenv("LOCAL_TZ", "America/Chicago"))
 VIEW_WINDOW_MODE = os.getenv("VIEW_WINDOW_MODE", "TODAY_TO_END_OF_NEXT_MONTH").upper().strip()
+# Default True: only show sticky rows if the pairing_id is still present in the current feed
+STICKY_REQUIRE_FEED = os.getenv("STICKY_REQUIRE_FEED", "1") not in ("0", "false", "False")
 
 class State:
     refresh_seconds: int = int(os.getenv("REFRESH_SECONDS", "1800"))  # default 30 min
@@ -188,8 +193,6 @@ async def _emit(event_type: str, payload: dict | None = None):
 def _hash_event(ev: Dict[str, Any]) -> str:
     """
     Stable hash over event fields that affect parsing / rendering.
-    If any of these change (uid, start/end, last-modified, summary, location, description),
-    the hash changes -> we treat as a changed snapshot.
     """
     material = {
         "uid": ev.get("uid") or "",
@@ -204,7 +207,6 @@ def _hash_event(ev: Dict[str, Any]) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 def _events_digest(events: List[Dict[str, Any]]) -> str:
-    # order-independent digest (sort by uid then start)
     keyed = sorted(
         [{"k": f"{e.get('uid','')}|{e.get('start_utc','')}", "h": _hash_event(e)} for e in events],
         key=lambda x: x["k"],
@@ -223,11 +225,15 @@ def _next_from_meta(meta: Dict[str, Any]) -> dt.datetime:
 
 async def pull_and_update_once() -> bool:
     """
-    Pull fresh iCloud events and mark 'changed' if *any* parse-relevant field
-    differs, so the frontend repaints even when only legs/times moved.
+    Pull fresh iCloud events and mark 'changed' if *any* parse-relevant field differs.
+    Also scrubs any mock events (uid starts with 'mock-') so refresh is the single source of truth.
     """
     try:
         events = await run_in_threadpool(fetch_current_to_next_eom)
+
+        # --- scrub any mock events by UID prefix (belt-and-suspenders) ---
+        events = [e for e in events if not str(e.get("uid", "")).startswith("mock-")]
+
         meta = await run_in_threadpool(read_cache_meta)
 
         old_digest = meta.get("events_digest", "")
@@ -278,7 +284,7 @@ async def lifespan(app: FastAPI):
 
 app.router.lifespan_context = lifespan
 
-# ---------------- Ack / Check-in policy ----------------
+# ---------------- Ack policy ----------------
 ACK_POLICY = {
     "push_start_hours": 12,
     "push_stop_hours": 4,
@@ -304,7 +310,7 @@ def _read_ack_state(ack_id: str) -> Optional[str]:
 def _write_ack_state(ack_id: str, state_val: str, deadline_utc: Optional[str] = None):
     now_iso = _now_utc().isoformat()
     with get_db() as c:
-        cur = c.execute("SELECT 1 FROM acks WHERE ack_id=?", (ack_id)).fetchone()
+        cur = c.execute("SELECT 1 FROM acks WHERE ack_id=?", (ack_id,)).fetchone()  # tuple comma bug fixed
         if cur:
             c.execute("UPDATE acks SET state=?, last_update_utc=? WHERE ack_id=?", (state_val, now_iso, ack_id))
         else:
@@ -414,16 +420,15 @@ async def api_pairings(
     """
     Builds visible rows:
       - Filters hidden zero-leg items (by UID) and pairing_id hides.
-      - Keeps real (has legs) in-progress pairings sticky until release.
+      - Keeps in-progress pairings sticky ONLY if they still appear in the current feed (configurable via STICKY_REQUIRE_FEED).
       - Recomputes OFF rows after hide/unhide and on every paint.
-      - TOP OFF row when 'now' < first report shows: 'OFF (Now)' and 'Xd Yh (Remaining)' or 'Xh (Remaining)'.
+      - TOP OFF row when 'now' < first report shows: 'OFF (Now)' and remaining.
       - OFF rows show the previous pairing’s release time under the "Report" column.
     """
     try:
         meta = await run_in_threadpool(read_cache_meta)
         events = normalize_cached_events(meta)
 
-        # exact window (let in-progress that started earlier still appear)
         start_utc, end_utc, start_local, end_local, window_label = window_bounds_utc()
         UTC_MIN = dt.datetime.min.replace(tzinfo=dt.timezone.utc)
         UTC_MAX = dt.datetime.max.replace(tzinfo=dt.timezone.utc)
@@ -438,10 +443,10 @@ async def api_pairings(
 
         window_events = [e for e in events if (safe_end(e) > start_utc) and (safe_start(e) < end_utc)]
 
-        # Build rows fresh *every time* to reflect inner parse changes.
+        # Build rows fresh every time.
         rows = await run_in_threadpool(build_pairing_rows, window_events, bool(is_24h), bool(only_reports))
 
-        # Map pairing -> uids (used for hide/unhide and filtering)
+        # Map pairing -> uids
         pid_to_uids: Dict[str, List[str]] = {}
         for ev in window_events:
             pid = grouping_key(ev)
@@ -488,20 +493,33 @@ async def api_pairings(
 
             visible.append(r)
 
-        # Sticky in-progress real pairings
+        # Sticky in-progress pairings *only if still present in feed* (or if you flip STICKY_REQUIRE_FEED=0)
         now_local = dt.datetime.now(LOCAL_TZ)
         live_rows = await run_in_threadpool(list_live_rows)
-        existing_pids = set(str(p.get("pairing_id") or "") for p in visible)
+        current_feed_pids = set(str(p.get("pairing_id") or "") for p in visible if p.get("kind") == "pairing")
+        live_to_delete: List[str] = []
+
         for lr in live_rows:
             pid = str(lr.get("pairing_id") or "")
-            if not pid or pid in existing_pids:
+            if not pid:
+                continue
+            if STICKY_REQUIRE_FEED and pid not in current_feed_pids:
+                # No longer in the feed -> delete from sticky store and do not show
+                live_to_delete.append(pid)
+                continue
+            if pid in current_feed_pids:
+                # feed version already present; skip duplicate
                 continue
             rel_iso = lr.get("release_local_iso")
             rel_dt = to_local(iso_to_dt(rel_iso)) if rel_iso else None
             if rel_dt and rel_dt >= now_local and not lr.get("can_hide"):
                 visible.append(lr)
 
-        # Keep live rows up-to-date; purge expired
+        # Remove live rows that dropped from the feed
+        for pid in live_to_delete:
+            await run_in_threadpool(delete_live_row, pid)
+
+        # Keep live rows updated; purge expired by time
         for r in visible:
             if r.get("in_progress") and not r.get("can_hide"):
                 await run_in_threadpool(upsert_live_row, r)
@@ -514,7 +532,7 @@ async def api_pairings(
         visible.sort(key=lambda x: x.get("report_local_iso") or "")
         final_rows: List[Dict[str, Any]] = []
 
-        # (A) TOP OFF: OFF (Now) + Remaining
+        # (A) TOP OFF
         if visible:
             first_report_iso = visible[0].get("report_local_iso")
             first_report = to_local(iso_to_dt(first_report_iso)) if first_report_iso else None
@@ -532,7 +550,7 @@ async def api_pairings(
                     "display": {"off_dur": off_str, "off_label": "OFF (Now)"}
                 })
 
-        # (B) Pairings + OFF between pairings, with OFF showing the previous release time in "Report" column
+        # (B) Pairings + OFF between pairings
         def _hhmm_from_iso_local(iso: Optional[str]) -> str:
             if not iso:
                 return ""
@@ -558,14 +576,12 @@ async def api_pairings(
                     off_str = f"{total_h}h"
 
                 rel_hhmm = _hhmm_from_iso_local(p.get("release_local_iso"))
-                off_display = {
-                    "off_dur": off_str,
-                }
+                off_display = {"off_dur": off_str}
                 if rel_hhmm:
                     off_display["report_str"] = _fmt_time(rel_hhmm, use_24h)
                 final_rows.append({"kind": "off", "display": off_display})
 
-        # ---- Header meta (guard next_run in future to avoid rapid refresh loop)
+        # ---- Header meta
         lp_iso = meta.get("last_pull_utc")
         nr_iso = meta.get("next_run_utc")
         lp_local = to_local(iso_to_dt(lp_iso)) if lp_iso else None
@@ -737,3 +753,133 @@ def api_hidden_unhide_all():
     log.info("POST /api/hidden/unhide_all -> %d", before)
     hidden_clear_all()
     return {"ok": True, "cleared": before, "hidden_count": 0}
+
+# -------- DEBUG: mock a "happening now" pairing (inject) ----------
+@app.api_route("/api/debug/mock_pairing_now", methods=["GET", "POST"])
+async def api_debug_mock_pairing_now(
+    request: Request,
+    pairing_id: Optional[str] = Query(default=None),
+    payload: Optional[Dict[str, Any]] = Body(default=None),
+):
+    """
+    Inject a mock pairing that is currently in progress:
+      - Leg 1: starts 30m ago, ends 1h from now (straddles 'now')
+      - Leg 2: a follow-up leg later today
+    NOTE: Mocks are removed on next /api/refresh since refresh loads from your real calendar
+          and scrubs any uid starting with 'mock-'.
+    GET:  /api/debug/mock_pairing_now[?pairing_id=FOO]
+    POST: /api/debug/mock_pairing_now {"pairing_id":"FOO"}
+    """
+    now_local = dt.datetime.now(LOCAL_TZ).replace(microsecond=0)
+    report_local = now_local - dt.timedelta(minutes=75)
+    leg1_dep_local = now_local - dt.timedelta(minutes=30)
+    leg1_arr_local = now_local + dt.timedelta(hours=1)
+    turn_local    = leg1_arr_local + dt.timedelta(minutes=45)
+    leg2_dep_local = turn_local
+    leg2_arr_local = leg2_dep_local + dt.timedelta(hours=2)
+    release_local = leg2_arr_local + dt.timedelta(minutes=35)
+
+    body_pid = (payload or {}).get("pairing_id") if isinstance(payload, dict) else None
+    pairing_id = str(pairing_id or body_pid or f"MOCK-{now_local.strftime('%Y%m%d')}")
+
+    fnum1, fnum2 = "F9 1234", "F9 2345"
+    a1_dep, a1_arr = "DEN", "DFW"
+    a2_dep, a2_arr = "DFW", "ATL"
+
+    def iso_utc(d: dt.datetime) -> str:
+        return to_utc(d).isoformat()
+
+    ev_leg1 = {
+        "uid": f"mock-{uuid4().hex[:12]}",
+        "start_utc": iso_utc(leg1_dep_local),
+        "end_utc": iso_utc(leg1_arr_local),
+        "last_modified": iso_utc(now_local),
+        "summary": f"{fnum1} {a1_dep} → {a1_arr}",
+        "location": f"{a1_dep} {a1_arr}",
+        "description": f"MOCK | Pairing {pairing_id} | Leg 1",
+    }
+    ev_leg2 = {
+        "uid": f"mock-{uuid4().hex[:12]}",
+        "start_utc": iso_utc(leg2_dep_local),
+        "end_utc": iso_utc(leg2_arr_local),
+        "last_modified": iso_utc(now_local),
+        "summary": f"{fnum2} {a2_dep} → {a2_arr}",
+        "location": f"{a2_dep} {a2_arr}",
+        "description": f"MOCK | Pairing {pairing_id} | Leg 2",
+    }
+
+    meta = await run_in_threadpool(read_cache_meta)
+    existing = list(meta.get("events", []))
+    # remove old mocks then add fresh ones
+    existing = [e for e in existing if not str(e.get("uid","")).startswith("mock-")]
+    existing.extend([ev_leg1, ev_leg2])
+
+    meta["events"] = existing
+    meta["events_digest"] = _events_digest(existing)
+    meta["last_pull_utc"] = _now_utc().isoformat()
+    meta.setdefault("refresh_minutes", max(1, state.refresh_seconds // 60))
+    meta["next_run_utc"] = (_now_utc() + dt.timedelta(minutes=int(meta["refresh_minutes"]))).replace(microsecond=0).isoformat()
+    await run_in_threadpool(write_cache_meta, meta)
+
+    # Optional: add a sticky row so it appears immediately even before parsing (will be removed if not in feed when STICKY_REQUIRE_FEED=1)
+    live_row = {
+        "kind": "pairing",
+        "pairing_id": pairing_id,
+        "in_progress": True,
+        "can_hide": False,
+        "report_local_iso": report_local.isoformat(),
+        "release_local_iso": release_local.isoformat(),
+        "source": "mock",
+        "display": {
+            "report_hhmm": report_local.strftime("%H%M"),
+            "release_hhmm": release_local.strftime("%H%M"),
+        },
+        "days": [
+            {
+                "date_local": leg1_dep_local.date().isoformat(),
+                "legs": [
+                    {
+                        "flight_num": fnum1,
+                        "from": a1_dep,
+                        "to": a1_arr,
+                        "dep_time": int(leg1_dep_local.strftime("%H%M")),
+                        "arr_time": int(leg1_arr_local.strftime("%H%M")),
+                        "dep_time_str": _fmt_time(leg1_dep_local.strftime("%H%M"), use_24h=True),
+                        "arr_time_str": _fmt_time(leg1_arr_local.strftime("%H%M"), use_24h=True),
+                        "status": "IN PROGRESS" if leg1_dep_local <= now_local <= leg1_arr_local else "SCHEDULED",
+                    }
+                ],
+            },
+            {
+                "date_local": leg2_dep_local.date().isoformat(),
+                "legs": [
+                    {
+                        "flight_num": fnum2,
+                        "from": a2_dep,
+                        "to": a2_arr,
+                        "dep_time": int(leg2_dep_local.strftime("%H%M")),
+                        "arr_time": int(leg2_arr_local.strftime("%H%M")),
+                        "dep_time_str": _fmt_time(leg2_dep_local.strftime("%H%M"), use_24h=True),
+                        "arr_time_str": _fmt_time(leg2_arr_local.strftime("%H%M"), use_24h=True),
+                        "status": "SCHEDULED",
+                    }
+                ],
+            },
+        ],
+    }
+    await run_in_threadpool(upsert_live_row, live_row)
+
+    state.version += 1
+    await _emit("change", {"changed": True, "source": "mock_pairing_now", "pairing_id": pairing_id})
+
+    return {
+        "ok": True,
+        "pairing_id": pairing_id,
+        "now_local": now_local.isoformat(),
+        "report_local_iso": report_local.isoformat(),
+        "release_local_iso": release_local.isoformat(),
+        "legs": [
+            {"from": a1_dep, "to": a1_arr, "dep": leg1_dep_local.isoformat(), "arr": leg1_arr_local.isoformat()},
+            {"from": a2_dep, "to": a2_arr, "dep": leg2_dep_local.isoformat(), "arr": leg2_arr_local.isoformat()},
+        ],
+    }

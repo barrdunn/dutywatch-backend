@@ -350,12 +350,12 @@
   }
   function wrapNotBoldBits(text, token, smallToken) {
     if (!text) return '';
-    const re = new RegExp(`\\s*\\(${token}\\)`,`i`);
+    const re = new RegExp(`\\s*\\(${token}\\)`, 'i');
     if (re.test(text)) {
       const base = text.replace(re, '').trim();
       const isSmall = window.matchMedia && window.matchMedia('(max-width: 640px)').matches;
       const shown = isSmall && smallToken ? smallToken : token;
-      return `${esc(base)} <span class="fw-normal">(${shown})</span>`;
+      return `${esc(base)} <span class="fw-normal" style="font-weight:400!important">(${shown})</span>`;
     }
     return esc(text);
   }
@@ -371,22 +371,23 @@
 
   // ====== RENDERERS ======
   function renderRowHTML(row, homeBase) {
-    // --- OFF rows: Remaining in Release column (Report empty), no detail text
+    // --- OFF rows (NO checkbox)
     if (row.kind === 'off') {
       const rawLabel = (row.display && row.display.off_label) ? String(row.display.off_label) : 'OFF';
       const labelHTML = wrapNotBoldBits(rawLabel, 'Now');
+      // duration -> Report column
       const rawDur = String(row.display?.off_dur || '');
       const durHTML = wrapNotBoldBits(rawDur, 'Remaining', 'Rem.');
       return `
         <tr class="off">
-          <td class="ck"></td>
+          <td class="ckcol"></td>
           <td class="sum-first"><span class="off-label">${labelHTML}</span></td>
-          <td data-dw="report"></td>
-          <td class="off-dur" data-dw="release">${durHTML}</td>
-          <td class="muted"></td>
+          <td class="off-dur" data-dw="report">${durHTML}</td>
+          <td data-dw="release"></td>
         </tr>`;
     }
 
+    // --- Pairing rows (checkbox lives in Check In column)
     const totalLegs = legsCount(row);
     const hasLegs = totalLegs > 0;
 
@@ -406,22 +407,19 @@
          </div>`
       : '';
 
-    const detailMsg = IS_TOUCH ? 'tap to expand' : 'click to expand';
-
     return `
       <tr class="summary" data-row-id="${esc(row.pairing_id || '')}">
         ${renderCheckCell(row)}
         <td class="sum-first">
           <strong>${esc(row.pairing_id || '')}</strong>${pairingNowTag(row)}
-          ${hasLegs ? `<span class="pill">${days.length} day</span>` : ``}
+          ${hasLegs ? `<span class="pill">${row.days?.length || 1} day</span>` : ``}
           ${oobPill}
         </td>
         <td data-dw="report">${esc(row.display?.report_str || '')}</td>
         <td data-dw="release">${esc(row.display?.release_str || '')}</td>
-        <td class="muted">${detailMsg}</td>
       </tr>
       <tr class="details">
-        <td colspan="5">
+        <td colspan="4">
           <div class="daysbox">${hasLegs ? detailsDays : noLegsBlock}</div>
         </td>
       </tr>`;
@@ -435,27 +433,24 @@
     const ariaChecked = acknowledged ? 'true' : 'false';
     const ariaDisabled = acknowledged ? 'true' : 'false';
     return `
-      <td class="ck ${stateAttr}">
-        <div class="ck-wrapper">
-          <button class="ckbtn"
-                  type="button"
-                  role="checkbox"
-                  aria-checked="${ariaChecked}"
-                  aria-disabled="${ariaDisabled}"
-                  title="${stateAttr === 'ok' ? 'Acknowledged' : (stateAttr === 'pending' ? 'Click to view plan / acknowledge' : 'Click to view reminder plan')}"
-                  data-ck="${stateAttr}"
-                  data-pairing="${esc(row.pairing_id || '')}"
-                  data-report="${esc((ack && ack.report_local_iso) || row.report_local_iso || '')}">
-            <span class="ckbox" aria-hidden="true"></span>
-          </button>
-        </div>
+      <td class="ckcol">
+        <button class="ckbtn ck ${stateAttr}"
+                type="button"
+                role="checkbox"
+                aria-checked="${ariaChecked}"
+                aria-disabled="${ariaDisabled}"
+                title="${stateAttr === 'ok' ? 'Acknowledged' : (stateAttr === 'pending' ? 'Click to view plan / acknowledge' : 'Click to view reminder plan')}"
+                data-ck="${stateAttr}"
+                data-pairing="${esc(row.pairing_id || '')}"
+                data-report="${esc((ack && ack.report_local_iso) || row.report_local_iso || '')}">
+          <span class="ckbox" aria-hidden="true"></span>
+        </button>
       </td>`;
   }
 
   function renderDayHTML(row, day, idx, days) {
     const want24 = state.clockMode === 24;
 
-    // Robust day date (fallback to pairing report date + offset)
     const dayISO = dayDateFromRow(row, idx, day);
     const dow = weekdayFromISO(dayISO);
 
@@ -488,7 +483,6 @@
     const repDisp = fmtHHMM(dayRepRaw, want24, false);
     const relDisp = fmtHHMM(dayRelRaw, want24, false);
 
-    // Overnight hours: this day's release → next day's report
     let overnightHTML = '';
     if (idx + 1 < days.length) {
       const nextDay = days[idx + 1];
