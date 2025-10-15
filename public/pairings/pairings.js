@@ -115,7 +115,7 @@
     clockSel.value = String(state.clockMode);
     clockSel.addEventListener('change', () => {
       state.clockMode = parseInt(clockSel.value, 10) === 24 ? 24 : 12;
-      repaintTimesOnly();
+      repaintTimesOnly();  // purely cosmetic; backend decides visibility
     });
   }
 
@@ -237,8 +237,9 @@
 
   // ====== RENDER ======
   async function renderOnce() {
+    // Backend decides visibility. Frontend just asks for rows.
     const params = new URLSearchParams({
-      is_24h: '0',
+      is_24h: '0',                                // display strings from server are 12h-oriented
       only_reports: state.onlyReports ? '1' : '0',
     });
 
@@ -257,6 +258,7 @@
     const hintedHidden = (data && (data.hidden_count ?? (data.hidden && data.hidden.count)));
     applyHiddenCount(typeof hintedHidden === 'number' ? hintedHidden : state.hiddenCount);
 
+    const refreshSel = document.getElementById('refresh-mins');
     if (refreshSel && data.refresh_minutes) refreshSel.value = String(data.refresh_minutes);
 
     const label = (data.window && data.window.label) || data.looking_through || '—';
@@ -272,7 +274,7 @@
     const tbody = qs('#pairings-body');
     tbody.innerHTML = (data.rows || []).map(row => renderRowHTML(row, HOME_BASE)).join('');
 
-    repaintTimesOnly();
+    repaintTimesOnly(); // cosmetic (12h/24h toggle)
   }
 
   function repaintTimesOnly() {

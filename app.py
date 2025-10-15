@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
-from fastapi import FastAPI, Query, HTTPException, Body, Request
+from fastapi import FastAPI, Query, HTTPException, Body
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
@@ -93,8 +93,8 @@ LOCAL_TZ = ZoneInfo(os.getenv("LOCAL_TZ", "America/Chicago"))
 VIEW_WINDOW_MODE = os.getenv("VIEW_WINDOW_MODE", "TODAY_TO_END_OF_NEXT_MONTH").upper().strip()
 # Default True: only show sticky rows if the pairing_id is still present in the current feed
 STICKY_REQUIRE_FEED = os.getenv("STICKY_REQUIRE_FEED", "1") not in ("0", "false", "False")
-# New: how far back to fetch in UTC so late-evening legs remain included
-LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "18"))  # 18–24 is a good range
+# Lookback so late-evening pairings are still fetched after UTC midnight
+LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "24"))
 
 class State:
     refresh_seconds: int = int(os.getenv("REFRESH_SECONDS", "1800"))  # default 30 min
@@ -178,11 +178,10 @@ def _fmt_time(hhmm: str, use_24h: bool) -> str:
 def fetch_current_to_next_eom() -> List[Dict[str, Any]]:
     """
     Fetch from a looked-back start in UTC through the end of next month (UTC),
-    so that late-day local events (which start earlier in UTC) are still present.
+    so late-day local events (which start earlier in UTC) are still present.
     """
     now_utc = _now_utc()
     start_utc = now_utc - dt.timedelta(hours=LOOKBACK_HOURS)
-
     y, m = now_utc.year, now_utc.month
     end_utc = dt.datetime(y + (1 if m >= 11 else 0), ((m + 1) % 12) + 1, 1, tzinfo=dt.timezone.utc)
 
@@ -429,7 +428,7 @@ async def api_pairings(
     """
     Builds visible rows:
       - Filters hidden zero-leg items (by UID) and pairing_id hides.
-      - Keeps in-progress pairings sticky ONLY if they still appear in the current feed, unless release has not yet passed (see fix below).
+      - Keeps in-progress pairings sticky unless the release time has passed.
       - Recomputes OFF rows after hide/unhide and on every paint.
       - TOP OFF row when 'now' < first report shows: 'OFF (Now)' and remaining.
       - OFF rows show the previous pairing’s release time under the "Report" column.
@@ -503,7 +502,7 @@ async def api_pairings(
             visible.append(r)
 
         # Sticky in-progress pairings: keep them even if missing from feed,
-        # unless the release time has already passed (fix for UTC fetch gaps).
+        # unless the release time has already passed (covers fetch gaps around UTC midnight).
         now_local = dt.datetime.now(LOCAL_TZ)
         live_rows = await run_in_threadpool(list_live_rows)
         current_feed_pids = set(str(p.get("pairing_id") or "") for p in visible if p.get("kind") == "pairing")
@@ -514,18 +513,15 @@ async def api_pairings(
             if not pid:
                 continue
 
-            # Compute release time first; use it to decide retention
             rel_iso = lr.get("release_local_iso")
             rel_dt = to_local(iso_to_dt(rel_iso)) if rel_iso else None
 
             if STICKY_REQUIRE_FEED and pid not in current_feed_pids:
-                # Only remove if truly expired
                 if rel_dt and rel_dt < now_local:
                     live_to_delete.append(pid)
                     continue
-                # Otherwise keep the sticky copy visible below
+                # else: keep sticky visible
 
-            # If the feed already includes it, skip adding a duplicate; else keep it if not expired
             if pid in current_feed_pids:
                 continue
             if rel_dt and rel_dt >= now_local and not lr.get("can_hide"):
@@ -769,4 +765,3 @@ def api_hidden_unhide_all():
     log.info("POST /api/hidden/unhide_all -> %d", before)
     hidden_clear_all()
     return {"ok": True, "cleared": before, "hidden_count": 0}
-
