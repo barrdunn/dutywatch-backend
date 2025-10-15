@@ -8,8 +8,8 @@
 
   --ck-off:#62717f; --ck-pending:#ffd166; --ck-ok:#57e389;
 
-  /* Check-in spacer column width */
-  --ckcol-desktop: 76px;
+  /* Original check-in column width */
+  --ckcol-desktop: 56px;
   --ckcol-mobile: 56px;
   --ckcol: var(--ckcol-desktop);
 }
@@ -37,16 +37,20 @@ h1{margin:0 0 8px;font-size:22px}
 #pairings th,#pairings td{padding:10px 10px;vertical-align:middle;text-align:left}
 #pairings th{color:var(--muted);font-weight:600;border-bottom:1px solid var(--border);white-space:nowrap}
 
-/* 4 columns: (blank header), Pairing, Report, Release */
+/* 4 columns: (check), Pairing, Report, Release */
 #pairings th:nth-child(1), #pairings td:nth-child(1){width:var(--ckcol);min-width:var(--ckcol);padding-left:0;padding-right:0}
-#pairings th:nth-child(2), #pairings td:nth-child(2){width:48%}   /* Pairing */
-#pairings th:nth-child(3), #pairings td:nth-child(3){width:26%}   /* Report (a bit closer) */
-#pairings th:nth-child(4), #pairings td:nth-child(4){width:26%}   /* Release */
+#pairings th:nth-child(2), #pairings td:nth-child(2){width:48%}
+#pairings th:nth-child(3), #pairings td:nth-child(3){width:26%}
+#pairings th:nth-child(4), #pairings td:nth-child(4){width:26%}
 
 @media (max-width:640px){
   :root{--ckcol:var(--ckcol-mobile)}
   #pairings th:first-child{white-space:normal}
 }
+
+/* ✓ label centered in the check header */
+.ckhdr{ text-align:center }
+.ckhdr span{ display:inline-flex; width:100%; justify-content:center; font-weight:900; color:var(--ck-ok) }
 
 /* clickable cues */
 tr.summary,tr.summary td{cursor:pointer}
@@ -55,35 +59,44 @@ tr.summary,tr.summary td{cursor:pointer}
 /* spacer / checkbox column */
 td.ckcol{padding:0!important}
 
-/* checkbox visuals (in Check In column) */
-.ckbtn{appearance:none;background:transparent;border:0;padding:0;margin:0;cursor:pointer;line-height:0;display:inline-flex;align-items:center;justify-content:center}
+/* checkbox visuals — slightly larger, nudged down 3px */
+.ckbtn{
+  appearance:none;background:transparent;border:0;padding:0;margin:0;
+  cursor:pointer;line-height:0;display:inline-flex;align-items:center;justify-content:center;width:100%;
+  margin-top:3px;
+}
 .ck{display:inline-flex;align-items:center;justify-content:center;width:100%}
-.ckbox{width:22px;height:22px;border-radius:6px;background:transparent;border:2px solid var(--ck-off);display:inline-flex;align-items:center;justify-content:center;position:relative;transition:transform .06s ease}
+.ckbox{width:24px;height:24px;border-radius:7px;background:transparent;border:2px solid var(--ck-off);display:inline-flex;align-items:center;justify-content:center;position:relative;transition:transform .06s ease}
 .ck.off .ckbox{border-color:var(--ck-off)}
 .ck.pending .ckbox{border-color:var(--ck-pending)}
 .ck.ok .ckbox{border-color:var(--ck-ok);background:var(--ck-ok)}
-.ck.ok .ckbox::after{content:"✓";font-weight:900;font-size:14px;line-height:1;color:#0b1510;transform:translateY(-1px)}
+.ck.ok .ckbox::after{content:"✓";font-weight:900;font-size:15px;line-height:1;color:#0b1510;transform:translateY(-1px)}
 
-/* capsules (rounded ends) */
-tr.summary td:not(.ckcol){background:var(--pairing-bg);border-top:1px solid var(--pairing-border);border-bottom:1px solid var(--pairing-border)}
-tr.summary:hover td:not(.ckcol){background:var(--pairing-bg-hover)}
-tr.summary td.sum-first{border-left:1px solid var(--pairing-border);border-top-left-radius:12px;border-bottom-left-radius:12px}
+/* capsules extend across ALL columns */
+tr.summary td{background:var(--pairing-bg);border-top:1px solid var(--pairing-border);border-bottom:1px solid var(--pairing-border)}
+tr.summary:hover td{background:var(--pairing-bg-hover)}
+tr.summary td:first-child{border-left:1px solid var(--pairing-border);border-top-left-radius:12px;border-bottom-left-radius:12px}
 tr.summary td:last-child{border-right:1px solid var(--pairing-border);border-top-right-radius:12px;border-bottom-right-radius:12px}
 
-/* OFF rows */
-tr.off td:not(.ckcol){background:var(--row);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
-tr.off td.sum-first{border-left:1px solid var(--border);border-top-left-radius:12px;border-bottom-left-radius:12px}
+/* OFF rows — OFF label sits in Pairing col, duration in Report col */
+tr.off td{background:var(--row);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+tr.off td:first-child{border-left:1px solid var(--border);border-top-left-radius:12px;border-bottom-left-radius:12px}
 tr.off td:last-child{border-right:1px solid var(--border);border-top-right-radius:12px;border-bottom-right-radius:12px}
 .off-label,.off-dur{font-weight:800;color:var(--off)}
 .off-dur{white-space:nowrap}
-.off-label .fw-normal,.off-dur .fw-normal{font-weight:400!important}
 
-/* details capsule (aligned after spacer col) */
+/* "(Remaining)" tag - NOT bold - needs !important to override parent */
+.off-remaining-tag {
+  font-weight: 400 !important;
+  color: var(--muted) !important;
+}
+
+/* details capsule includes check column */
 tr.details{display:none}
 tr.summary.open+tr.details{display:table-row}
 tr.details>td{position:relative;background:transparent;border:0;padding:0}
-tr.details>td::before{content:"";position:absolute;left:var(--ckcol);right:0;top:0;bottom:0;background:var(--row-alt);border:1px solid var(--border);border-radius:12px;z-index:0}
-.daysbox{position:relative;z-index:1;padding:12px 16px 14px;border-radius:10px;margin-left:var(--ckcol)}
+tr.details>td::before{content:"";position:absolute;left:0;right:0;top:0;bottom:0;background:var(--row-alt);border:1px solid var(--border);border-radius:12px;z-index:0}
+.daysbox{position:relative;z-index:1;padding:12px 16px 14px;border-radius:10px;margin-left:0}
 
 /* Day header */
 .day{margin:8px 0 14px}
@@ -91,14 +104,14 @@ tr.details>td::before{content:"";position:absolute;left:var(--ckcol);right:0;top
 .dayhdr .daytitle{font-weight:600}
 .dot{width:6px;height:6px;border-radius:999px;background:#7ee2a1;display:inline-block;margin-right:4px}
 
-/* Legs table (includes Flight Tracking col) */
+/* Legs table */
 .legs{width:100%;border-collapse:collapse;table-layout:fixed}
 .legs th,.legs td{padding:6px 8px;border-bottom:1px solid var(--border);vertical-align:middle;text-align:left}
 .legs th{color:var(--muted);font-size:12px;white-space:nowrap}
 .legs th:first-child,.legs td:first-child{width:26%!important;white-space:nowrap}
 .legs th:nth-child(2),.legs td:nth-child(2){width:30%!important;padding-right:8px}
 .legs th:nth-child(3),.legs td:nth-child(3){width:26%!important;padding-left:12px;font-variant-numeric:tabular-nums}
-.legs th:nth-child(4),.legs td:nth-child(4){width:18%!important} /* Flight Tracking */
+.legs th:nth-child(4),.legs td:nth-child(4){width:18%!important}
 .leg-done td{text-decoration:line-through;color:var(--strike)}
 .legs td.bt{font-variant-numeric:tabular-nums;white-space:nowrap}
 
@@ -137,7 +150,3 @@ body.modal-open{overflow:hidden}
 
 .ios table{table-layout:fixed}
 .ios th,.ios td{word-break:break-word;overflow-wrap:anywhere}
-
-.fw-normal{font-weight:400!important}
-.off .off-dur .fw-normal,.off .sum-first .fw-normal{font-weight:400!important}
-tr.off td.off-dur .fw-normal { font-weight:400 !important; }
