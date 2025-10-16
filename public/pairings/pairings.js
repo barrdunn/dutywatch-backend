@@ -135,7 +135,7 @@
 
       let dur=String(row.display?.off_dur||'').trim();
       const isMobile=window.matchMedia&&window.matchMedia('(max-width: 640px)').matches;
-      const remainingText=isMobile?'(Rem.)':'(Remaining)';
+      const remainingText=isMobile?'(Rem)':'(Rem)';
       if(/\(.*remaining.*\)/i.test(dur)){
         dur = dur.replace(/\(\s*remaining\s*\)/i, ` <span style="font-weight:400!important">${remainingText}</span>`);
       }else if(isFirstOff){
