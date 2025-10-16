@@ -80,6 +80,34 @@
     </div>
   </div>
 
+  <!-- Plan Modal (Notification Attempts) -->
+  <div id="plan-modal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2>Notification Plan</h2>
+        <button class="modal-close" id="plan-close-1">×</button>
+      </div>
+      <div class="modal-content">
+        <p class="plan-meta" id="plan-meta">Loading...</p>
+        <table class="plan-table">
+          <thead>
+            <tr>
+              <th>When</th>
+              <th>Type</th>
+              <th>Details</th>
+            </tr>
+          </thead>
+          <tbody id="plan-rows">
+            <!-- filled by JS -->
+          </tbody>
+        </table>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" id="plan-close-2">Close</button>
+      </div>
+    </div>
+  </div>
+
   <script id="dw-boot" type="application/json">{
     "clockMode": "12",
     "onlyReports": false,
@@ -90,5 +118,19 @@
   }</script>
 
   <script src="/pairings/pairings.js?v=36" defer></script>
+  <script>
+    // Add click-outside-to-close for plan modal
+    document.addEventListener('DOMContentLoaded', function() {
+      const planModal = document.getElementById('plan-modal');
+      if (planModal) {
+        planModal.addEventListener('click', function(e) {
+          if (e.target === planModal) {
+            planModal.classList.add('hidden');
+            document.body.classList.remove('modal-open');
+          }
+        });
+      }
+    });
+  </script>
 </body>
 </html>
