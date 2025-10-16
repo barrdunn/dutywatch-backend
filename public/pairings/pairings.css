@@ -116,10 +116,10 @@ tr.details>td::before{content:"";position:absolute;left:0;right:0;top:0;bottom:0
 .legs{width:100%;border-collapse:collapse;table-layout:fixed}
 .legs th,.legs td{padding:6px 8px;border-bottom:1px solid var(--border);vertical-align:middle;text-align:left}
 .legs th{color:var(--muted);font-size:12px;white-space:nowrap}
-.legs th:first-child,.legs td:first-child{width:26%!important;white-space:nowrap}
-.legs th:nth-child(2),.legs td:nth-child(2){width:30%!important;padding-right:8px}
-.legs th:nth-child(3),.legs td:nth-child(3){width:26%!important;padding-left:12px;font-variant-numeric:tabular-nums}
-.legs th:nth-child(4),.legs td:nth-child(4){width:18%!important}
+.legs th:first-child,.legs td:first-child{width:18%!important;white-space:nowrap}
+.legs th:nth-child(2),.legs td:nth-child(2){width:32%!important;padding-right:8px}
+.legs th:nth-child(3),.legs td:nth-child(3){width:30%!important;padding-left:12px;font-variant-numeric:tabular-nums}
+.legs th:nth-child(4),.legs td:nth-child(4){width:20%!important}
 .leg-done td{text-decoration:line-through;color:var(--strike)}
 .legs td.bt{font-variant-numeric:tabular-nums;white-space:nowrap}
 
