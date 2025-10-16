@@ -4,49 +4,35 @@
   <meta charset="utf-8" />
   <title>Pairings for Barry Dunn</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="stylesheet" href="/pairings/pairings.css?v=41">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer">
+  <link rel="stylesheet" href="/pairings/pairings.css?v=36">
   <style>.hidden{display:none!important}</style>
 </head>
 <body>
   <div class="wrap">
     <div class="card">
-      <h1>Pairings for Barry Dunn</h1>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:0px;gap:12px">
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;flex:1">
+          <h1 style="margin:0">Pairings for Barry Dunn</h1>
+          <span class="chip" id="looking-chip">From <strong id="looking-through">—</strong></span>
+        </div>
+        <button id="settings-btn" class="icon-btn" title="Settings" style="flex-shrink:0">
+          <i class="fa-solid fa-gear"></i>
+        </button>
+      </div>
 
-      <div class="sub" id="status-line">
-        <span class="chip">Looking through <strong id="looking-through">—</strong></span>
-        <span class="chip">Last pull: <strong id="last-pull">—</strong></span>
-        <span class="chip">Next refresh: <strong id="next-refresh">—</strong> 
-          <span class="muted" id="next-refresh-eta"></span>
-        </span>
+      <div class="sub" id="status-line" style="margin:2px 0 8px">
         <span class="chip" id="hidden-chip">
           <span id="hidden-count">Hidden: 0</span>
           <a href="#" data-unhide-all style="color:var(--accent);text-decoration:none;margin-left:6px">Unhide all</a>
         </span>
       </div>
 
-      <div class="controls">
-        <form onsubmit="window.dwManualRefresh(); return false;">
-          <button class="btn" type="submit">Pull / Refresh</button>
+      <div class="controls" style="margin-top:8px">
+        <form onsubmit="window.dwManualRefresh(); return false;" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+          <button class="btn" type="submit">Refresh</button>
+          <span class="chip">Last: <strong id="last-pull">—</strong></span>
         </form>
-
-        <label class="toggle" style="display:flex;align-items:center;gap:8px;">
-          Auto-refresh:
-          <select id="refresh-mins" class="toggle">
-            <option value="1">1 min</option>
-            <option value="5">5 mins</option>
-            <option value="10">10 mins</option>
-            <option value="15">15 mins</option>
-            <option value="30" selected>30 mins</option>
-          </select>
-        </label>
-
-        <label class="toggle" style="display:flex;align-items:center;gap:8px;">
-          Clock:
-          <select id="clock-mode" class="toggle">
-            <option value="12" selected>12h</option>
-            <option value="24">24h</option>
-          </select>
-        </label>
       </div>
 
       <table id="pairings">
@@ -63,6 +49,37 @@
     </div>
   </div>
 
+  <!-- Settings Modal -->
+  <div id="settings-modal" class="modal hidden">
+    <div class="modal-card" style="max-width:480px">
+      <div class="modal-header">
+        <h2>Settings</h2>
+        <button class="modal-close" id="settings-close">×</button>
+      </div>
+      <div class="modal-content">
+        <div style="display:flex;flex-direction:column;gap:16px">
+          <label class="setting-row">
+            <span>Auto-refresh:</span>
+            <select id="refresh-mins" class="toggle">
+              <option value="1">1 min</option>
+              <option value="5">5 mins</option>
+              <option value="10">10 mins</option>
+              <option value="15">15 mins</option>
+              <option value="30" selected>30 mins</option>
+            </select>
+          </label>
+          <label class="setting-row">
+            <span>Clock:</span>
+            <select id="clock-mode" class="toggle">
+              <option value="12" selected>12h</option>
+              <option value="24">24h</option>
+            </select>
+          </label>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script id="dw-boot" type="application/json">{
     "clockMode": "12",
     "onlyReports": false,
@@ -72,6 +89,6 @@
     "baseAirport": "DFW"
   }</script>
 
-  <script src="/pairings/pairings.js?v=41" defer></script>
+  <script src="/pairings/pairings.js?v=36" defer></script>
 </body>
 </html>

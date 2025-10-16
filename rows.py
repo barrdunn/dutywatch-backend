@@ -54,9 +54,21 @@ def time_display(hhmm: Optional[str], is_24h: bool) -> str:
     return _ensure_hhmm(hhmm) if is_24h else _to_12h(hhmm)
 
 def grouping_key(e: Dict[str, Any]) -> str:
+    """
+    Group events by pairing ID + start date.
+    This prevents separate trips with the same pairing number (e.g., W3086 on different weeks)
+    from being merged together.
+    """
     pid = (e.get("summary") or "").strip()
-    if pid:
+    start_utc = iso_to_dt(e.get("start_utc"))
+    
+    if pid and start_utc:
+        # Use the date (YYYY-MM-DD) as part of the key to separate same-numbered pairings on different dates
+        date_key = start_utc.strftime("%Y-%m-%d")
+        return f"{pid}|{date_key}"
+    elif pid:
         return pid
+    
     uid = (e.get("uid") or "")[:8]
     return f"PAIR-{uid}"
 
@@ -68,27 +80,78 @@ def _human_dur(td: dt.timedelta) -> str:
         return f"{d}d {h}h"
     return f"{total_h}h"
 
+def _day_signature(day: Dict[str, Any]) -> str:
+    """Create a unique signature for a day based on report time and legs."""
+    report = day.get("report") or ""
+    legs = day.get("legs") or []
+    leg_sig = "|".join(f"{leg.get('flight')}:{leg.get('dep')}:{leg.get('arr')}:{leg.get('dep_time')}:{leg.get('arr_time')}" for leg in legs)
+    return f"{report}||{leg_sig}"
+
 def build_pairing_rows(
     events: List[Dict[str, Any]],
     is_24h: bool,
     only_reports: bool,
 ) -> List[Dict[str, Any]]:
-    groups: Dict[str, List[Dict[str, Any]]] = {}
+    # First pass: group by pairing ID only
+    initial_groups: Dict[str, List[Dict[str, Any]]] = {}
     for e in events:
-        groups.setdefault(grouping_key(e), []).append(e)
+        pid = (e.get("summary") or "").strip()
+        if not pid:
+            uid = (e.get("uid") or "")[:8]
+            pid = f"PAIR-{uid}"
+        initial_groups.setdefault(pid, []).append(e)
+    
+    # Second pass: split groups if there's a gap > 12 hours between consecutive events
+    final_groups: Dict[str, List[Dict[str, Any]]] = {}
+    group_counter = 0
+    
+    for pid, evs in initial_groups.items():
+        evs_sorted = sorted(evs, key=lambda x: iso_to_dt(x.get("start_utc")) or dt.datetime.min)
+        
+        current_batch = []
+        for e in evs_sorted:
+            if not current_batch:
+                current_batch.append(e)
+            else:
+                prev_end = iso_to_dt(current_batch[-1].get("end_utc"))
+                curr_start = iso_to_dt(e.get("start_utc"))
+                
+                # If gap is > 12 hours, this is a separate pairing
+                if prev_end and curr_start and (curr_start - prev_end).total_seconds() > 12 * 3600:
+                    # Save current batch
+                    final_groups[f"{pid}#{group_counter}"] = current_batch
+                    group_counter += 1
+                    current_batch = [e]
+                else:
+                    current_batch.append(e)
+        
+        if current_batch:
+            final_groups[f"{pid}#{group_counter}"] = current_batch
+            group_counter += 1
 
     pairings: List[Dict[str, Any]] = []
 
-    for pairing_id, evs in groups.items():
+    for group_key, evs in final_groups.items():
+        # Extract original pairing_id (before the #number suffix)
+        pairing_id = group_key.rsplit('#', 1)[0]
         evs_sorted = sorted(evs, key=lambda x: iso_to_dt(x.get("start_utc")) or dt.datetime.min)
 
         parsed_days: List[Dict[str, Any]] = []
+        seen_signatures = set()
+        
         for e in evs_sorted:
             parsed = parse_pairing_days(e.get("description") or "")
             days = parsed.get("days") or []
             if only_reports:
                 days = [d for d in days if d.get("report")]
+            
             for d in days:
+                # Deduplicate days with identical report times and legs
+                sig = _day_signature(d)
+                if sig in seen_signatures:
+                    continue
+                seen_signatures.add(sig)
+                
                 for leg in d.get("legs", []):
                     if not str(leg.get("flight", "")).startswith("FFT"):
                         nums = re.findall(r"\d{3,4}", str(leg.get("flight", ""))) or []
@@ -96,7 +159,7 @@ def build_pairing_rows(
                             leg["flight"] = f"{nums[0]}"
                     leg["dep_time_str"] = time_display(leg.get("dep_time"), is_24h)
                     leg["arr_time_str"] = time_display(leg.get("arr_time"), is_24h)
-            parsed_days.extend(days)
+                parsed_days.append(d)
 
         first_evt_local = to_local(iso_to_dt(evs_sorted[0].get("start_utc"))) if evs_sorted else None
         first_report_hhmm = parsed_days[0].get("report") if parsed_days else None
@@ -147,9 +210,7 @@ def build_pairing_rows(
         report_disp = f"{dword(pairing_report_local)} {(_to_12h(hhmm_or_blank(pairing_report_local)) if pairing_report_local else '')}".strip() if pairing_report_local else ""
         release_disp = f"{dword(pairing_release_local)} {(_to_12h(hhmm_or_blank(pairing_release_local)) if pairing_release_local else '')}".strip() if pairing_release_local else ""
 
-        # /* ADDED */  include Apple UID on the pairing row for stable identity
-        uid = (evs_sorted[0].get("uid") if evs_sorted else None)  # Apple VEVENT UID
-        # /* ADDED END */
+        uid = (evs_sorted[0].get("uid") if evs_sorted else None)
 
         pairings.append(
             {
@@ -160,7 +221,7 @@ def build_pairing_rows(
                 "release_local_iso": pairing_release_local.isoformat() if pairing_release_local else None,
                 "display": {"report_str": report_disp, "release_str": release_disp},
                 "days": days_with_flags,
-                "uid": uid,  # /* ADDED */
+                "uid": uid,
             }
         )
 

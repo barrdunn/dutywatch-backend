@@ -38,6 +38,14 @@
   const clockSel=document.getElementById('clock-mode');
   if(clockSel){clockSel.value=String(state.clockMode);clockSel.addEventListener('change',()=>{state.clockMode=parseInt(clockSel.value,10)===24?24:12;repaintTimesOnly();});}
 
+  // ===== settings modal =====
+  const settingsModal=qs('#settings-modal');
+  const settingsBtn=qs('#settings-btn');
+  const settingsClose=qs('#settings-close');
+  if(settingsBtn)settingsBtn.addEventListener('click',()=>{if(settingsModal){settingsModal.classList.remove('hidden');document.body.classList.add('modal-open');}});
+  if(settingsClose)settingsClose.addEventListener('click',()=>{if(settingsModal){settingsModal.classList.add('hidden');document.body.classList.remove('modal-open');}});
+  if(settingsModal)settingsModal.addEventListener('click',(e)=>{if(e.target===settingsModal){settingsModal.classList.add('hidden');document.body.classList.remove('modal-open');}});
+
   // ===== hidden chip =====
   function applyHiddenCount(n){state.hiddenCount=Number(n)||0;const chip=qs('#hidden-chip');const countEl=qs('#hidden-count');if(!chip||!countEl)return;countEl.textContent=`Hidden: ${state.hiddenCount}`;chip.classList.toggle('hidden',!(state.hiddenCount>0));}
 
@@ -71,7 +79,17 @@
 
     const hintedHidden=(data&&(data.hidden_count??(data.hidden&&data.hidden.count)));applyHiddenCount(typeof hintedHidden==='number'?hintedHidden:state.hiddenCount);
 
-    const label=(data.window&&data.window.label)||data.looking_through||'—';setText('#looking-through',label);
+    const label=(data.window&&data.window.label)||data.looking_through||'—';
+    // Parse "Today – Dec 31 (Tue)" format and convert to "Today → Dec 31"
+    let displayLabel=label;
+    if(label&&label.includes('–')){
+      const parts=label.split('–');
+      if(parts.length===2){
+        const endPart=parts[1].trim().replace(/\s*\([^)]+\)$/,''); // Remove day of week
+        displayLabel=`Today → ${endPart}`;
+      }
+    }
+    setText('#looking-through',displayLabel);
 
     setText('#last-pull',minutesOnlyAgo(state.lastPullIso));
     const base=(data.next_pull_local&&data.tz_label)?`${data.next_pull_local} (${data.tz_label})`:'—';
@@ -116,10 +134,12 @@
       const labelHTML=wrapNotBoldBits(rawLabel,'Now');
 
       let dur=String(row.display?.off_dur||'').trim();
+      const isMobile=window.matchMedia&&window.matchMedia('(max-width: 640px)').matches;
+      const remainingText=isMobile?'(Rem.)':'(Remaining)';
       if(/\(.*remaining.*\)/i.test(dur)){
-        dur = dur.replace(/\(\s*remaining\s*\)/i, ' <span style="font-weight:400!important">(Remaining)</span>');
+        dur = dur.replace(/\(\s*remaining\s*\)/i, ` <span style="font-weight:400!important">${remainingText}</span>`);
       }else if(isFirstOff){
-        dur = `${dur} <span style="font-weight:400!important">(Remaining)</span>`;
+        dur = `${dur} <span style="font-weight:400!important">${remainingText}</span>`;
       }
 
       return `
@@ -190,6 +210,7 @@
 
   function renderDayHTML(row,day,idx,days){
     const want24=state.clockMode===24;
+    const isMobile=window.matchMedia&&window.matchMedia('(max-width: 640px)').matches;
     const dayISO=dayDateFromRow(row,idx,day);
     const dow=weekdayFromISO(dayISO);
     const legs=(day.legs||[]).map(leg=>{
@@ -210,6 +231,8 @@
     const dayRelRaw=pickHHMM(day.release_hhmm,day.release);
     const repDisp=fmtHHMM(dayRepRaw,want24,false);
     const relDisp=fmtHHMM(dayRelRaw,want24,false);
+    const blockLabel='Block';
+    const trackLabel=isMobile?'Track':'Tracking';
     return `
       <div class="day">
         <div class="dayhdr">
@@ -222,7 +245,7 @@
         ${legs?`
           <div class="legs-wrap">
             <table class="legs" style="display:none">
-              <thead><tr><th>Flight</th><th>Route</th><th>Block Times</th><th>Flight Tracking</th></tr></thead>
+              <thead><tr><th>Flight</th><th>Route</th><th>${blockLabel}</th><th>${trackLabel}</th></tr></thead>
               <tbody>${legs}</tbody>
             </table>
           </div>`:``}
