@@ -116,14 +116,22 @@
     cc.style.marginTop = '0';
   }
 
+  function clearMinWidthLocks() {
+    const wrap = document.querySelector('.wrap') || document.body;
+    wrap.style.minWidth = '';
+    document.body.style.minWidth = '';
+  }
+
   function applyCalendarLayout() {
-    const vw = window.innerWidth;
+    const vw = Math.min(window.innerWidth || 0, document.documentElement.clientWidth || 0) || window.innerWidth;
     const wrap = document.querySelector('.wrap') || document.body;
     const table = document.getElementById('pairings');
     const calNext = document.getElementById('calendar-next');
 
+    // Always keep BOTH calendars visible
     if (calNext) calNext.style.display = 'block';
 
+    // Reset locks before calculating (important after rotation)
     wrap.style.minWidth = '';
     document.body.style.minWidth = '';
 
@@ -166,9 +174,7 @@
         eventDisplay: 'block',
         dayMaxEvents: 3,
         moreLinkClick: 'popover',
-        // <<< NEW: single-letter day headers
         dayHeaderContent(arg) {
-          // Use locale's short name and take first character; fallback to 'SMTWTFS'
           const s = arg.date.toLocaleDateString(undefined, { weekday: 'short' });
           return s?.charAt(0) || 'SMTWTFS'.charAt(arg.date.getDay());
         },
@@ -211,7 +217,6 @@
         eventDisplay: 'block',
         dayMaxEvents: 3,
         moreLinkClick: 'popover',
-        // <<< NEW: single-letter day headers
         dayHeaderContent(arg) {
           const s = arg.date.toLocaleDateString(undefined, { weekday: 'short' });
           return s?.charAt(0) || 'SMTWTFS'.charAt(arg.date.getDay());
@@ -593,8 +598,37 @@
   function minutesOnlyAgo(iso){if(!iso)return'—';const d=new Date(iso);if(isNaN(d))return'—';const sec=Math.max(0,Math.floor((Date.now()-d.getTime())/1000));const m=Math.max(0,Math.floor(sec/60));if(m<=0)return'just now';return `${m}m ago`;}
   function safeParseJSON(s){try{return JSON.parse(s||'{}')}catch{return null}}
 
-  window.addEventListener('resize', applyCalendarLayout);
+  // === resize/orientation/visibility handling ===
 
+  // small debounce
+  let _rzTimer = null;
+  function debouncedApply() {
+    if (_rzTimer) clearTimeout(_rzTimer);
+    _rzTimer = setTimeout(() => {
+      applyCalendarLayout();
+    }, 100);
+  }
+
+  window.addEventListener('resize', debouncedApply);
+
+  // Handle rotate: clear locks, then apply twice to catch iOS toolbar/viewport settling
+  function handleOrientationChange() {
+    clearMinWidthLocks();
+    // immediate pass
+    applyCalendarLayout();
+    // post-settle passes
+    setTimeout(applyCalendarLayout, 120);
+    requestAnimationFrame(() => requestAnimationFrame(applyCalendarLayout));
+  }
+  window.addEventListener('orientationchange', handleOrientationChange);
+
+  // When tab becomes visible again / page is shown from bfcache, re-evaluate
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) handleOrientationChange();
+  });
+  window.addEventListener('pageshow', handleOrientationChange);
+
+  // Keep spacing/layout updated if calendar block changes height
   const ccObsTarget = document.getElementById('calendar-container');
   if (window.ResizeObserver && ccObsTarget) {
     const ro = new ResizeObserver(() => applyCalendarLayout());
