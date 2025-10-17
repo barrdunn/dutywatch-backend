@@ -490,3 +490,17 @@ body.modal-open{overflow:hidden}
   font-weight: 700 !important;
   text-align: center !important;
 }
+
+/* Tighter side padding on each calendar */
+.calendar-widget{
+  padding: 6px; /* was 12px */
+}
+
+/* When calendars are placed below settings */
+.cal-below .calendar-widget .fc tbody tr { height: 20px !important; }      /* was 30px */
+.cal-below .calendar-widget .fc-daygrid-day,
+.cal-below .calendar-widget .fc-daygrid-day-frame,
+.cal-below .calendar-widget .fc-daygrid-day-bg {
+  min-height: 20px !important;
+  max-height: 20px !important;
+}

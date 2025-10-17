@@ -94,7 +94,7 @@
     cc.style.width = '100%';
     cc.style.justifyContent = 'center';
     cc.style.alignItems = 'flex-start';
-    cc.style.marginTop = '16px';
+    cc.style.marginTop = '6px'; // was 16px — reduced by 10px per request
   }
 
   function moveCalendarsTopRight() {
@@ -137,16 +137,19 @@
 
     if (vw > 990) {
       moveCalendarsTopRight();
+      document.documentElement.classList.remove('cal-below');
       if (table) table.style.marginTop = '135px';
       state.layoutMode = 'desktop-responsive';
     } else if (vw > 750) {
       moveCalendarsTopRight();
+      document.documentElement.classList.remove('cal-below');
       if (table) table.style.marginTop = '135px';
       wrap.style.minWidth = '990px';
       document.body.style.minWidth = '990px';
       state.layoutMode = 'desktop-locked-990';
     } else {
       moveCalendarsBelow();
+      document.documentElement.classList.add('cal-below'); // << enables smaller day height via CSS
       if (table) table.style.marginTop = '12px';
 
       if (vw <= 350) {
@@ -599,8 +602,6 @@
   function safeParseJSON(s){try{return JSON.parse(s||'{}')}catch{return null}}
 
   // === resize/orientation/visibility handling ===
-
-  // small debounce
   let _rzTimer = null;
   function debouncedApply() {
     if (_rzTimer) clearTimeout(_rzTimer);
@@ -611,24 +612,18 @@
 
   window.addEventListener('resize', debouncedApply);
 
-  // Handle rotate: clear locks, then apply twice to catch iOS toolbar/viewport settling
   function handleOrientationChange() {
     clearMinWidthLocks();
-    // immediate pass
     applyCalendarLayout();
-    // post-settle passes
     setTimeout(applyCalendarLayout, 120);
     requestAnimationFrame(() => requestAnimationFrame(applyCalendarLayout));
   }
   window.addEventListener('orientationchange', handleOrientationChange);
-
-  // When tab becomes visible again / page is shown from bfcache, re-evaluate
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) handleOrientationChange();
   });
   window.addEventListener('pageshow', handleOrientationChange);
 
-  // Keep spacing/layout updated if calendar block changes height
   const ccObsTarget = document.getElementById('calendar-container');
   if (window.ResizeObserver && ccObsTarget) {
     const ro = new ResizeObserver(() => applyCalendarLayout());
