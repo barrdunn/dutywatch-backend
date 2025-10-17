@@ -474,3 +474,19 @@ body.modal-open{overflow:hidden}
   margin: 1px 3px !important;
 }
 
+/* Tighter padding around each calendar */
+.calendar-widget{
+  padding: 8px 8px; /* was 12px */
+}
+
+/* Smaller day-of-week header cells */
+.fc-col-header-cell {
+  padding: 0 2px !important; /* was 2px all-around; trims left/right */
+}
+
+/* Make the single-letter headers a touch bolder and centered */
+.fc-col-header-cell-cushion {
+  padding: 2px 0 !important;
+  font-weight: 700 !important;
+  text-align: center !important;
+}

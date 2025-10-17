@@ -64,7 +64,6 @@
   // <= 750px: mobile-responsive (calendars *below the title/settings/refresh block*, centered)
   //   - if width <= 350px: mobile-locked-350 (lock min-width: 350px; horizontal scroll)
 
-  // Find the anchor right UNDER the title/settings/refresh to drop calendars beneath.
   function findBelowAnchor() {
     const settingsInline = document.getElementById('settings-inline');
     if (settingsInline) return settingsInline;
@@ -88,7 +87,6 @@
       anchor.insertAdjacentElement('afterend', cc);
     }
 
-    // Normal flow + centered
     cc.style.position = 'static';
     cc.style.top = '';
     cc.style.right = '';
@@ -96,7 +94,7 @@
     cc.style.width = '100%';
     cc.style.justifyContent = 'center';
     cc.style.alignItems = 'flex-start';
-    cc.style.marginTop = '16px'; // tight spacing under settings
+    cc.style.marginTop = '16px';
   }
 
   function moveCalendarsTopRight() {
@@ -124,27 +122,22 @@
     const table = document.getElementById('pairings');
     const calNext = document.getElementById('calendar-next');
 
-    // Always keep BOTH calendars visible (never collapse to one)
     if (calNext) calNext.style.display = 'block';
 
-    // Reset locks; we'll re-apply if needed
     wrap.style.minWidth = '';
     document.body.style.minWidth = '';
 
     if (vw > 990) {
-      // Desktop responsive
       moveCalendarsTopRight();
       if (table) table.style.marginTop = '135px';
       state.layoutMode = 'desktop-responsive';
     } else if (vw > 750) {
-      // Lock at 990 (stop being responsive)
       moveCalendarsTopRight();
       if (table) table.style.marginTop = '135px';
       wrap.style.minWidth = '990px';
       document.body.style.minWidth = '990px';
       state.layoutMode = 'desktop-locked-990';
     } else {
-      // <= 750px: mobile responsive — calendars go *below title/settings/refresh*
       moveCalendarsBelow();
       if (table) table.style.marginTop = '12px';
 
@@ -173,6 +166,12 @@
         eventDisplay: 'block',
         dayMaxEvents: 3,
         moreLinkClick: 'popover',
+        // <<< NEW: single-letter day headers
+        dayHeaderContent(arg) {
+          // Use locale's short name and take first character; fallback to 'SMTWTFS'
+          const s = arg.date.toLocaleDateString(undefined, { weekday: 'short' });
+          return s?.charAt(0) || 'SMTWTFS'.charAt(arg.date.getDay());
+        },
         eventClick(info) {
           const pairingId = info.event.extendedProps.pairingId;
           const row = document.querySelector(`[data-row-id="${pairingId}"]`);
@@ -212,6 +211,11 @@
         eventDisplay: 'block',
         dayMaxEvents: 3,
         moreLinkClick: 'popover',
+        // <<< NEW: single-letter day headers
+        dayHeaderContent(arg) {
+          const s = arg.date.toLocaleDateString(undefined, { weekday: 'short' });
+          return s?.charAt(0) || 'SMTWTFS'.charAt(arg.date.getDay());
+        },
         eventClick(info) {
           const pairingId = info.event.extendedProps.pairingId;
           const row = document.querySelector(`[data-row-id="${pairingId}"]`);
@@ -244,7 +248,6 @@
     const events = buildCalendarEvents(rows);
     if (calendarCurrent) { calendarCurrent.removeAllEvents(); calendarCurrent.addEventSource(events); }
     if (calendarNext)    { calendarNext.removeAllEvents();    calendarNext.addEventSource(events); }
-    // layout can shift after events render
     setTimeout(applyCalendarLayout, 0);
   }
 
@@ -391,14 +394,12 @@
     const hintedHidden=(data&&(data.hidden_count??(data.hidden&&data.hidden.count)));
     applyHiddenCount(typeof hintedHidden==='number'?hintedHidden:state.hiddenCount);
 
-    // Chips beside the Refresh button
     setText('#last-pull', minutesOnlyAgo(state.lastPullIso));
 
-    // Build "Next" text (time with tz label)
     const nextEl = qs('#next-refresh');
     if (nextEl) {
       const base = (data.next_pull_local && data.tz_label) ? `${data.next_pull_local} (${data.tz_label})` : '—';
-      nextEl.innerHTML = base; // ETA text handled by tickStatusLine
+      nextEl.innerHTML = base;
     }
 
     const rows=data.rows||[];
@@ -410,7 +411,6 @@
 
     repaintTimesOnly();
 
-    // ensure layout after table update
     applyCalendarLayout();
   }
 
@@ -593,10 +593,8 @@
   function minutesOnlyAgo(iso){if(!iso)return'—';const d=new Date(iso);if(isNaN(d))return'—';const sec=Math.max(0,Math.floor((Date.now()-d.getTime())/1000));const m=Math.max(0,Math.floor(sec/60));if(m<=0)return'just now';return `${m}m ago`;}
   function safeParseJSON(s){try{return JSON.parse(s||'{}')}catch{return null}}
 
-  // === initial layout wiring + resize handling
   window.addEventListener('resize', applyCalendarLayout);
 
-  // Keep spacing/layout updated if calendar block changes height
   const ccObsTarget = document.getElementById('calendar-container');
   if (window.ResizeObserver && ccObsTarget) {
     const ro = new ResizeObserver(() => applyCalendarLayout());
