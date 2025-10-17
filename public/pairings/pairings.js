@@ -14,7 +14,7 @@
     onlyReports: !!cfg.onlyReports,
     hiddenCount: 0,
     _zeroKick: 0,
-    layoutMode: null, // 'desktop-responsive' | 'desktop-locked-990' | 'mobile-responsive' | 'mobile-locked-480'
+    layoutMode: null, // 'desktop-responsive' | 'desktop-locked-990' | 'mobile-responsive' | 'mobile-locked-350'
   };
 
   // =========================
@@ -62,23 +62,19 @@
   // > 990px: desktop-responsive (calendars top-right; table margin-top 135; no min-width lock)
   // 990px >= width > 750px: desktop-locked-990 (calendars top-right; lock min-width: 990px; horizontal scroll)
   // <= 750px: mobile-responsive (calendars *below the title/settings/refresh block*, centered)
-  //   - if width <= 480px: mobile-locked-480 (lock min-width: 480px; horizontal scroll)
+  //   - if width <= 350px: mobile-locked-350 (lock min-width: 350px; horizontal scroll)
 
   // Find the anchor right UNDER the title/settings/refresh to drop calendars beneath.
   function findBelowAnchor() {
-    // Prefer a specific anchor if present
     const settingsInline = document.getElementById('settings-inline');
     if (settingsInline) return settingsInline;
 
-    // Otherwise, the whole controls row (contains Refresh, Last/Next, selects)
     const controls = document.querySelector('.controls');
     if (controls) return controls;
 
-    // As a last resort, place them before the table so they are still "above" it
     const pairings = document.getElementById('pairings');
     if (pairings && pairings.previousElementSibling) return pairings.previousElementSibling;
 
-    // Fallback to the card
     const card = document.querySelector('.card');
     return card || document.body;
   }
@@ -89,7 +85,6 @@
 
     const anchor = findBelowAnchor();
     if (anchor && anchor.parentNode) {
-      // Insert calendars *after* the anchor block so they appear under title/settings/refresh
       anchor.insertAdjacentElement('afterend', cc);
     }
 
@@ -153,10 +148,10 @@
       moveCalendarsBelow();
       if (table) table.style.marginTop = '12px';
 
-      if (vw <= 480) {
-        wrap.style.minWidth = '480px';
-        document.body.style.minWidth = '480px';
-        state.layoutMode = 'mobile-locked-480';
+      if (vw <= 350) {
+        wrap.style.minWidth = '350px';
+        document.body.style.minWidth = '350px';
+        state.layoutMode = 'mobile-locked-350';
       } else {
         state.layoutMode = 'mobile-responsive';
       }
