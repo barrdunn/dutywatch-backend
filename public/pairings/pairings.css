@@ -493,7 +493,7 @@ body.modal-open{overflow:hidden}
 
 /* Tighter side padding on each calendar */
 .calendar-widget{
-  padding: 6px; /* was 12px */
+  padding: 0px; /* was 12px */
 }
 
 /* When calendars are placed below settings */
@@ -501,6 +501,6 @@ body.modal-open{overflow:hidden}
 .cal-below .calendar-widget .fc-daygrid-day,
 .cal-below .calendar-widget .fc-daygrid-day-frame,
 .cal-below .calendar-widget .fc-daygrid-day-bg {
-  min-height: 20px !important;
-  max-height: 20px !important;
+  min-height: 25px !important;
+  max-height: 25px !important;
 }
