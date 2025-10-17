@@ -4,26 +4,25 @@
   <meta charset="utf-8" />
   <title>Pairings for Barry Dunn</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer">
-  <link rel="stylesheet" href="/pairings/pairings.css?v=36">
-  <style>
-    .hidden{display:none!important}
-    body{min-width:340px}
-  </style>
+
+  <link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.css" rel="stylesheet" />
+  <link rel="stylesheet" href="/pairings/pairings.css?v=41">
 </head>
 <body>
   <div class="wrap">
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:0px;gap:12px">
-        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;flex:1">
-          <h1 style="margin:0">Pairings for Barry Dunn</h1>
-          <span class="chip" id="looking-chip">From <strong id="looking-through">—</strong></span>
-        </div>
-        <button id="settings-btn" class="icon-btn" title="Settings" style="flex-shrink:0">
-          <i class="fa-solid fa-gear"></i>
-        </button>
+    <div class="card" style="position:relative">
+      <!-- Calendars -->
+      <div id="calendar-container">
+        <div class="calendar-widget"><div id="calendar-current"></div></div>
+        <div class="calendar-widget"><div id="calendar-next"></div></div>
       </div>
 
+      <!-- Page title -->
+      <div style="display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;flex:1;margin-bottom:6px">
+        <h1 style="margin:0">Pairings for Barry Dunn</h1>
+      </div>
+
+      <!-- Status -->
       <div class="sub" id="status-line" style="margin:2px 0 8px">
         <span class="chip" id="hidden-chip">
           <span id="hidden-count">Hidden: 0</span>
@@ -31,13 +30,38 @@
         </span>
       </div>
 
-      <div class="controls" style="margin-top:8px">
-        <form onsubmit="window.dwManualRefresh(); return false;" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <!-- Controls -->
+      <div class="controls" style="margin-top:8px;align-items:flex-start;gap:12px;flex-wrap:wrap">
+        <form onsubmit="window.dwManualRefresh(); return false;"
+              style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
           <button class="btn" type="submit">Refresh</button>
-          <span class="chip">Last: <strong id="last-pull">—</strong></span>
+          <span class="chip" id="last-chip">Last: <strong id="last-pull">—</strong></span>
+          <span class="chip" id="next-chip">Next: <strong id="next-refresh">—</strong> <span id="next-refresh-eta"></span></span>
         </form>
       </div>
 
+      <!-- Settings block at the very bottom -->
+      <div id="settings-inline" style="display:flex;gap:16px;flex-wrap:wrap;margin-top:16px;flex-direction:row;justify-content:flex-start">
+        <label class="setting-row" style="gap:8px">
+          <span>Auto-refresh:</span>
+          <select id="refresh-mins" class="toggle">
+            <option value="1">1 min</option>
+            <option value="5">5 mins</option>
+            <option value="10">10 mins</option>
+            <option value="15">15 mins</option>
+            <option value="30" selected>30 mins</option>
+          </select>
+        </label>
+        <label class="setting-row" style="gap:8px">
+          <span>Clock:</span>
+          <select id="clock-mode" class="toggle">
+            <option value="12" selected>12h</option>
+            <option value="24">24h</option>
+          </select>
+        </label>
+      </div>
+
+      <!-- Pairings table -->
       <table id="pairings">
         <thead>
           <tr>
@@ -47,67 +71,8 @@
             <th>Release</th>
           </tr>
         </thead>
-        <tbody id="pairings-body"><!-- filled by JS --></tbody>
+        <tbody id="pairings-body"></tbody>
       </table>
-    </div>
-  </div>
-
-  <!-- Settings Modal -->
-  <div id="settings-modal" class="modal hidden">
-    <div class="modal-card" style="max-width:480px">
-      <div class="modal-header">
-        <h2>Settings</h2>
-        <button class="modal-close" id="settings-close">×</button>
-      </div>
-      <div class="modal-content">
-        <div style="display:flex;flex-direction:column;gap:16px">
-          <label class="setting-row">
-            <span>Auto-refresh:</span>
-            <select id="refresh-mins" class="toggle">
-              <option value="1">1 min</option>
-              <option value="5">5 mins</option>
-              <option value="10">10 mins</option>
-              <option value="15">15 mins</option>
-              <option value="30" selected>30 mins</option>
-            </select>
-          </label>
-          <label class="setting-row">
-            <span>Clock:</span>
-            <select id="clock-mode" class="toggle">
-              <option value="12" selected>12h</option>
-              <option value="24">24h</option>
-            </select>
-          </label>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Plan Modal (Notification Attempts) -->
-  <div id="plan-modal" class="modal hidden">
-    <div class="modal-card">
-      <div class="modal-header">
-        <h2>Notification Plan</h2>
-        <button class="modal-close" id="plan-close-1">×</button>
-      </div>
-      <div class="modal-content">
-        <p class="plan-meta" id="plan-meta">Loading...</p>
-        <table class="plan-table">
-          <thead>
-            <tr>
-              <th>When</th>
-              <th>Type</th>
-              <th>Details</th>
-            </tr>
-          </thead>
-          <tbody id="plan-rows">
-            <!-- filled by JS -->
-          </tbody>
-        </table>
-      </div>
-      <div class="modal-footer">
-        <button class="btn" id="plan-close-2">Close</button>
-      </div>
     </div>
   </div>
 
@@ -120,20 +85,7 @@
     "baseAirport": "DFW"
   }</script>
 
-  <script src="/pairings/pairings.js?v=36" defer></script>
-  <script>
-    // Add click-outside-to-close for plan modal
-    document.addEventListener('DOMContentLoaded', function() {
-      const planModal = document.getElementById('plan-modal');
-      if (planModal) {
-        planModal.addEventListener('click', function(e) {
-          if (e.target === planModal) {
-            planModal.classList.add('hidden');
-            document.body.classList.remove('modal-open');
-          }
-        });
-      }
-    });
-  </script>
+  <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js"></script>
+  <script src="/pairings/pairings.js?v=41"></script>
 </body>
 </html>

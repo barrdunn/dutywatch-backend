@@ -8,7 +8,6 @@
 
   --ck-off:#62717f; --ck-pending:#ffd166; --ck-ok:#57e389;
 
-  /* Original check-in column width */
   --ckcol-desktop: 46px;
   --ckcol-mobile: 56px;
   --ckcol: var(--ckcol-desktop);
@@ -39,9 +38,290 @@ h1{margin:0 0 8px;font-size:22px}
 .setting-row span{font-weight:600}
 
 /* =========================
+   Calendar Widget Styles
+   ========================= */
+#calendar-container{
+  position:absolute;
+  top:16px;
+  right:16px;
+  display:flex;
+  gap:12px;
+  z-index:10;
+}
+
+.calendar-widget{
+  width:240px;
+  background: var(--card);
+  border: none;
+  border-radius: 5px; /* Rounded corners on all sides */
+  padding: 12px;
+  overflow: hidden; /* Ensure content respects rounded corners */
+}
+
+/* Ensure the calendar content respects the rounded corners */
+.calendar-widget .fc {
+  overflow: hidden;
+}
+
+/* Force the first row to have rounded top corners */
+.fc-scrollgrid {
+  border: none !important;
+  overflow: hidden;
+}
+
+/* FullCalendar Compact Styling */
+.fc {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.fc-toolbar {
+  display: flex !important;
+  justify-content: center !important; /* Center the title */
+  align-items: center !important;
+  margin-bottom: 8px !important; /* Increased from 6px - more spacing between title and calendar */
+  padding-bottom: 0 !important;
+}
+
+.fc-toolbar-chunk {
+  display: flex !important;
+  justify-content: center !important;
+}
+
+.fc-toolbar-title {
+  font-size: 18px !important; /* Increased for better visibility */
+  font-weight: 600 !important;
+  color: var(--text) !important;
+  line-height: 1.2 !important;
+  text-align: center !important;
+  margin: 0 !important;
+}
+
+/* Force all text in the toolbar to be smaller */
+.fc-toolbar * {
+  font-size: 18px !important; /* Match title size */
+}
+
+/* Hide navigation buttons */
+.fc-button {
+  display: none;
+}
+
+/* Day cells compact - current month gets grey background */
+.fc-daygrid-day {
+  background: rgba(159, 176, 192, 0.03) !important; /* More transparent for better visibility */
+  border: none !important;
+  min-height: 30px !important;
+  max-height: 30px !important;
+}
+
+/* Days from other months - dark background */
+.fc-day-other .fc-daygrid-day-number {
+  opacity: 0.5;
+  color: var(--muted);
+}
+
+.fc-day-other.fc-daygrid-day,
+.fc-daygrid-day.fc-day-other {
+  background: var(--row) !important; /* Dark for other month days */
+}
+
+/* Keep events hidden on other month days */
+.fc-day-other .fc-daygrid-event-harness,
+.fc-day-other .fc-daygrid-more-link {
+  display: none !important;
+}
+
+.fc-daygrid-day-frame {
+  min-height: 30px !important;
+  max-height: 30px !important;
+}
+
+.fc-daygrid-day-events {
+  margin: 0 !important;
+  min-height: 0 !important;
+  max-height: 16px !important;
+  overflow: hidden !important;
+}
+
+.fc-daygrid-body-unbalanced .fc-daygrid-day-events {
+  min-height: 0 !important;
+  position: relative !important;
+}
+
+.fc-daygrid-day-top {
+  padding: 1px !important;
+  line-height: 1 !important;
+  flex: none !important;
+}
+
+.fc-daygrid-day-number {
+  color: var(--text);
+  padding: 0px 2px !important;
+  font-size: 9px !important;
+  line-height: 1 !important;
+}
+
+/* Force row heights */
+.fc tbody tr {
+  height: 30px !important;
+}
+
+.fc-daygrid-day-bg {
+  height: 30px !important;
+}
+
+/* Today highlight */
+.fc-day-today {
+  background: rgba(111,177,255,0.25) !important; /* More opaque blue for better visibility */
+}
+
+.fc-day-today .fc-daygrid-day-number {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* Event bars - pill-shaped for single day, bars for multi-day */
+.fc-event,
+.fc-daygrid-event {
+  background: #49b37c;
+  border: 0;
+  padding: 0 2px;
+  margin: 1px 3px;
+  border-radius: 10px; /* Pill shape */
+  font-size: 0;
+  cursor: pointer;
+  min-height: 5px; /* Thicker for better visibility */
+}
+
+.fc-event-main {
+  padding: 0;
+  height: 5px; /* Thicker for better visibility */
+  border-radius: 10px; /* Maintain pill shape */
+}
+
+.fc-daygrid-event-harness {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+/* Header cells - force completely transparent */
+.fc-col-header,
+.fc-col-header-cell,
+.fc-col-header-cell-cushion,
+.fc-scrollgrid-section-header,
+.fc-scrollgrid-section-header > *,
+.fc-scrollgrid-section-header td,
+.fc-scrollgrid-section-header th {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+.fc-col-header {
+  margin-bottom: 4px !important; /* Reduced from 8px - less space between headers and calendar */
+}
+
+.fc-col-header-cell {
+  color: var(--muted);
+  padding: 2px;
+  font-weight: 600;
+  font-size: 10px;
+  border: none !important;
+}
+
+/* Add corner radius to calendar grid */
+.fc-daygrid-body {
+  border-radius: 5px !important;
+  overflow: hidden !important;
+}
+
+/* Add corner radius to individual corner cells */
+.fc-daygrid-body tr:first-child .fc-daygrid-day:first-child {
+  border-top-left-radius: 5px !important;
+}
+.fc-daygrid-body tr:first-child .fc-daygrid-day:last-child {
+  border-top-right-radius: 5px !important;
+}
+.fc-daygrid-body tr:last-child .fc-daygrid-day:first-child {
+  border-bottom-left-radius: 5px !important;
+}
+.fc-daygrid-body tr:last-child .fc-daygrid-day:last-child {
+  border-bottom-right-radius: 5px !important;
+}
+
+/* Calendar border */
+.fc-scrollgrid {
+  border: none !important;
+  overflow: visible; /* Allow rounded corners on inner elements */
+}
+
+/* Remove all FullCalendar borders */
+.fc th, .fc td {
+  border: none !important;
+}
+
+.fc-scrollgrid-section > * {
+  border: none !important;
+}
+
+.fc-daygrid-body {
+  border: none !important;
+}
+
+.fc-scrollgrid-section-header > * {
+  border: none !important;
+}
+
+.fc-scrollgrid-sync-table {
+  border: none !important;
+}
+
+.fc tbody, .fc thead {
+  border: none !important;
+}
+
+.fc-theme-standard td, .fc-theme-standard th {
+  border: none !important;
+}
+
+/* More events link */
+.fc-daygrid-more-link {
+  font-size: 10px;
+  margin-top: 0;
+}
+
+/* Animation for highlighting */
+@keyframes highlight-flash {
+  0% { background-color: rgba(111, 177, 255, 0.4) !important; }
+  100% { background-color: inherit; }
+}
+
+tr.highlight td {
+  animation: highlight-flash 2s ease-out;
+}
+
+/* Mobile adjustments for calendar */
+@media (max-width:640px){
+  #calendar-container{
+    position:static;
+    justify-content:center;
+    margin-bottom:12px;
+  }
+  #calendar-next{
+    display:none;
+  }
+  .calendar-widget{
+    width:220px;
+  }
+  #pairings{
+    margin-top:10px;
+  }
+}
+
+/* =========================
    Main table
    ========================= */
-#pairings{width:100%;border-collapse:separate;border-spacing:0 10px;table-layout:fixed}
+#pairings{width:100%;border-collapse:separate;border-spacing:0 10px;table-layout:fixed;margin-top:135px}
 #pairings th,#pairings td{padding:10px 10px;vertical-align:middle;text-align:left}
 #pairings th{color:var(--muted);font-weight:600;border-bottom:1px solid var(--border);white-space:nowrap}
 
@@ -158,3 +438,39 @@ body.modal-open{overflow:hidden}
 
 .ios table{table-layout:fixed}
 .ios th,.ios td{word-break:break-word;overflow-wrap:anywhere}
+
+/* === FullCalendar multi-day span fix === */
+
+/* Let event rows breathe across cell boundaries */
+.fc-scrollgrid { overflow: visible !important; }
+.fc-daygrid-day-events { overflow: visible !important; }
+
+/* The harness should not clip the event */
+.fc-daygrid-event-harness { overflow: visible !important; }
+
+/* Base: make multi-day segments join seamlessly */
+.fc-h-event {
+  border-radius: 0 !important;      /* no rounding on middle segments */
+  margin: 1px 0 !important;          /* no side margins on middle segments */
+}
+
+/* First day of span: round left only + keep your left margin */
+.fc-h-event.fc-event-start {
+  border-top-left-radius: 10px !important;
+  border-bottom-left-radius: 10px !important;
+  margin-left: 3px !important;
+}
+
+/* Last day of span: round right only + keep your right margin */
+.fc-h-event.fc-event-end {
+  border-top-right-radius: 10px !important;
+  border-bottom-right-radius: 10px !important;
+  margin-right: 3px !important;
+}
+
+/* Single-day events (start & end on same day) still look like pills */
+.fc-h-event.fc-event-start.fc-event-end {
+  border-radius: 10px !important;
+  margin: 1px 3px !important;
+}
+
