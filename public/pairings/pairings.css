@@ -306,6 +306,7 @@ tr.highlight td {
     position:static;
     justify-content:center;
     margin-bottom:12px;
+    margin-top: 24px; /* INCREASED from 0 to 24px for more spacing */
   }
   #calendar-next{
     display:none;

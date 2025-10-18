@@ -94,7 +94,7 @@
     cc.style.width = '100%';
     cc.style.justifyContent = 'center';
     cc.style.alignItems = 'flex-start';
-    cc.style.marginTop = '6px'; // was 16px — reduced by 10px per request
+    cc.style.marginTop = '24px'; // CHANGED from '6px' to '24px' for more spacing
   }
 
   function moveCalendarsTopRight() {
