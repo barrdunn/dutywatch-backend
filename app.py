@@ -431,7 +431,7 @@ async def api_pairings(
       - Keeps in-progress pairings sticky unless the release time has passed.
       - Recomputes OFF rows after hide/unhide and on every paint.
       - TOP OFF row when 'now' < first report shows: 'OFF (Now)' and remaining.
-      - OFF rows show the previous pairing’s release time under the "Report" column.
+      - OFF rows show the previous pairing's release time under the "Report" column.
     """
     try:
         meta = await run_in_threadpool(read_cache_meta)
@@ -499,7 +499,10 @@ async def api_pairings(
             if (pid_hidden or all_hidden) and (r["can_hide"] or not r.get("in_progress")):
                 continue
 
-            visible.append(r)
+            # IMPORTANT: Only add real pairings (with legs) to visible array
+            # Non-pairing events are already properly positioned in rows from rows.py
+            if total_legs > 0:
+                visible.append(r)
 
         # Sticky in-progress pairings: keep them even if missing from feed,
         # unless the release time has already passed (covers fetch gaps around UTC midnight).
@@ -562,36 +565,29 @@ async def api_pairings(
                     "display": {"off_dur": off_str, "off_label": "OFF (Now)"}
                 })
 
-        # (B) Pairings + OFF between pairings
-        def _hhmm_from_iso_local(iso: Optional[str]) -> str:
-            if not iso:
-                return ""
-            d = to_local(iso_to_dt(iso))
-            if not d:
-                return ""
-            return d.strftime("%H%M")
-
-        for i, p in enumerate(visible):
-            final_rows.append(p)
-            if i + 1 < len(visible):
-                release = _dt(p.get("release_local_iso"))
-                nxt_rep = _dt(visible[i + 1].get("report_local_iso"))
-                gap = dt.timedelta(0)
-                if release and nxt_rep:
-                    gap = max(dt.timedelta(0), nxt_rep - release)
-                total_h = int(gap.total_seconds() // 3600)
-                if total_h >= 24:
-                    d = total_h // 24
-                    h = total_h % 24
-                    off_str = f"{d}d {h}h"
-                else:
-                    off_str = f"{total_h}h"
-
-                rel_hhmm = _hhmm_from_iso_local(p.get("release_local_iso"))
-                off_display = {"off_dur": off_str}
-                if rel_hhmm:
-                    off_display["report_str"] = _fmt_time(rel_hhmm, use_24h)
-                final_rows.append({"kind": "off", "display": off_display})
+        # (B) Add visible pairings and OFF rows as already built by rows.py
+        # rows.py has already calculated OFF times and inserted non-pairing events correctly
+        # We just need to pass through what's not hidden
+        
+        # The original 'rows' from rows.py has everything correctly positioned
+        # We just filtered some out for hiding. Now reconstruct the final output.
+        
+        # Since we need to maintain the order and OFF rows from rows.py, let's rebuild differently
+        # Get all the pairing IDs that are visible
+        visible_pids = set(str(v.get("pairing_id") or "") for v in visible)
+        
+        # Go through the original rows and include items that should be shown
+        for r in rows:
+            if r.get("kind") == "off":
+                # Always include OFF rows
+                final_rows.append(r)
+            elif r.get("kind") == "pairing":
+                pid = str(r.get("pairing_id") or "")
+                total_legs = sum(len((d.get("legs") or [])) for d in (r.get("days") or []))
+                
+                # Include if it's a visible pairing OR a non-pairing event (which rows.py positioned correctly)
+                if pid in visible_pids or total_legs == 0:
+                    final_rows.append(r)
 
         # ---- Header meta
         lp_iso = meta.get("last_pull_utc")

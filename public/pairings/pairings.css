@@ -1,85 +1,252 @@
-:root{
-  color-scheme:dark;
+/* ================================================
+   PAIRINGS DASHBOARD - COMPLETE STYLESHEET
+   Dark theme optimized for pilot scheduling
+   ================================================ */
 
-  --bg:#0b0f14; --card:#121821; --row:#0f141b; --row-alt:#0d1219; --border:#1e2a38;
-  --text:#e8edf2; --muted:#9fb0c0; --accent:#6fb1ff; --strike:#84a1b7;
-  --pairing-bg:rgba(51,127,86,.16); --pairing-bg-hover:rgba(61,153,106,.26); --pairing-border:rgba(73,179,124,.35);
-  --green:#98f5a7; --off:#ffae60; --chip:#182231; --red:#ff6b6b;
+/* ========================
+   CSS CUSTOM PROPERTIES
+   ======================== */
+:root {
+  color-scheme: dark;
 
-  --ck-off:#62717f; --ck-pending:#ffd166; --ck-ok:#57e389;
+  /* Color Palette */
+  --bg: #0b0f14;
+  --card: #121821;
+  --row: #0f141b;
+  --row-alt: #0d1219;
+  --border: #1e2a38;
+  
+  /* Text Colors */
+  --text: #e8edf2;
+  --muted: #9fb0c0;
+  --accent: #6fb1ff;
+  --strike: #84a1b7;
+  
+  /* Pairing Row Colors */
+  --pairing-bg: rgba(51, 127, 86, .16);
+  --pairing-bg-hover: rgba(61, 153, 106, .26);
+  --pairing-border: rgba(73, 179, 124, .35);
+  
+  /* Non-Pairing Event Colors (CBT, Training, etc.) */
+  --event-bg: rgba(66, 135, 245, .12);
+  --event-bg-hover: rgba(66, 135, 245, .20);
+  --event-border: rgba(66, 135, 245, .35);
+  
+  /* Status Colors */
+  --green: #98f5a7;
+  --off: #ffae60;
+  --chip: #182231;
+  --red: #ff6b6b;
 
+  /* Check States */
+  --ck-off: #62717f;
+  --ck-pending: #ffd166;
+  --ck-ok: #57e389;
+
+  /* Layout Variables */
   --ckcol-desktop: 46px;
   --ckcol-mobile: 56px;
   --ckcol: var(--ckcol-desktop);
 }
 
-*{box-sizing:border-box}
-html,body{overflow-x:hidden}
-body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,"Helvetica Neue",Arial,"Noto Sans",sans-serif}
-
-.wrap{max-width:1100px;margin:28px auto;padding:0 16px}
-.card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px;box-shadow:0 6px 18px rgba(0,0,0,.25)}
-h1{margin:0 0 8px;font-size:22px}
-
-/* chips/controls */
-.sub{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0 16px}
-.chip{background:var(--chip);border:1px solid var(--border);border-radius:999px;padding:4px 10px;color:var(--muted);font-weight:600;font-size:13px}
-.controls{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
-.controls form{display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap}
-.btn{background:var(--accent);color:#031323;border:0;border-radius:10px;padding:8px 12px;font-weight:600;cursor:pointer}
-.toggle,select.toggle{background:transparent;color:var(--text);border:1px solid var(--border);border-radius:10px;padding:6px 10px;cursor:pointer}
-
-/* Settings button */
-.icon-btn{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:10px;cursor:pointer;color:var(--muted);display:inline-flex;align-items:center;justify-content:center;transition:all .2s;font-size:18px;box-shadow:0 2px 8px rgba(0,0,0,.15)}
-.icon-btn:hover{background:var(--chip);border-color:var(--accent);color:var(--accent);transform:scale(1.05)}
-
-/* Setting rows in modal */
-.setting-row{display:flex;justify-content:space-between;align-items:center;gap:16px}
-.setting-row span{font-weight:600}
-
-/* =========================
-   Calendar Widget Styles
-   ========================= */
-#calendar-container{
-  position:absolute;
-  top:16px;
-  right:16px;
-  display:flex;
-  gap:12px;
-  z-index:10;
+/* ========================
+   BASE STYLES
+   ======================== */
+* {
+  box-sizing: border-box;
 }
 
-.calendar-widget{
-  width:240px;
+html, 
+body {
+  overflow-x: hidden;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, 
+       Cantarell, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+}
+
+/* ========================
+   LAYOUT CONTAINERS
+   ======================== */
+.wrap {
+  max-width: 1100px;
+  margin: 28px auto;
+  padding: 0 16px;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .25);
+}
+
+h1 {
+  margin: 0 0 8px;
+  font-size: 22px;
+}
+
+/* ========================
+   CHIPS & CONTROLS
+   ======================== */
+.sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 8px 0 16px;
+}
+
+.chip {
+  background: var(--chip);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 10px;
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.controls {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.controls form {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* ========================
+   BUTTONS & FORM ELEMENTS
+   ======================== */
+.btn {
+  background: var(--accent);
+  color: #031323;
+  border: 0;
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.toggle,
+select.toggle {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.icon-btn {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px;
+  cursor: pointer;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all .2s;
+  font-size: 18px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .15);
+}
+
+.icon-btn:hover {
+  background: var(--chip);
+  border-color: var(--accent);
+  color: var(--accent);
+  transform: scale(1.05);
+}
+
+/* Settings Row in Modal */
+.setting-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+
+.setting-row span {
+  font-weight: 600;
+}
+
+/* ================================================
+   CALENDAR WIDGET STYLES
+   ================================================ */
+#calendar-container {
+  position: absolute;
+  top: 16px;
+  right: 30px;
+  display: flex;
+  gap: 20px;
+  z-index: 10;
+}
+
+.calendar-widget {
+  width: 240px;
   background: var(--card);
   border: none;
-  border-radius: 5px; /* Rounded corners on all sides */
-  padding: 12px;
-  overflow: hidden; /* Ensure content respects rounded corners */
+  border-radius: 5px;
+  padding: 0px;
+  overflow: hidden;
 }
 
-/* Ensure the calendar content respects the rounded corners */
+/* Calendar container positioning classes */
+.calendar-desktop {
+  position: absolute !important;
+  top: 16px !important;
+  right: 16px !important;
+  display: flex !important;
+  width: auto !important;
+  margin-top: 0 !important;
+}
+
+.calendar-mobile {
+  position: static !important;
+  display: flex !important;
+  width: 100% !important;
+  justify-content: center !important;
+  align-items: flex-start !important;
+  margin-top: 24px !important;
+}
+
+/* ========================
+   FULLCALENDAR OVERRIDES
+   ======================== */
 .calendar-widget .fc {
   overflow: hidden;
 }
 
-/* Force the first row to have rounded top corners */
 .fc-scrollgrid {
   border: none !important;
-  overflow: hidden;
+  overflow: visible !important;
 }
 
-/* FullCalendar Compact Styling */
 .fc {
   color: var(--text);
   font-size: 14px;
 }
 
+/* Calendar Header/Toolbar */
 .fc-toolbar {
   display: flex !important;
-  justify-content: center !important; /* Center the title */
+  justify-content: center !important;
   align-items: center !important;
-  margin-bottom: 8px !important; /* Increased from 6px - more spacing between title and calendar */
+  margin-bottom: 8px !important;
   padding-bottom: 0 !important;
 }
 
@@ -89,7 +256,7 @@ h1{margin:0 0 8px;font-size:22px}
 }
 
 .fc-toolbar-title {
-  font-size: 18px !important; /* Increased for better visibility */
+  font-size: 18px !important;
   font-weight: 600 !important;
   color: var(--text) !important;
   line-height: 1.2 !important;
@@ -97,9 +264,8 @@ h1{margin:0 0 8px;font-size:22px}
   margin: 0 !important;
 }
 
-/* Force all text in the toolbar to be smaller */
 .fc-toolbar * {
-  font-size: 18px !important; /* Match title size */
+  font-size: 18px !important;
 }
 
 /* Hide navigation buttons */
@@ -107,15 +273,17 @@ h1{margin:0 0 8px;font-size:22px}
   display: none;
 }
 
-/* Day cells compact - current month gets grey background */
+/* ========================
+   CALENDAR DAY CELLS
+   ======================== */
 .fc-daygrid-day {
-  background: rgba(159, 176, 192, 0.03) !important; /* More transparent for better visibility */
+  background: rgba(159, 176, 192, 0.03) !important;
   border: none !important;
   min-height: 30px !important;
   max-height: 30px !important;
 }
 
-/* Days from other months - dark background */
+/* Days from other months */
 .fc-day-other .fc-daygrid-day-number {
   opacity: 0.5;
   color: var(--muted);
@@ -123,15 +291,16 @@ h1{margin:0 0 8px;font-size:22px}
 
 .fc-day-other.fc-daygrid-day,
 .fc-daygrid-day.fc-day-other {
-  background: var(--row) !important; /* Dark for other month days */
+  background: var(--row) !important;
 }
 
-/* Keep events hidden on other month days */
+/* Hide events on other month days */
 .fc-day-other .fc-daygrid-event-harness,
 .fc-day-other .fc-daygrid-more-link {
   display: none !important;
 }
 
+/* Day frame and events container */
 .fc-daygrid-day-frame {
   min-height: 30px !important;
   max-height: 30px !important;
@@ -141,7 +310,7 @@ h1{margin:0 0 8px;font-size:22px}
   margin: 0 !important;
   min-height: 0 !important;
   max-height: 16px !important;
-  overflow: hidden !important;
+  overflow: visible !important;
 }
 
 .fc-daygrid-body-unbalanced .fc-daygrid-day-events {
@@ -162,7 +331,7 @@ h1{margin:0 0 8px;font-size:22px}
   line-height: 1 !important;
 }
 
-/* Force row heights */
+/* Row heights */
 .fc tbody tr {
   height: 30px !important;
 }
@@ -173,7 +342,7 @@ h1{margin:0 0 8px;font-size:22px}
 
 /* Today highlight */
 .fc-day-today {
-  background: rgba(111,177,255,0.25) !important; /* More opaque blue for better visibility */
+  background: rgba(111, 177, 255, 0.25) !important;
 }
 
 .fc-day-today .fc-daygrid-day-number {
@@ -181,31 +350,59 @@ h1{margin:0 0 8px;font-size:22px}
   font-weight: 700;
 }
 
-/* Event bars - pill-shaped for single day, bars for multi-day */
+/* ========================
+   CALENDAR EVENTS
+   ======================== */
 .fc-event,
 .fc-daygrid-event {
   background: #49b37c;
   border: 0;
   padding: 0 2px;
   margin: 1px 3px;
-  border-radius: 10px; /* Pill shape */
+  border-radius: 10px;
   font-size: 0;
   cursor: pointer;
-  min-height: 5px; /* Thicker for better visibility */
+  min-height: 5px;
 }
 
 .fc-event-main {
   padding: 0;
-  height: 5px; /* Thicker for better visibility */
-  border-radius: 10px; /* Maintain pill shape */
+  height: 5px;
+  border-radius: 10px;
 }
 
 .fc-daygrid-event-harness {
   margin-top: 0;
   margin-bottom: 0;
+  overflow: visible !important;
 }
 
-/* Header cells - force completely transparent */
+/* Multi-day event styling */
+.fc-h-event {
+  border-radius: 0 !important;
+  margin: 1px 0 !important;
+}
+
+.fc-h-event.fc-event-start {
+  border-top-left-radius: 10px !important;
+  border-bottom-left-radius: 10px !important;
+  margin-left: 3px !important;
+}
+
+.fc-h-event.fc-event-end {
+  border-top-right-radius: 10px !important;
+  border-bottom-right-radius: 10px !important;
+  margin-right: 3px !important;
+}
+
+.fc-h-event.fc-event-start.fc-event-end {
+  border-radius: 10px !important;
+  margin: 1px 3px !important;
+}
+
+/* ========================
+   CALENDAR HEADERS
+   ======================== */
 .fc-col-header,
 .fc-col-header-cell,
 .fc-col-header-cell-cushion,
@@ -218,69 +415,59 @@ h1{margin:0 0 8px;font-size:22px}
 }
 
 .fc-col-header {
-  margin-bottom: 4px !important; /* Reduced from 8px - less space between headers and calendar */
+  margin-bottom: 4px !important;
 }
 
 .fc-col-header-cell {
   color: var(--muted);
-  padding: 2px;
-  font-weight: 600;
+  padding: 0 2px !important;
+  font-weight: 700 !important;
   font-size: 10px;
   border: none !important;
 }
 
-/* Add corner radius to calendar grid */
+.fc-col-header-cell-cushion {
+  padding: 2px 0 !important;
+  font-weight: 700 !important;
+  text-align: center !important;
+}
+
+/* ========================
+   CALENDAR BORDERS & CORNERS
+   ======================== */
 .fc-daygrid-body {
   border-radius: 5px !important;
   overflow: hidden !important;
+  border: none !important;
 }
 
-/* Add corner radius to individual corner cells */
+/* Rounded corners for calendar grid */
 .fc-daygrid-body tr:first-child .fc-daygrid-day:first-child {
   border-top-left-radius: 5px !important;
 }
+
 .fc-daygrid-body tr:first-child .fc-daygrid-day:last-child {
   border-top-right-radius: 5px !important;
 }
+
 .fc-daygrid-body tr:last-child .fc-daygrid-day:first-child {
   border-bottom-left-radius: 5px !important;
 }
+
 .fc-daygrid-body tr:last-child .fc-daygrid-day:last-child {
   border-bottom-right-radius: 5px !important;
 }
 
-/* Calendar border */
-.fc-scrollgrid {
-  border: none !important;
-  overflow: visible; /* Allow rounded corners on inner elements */
-}
-
 /* Remove all FullCalendar borders */
-.fc th, .fc td {
-  border: none !important;
-}
-
-.fc-scrollgrid-section > * {
-  border: none !important;
-}
-
-.fc-daygrid-body {
-  border: none !important;
-}
-
-.fc-scrollgrid-section-header > * {
-  border: none !important;
-}
-
-.fc-scrollgrid-sync-table {
-  border: none !important;
-}
-
-.fc tbody, .fc thead {
-  border: none !important;
-}
-
-.fc-theme-standard td, .fc-theme-standard th {
+.fc th,
+.fc td,
+.fc-scrollgrid-section > *,
+.fc-scrollgrid-section-header > *,
+.fc-scrollgrid-sync-table,
+.fc tbody,
+.fc thead,
+.fc-theme-standard td,
+.fc-theme-standard th {
   border: none !important;
 }
 
@@ -290,215 +477,641 @@ h1{margin:0 0 8px;font-size:22px}
   margin-top: 0;
 }
 
-/* Animation for highlighting */
+/* Hidden calendar week */
+.week-hidden {
+  display: none !important;
+}
+
+/* ================================================
+   MAIN PAIRINGS TABLE
+   ================================================ */
+#pairings {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0 10px;
+  table-layout: fixed;
+  margin-top: 120px;
+}
+
+#pairings th,
+#pairings td {
+  padding: 10px 10px;
+  vertical-align: middle;
+  text-align: left;
+}
+
+#pairings th {
+  color: var(--muted);
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+/* Column widths */
+#pairings th:nth-child(1),
+#pairings td:nth-child(1) {
+  width: var(--ckcol);
+  min-width: var(--ckcol);
+  padding-left: 0;
+  padding-right: 0;
+}
+
+#pairings th:nth-child(2),
+#pairings td:nth-child(2) {
+  width: 48%;
+}
+
+#pairings th:nth-child(3),
+#pairings td:nth-child(3) {
+  width: 26%;
+}
+
+#pairings th:nth-child(4),
+#pairings td:nth-child(4) {
+  width: 26%;
+}
+
+/* ========================
+   CHECKBOX COLUMN
+   ======================== */
+.ckhdr {
+  text-align: center;
+}
+
+.ckhdr span {
+  display: inline-flex;
+  width: 100%;
+  justify-content: center;
+  font-weight: 900;
+  color: var(--ck-ok);
+}
+
+td.ckcol {
+  padding: 0 !important;
+}
+
+.ckbtn {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  line-height: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  margin-top: 3px;
+}
+
+.ck {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+}
+
+.ckbox {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: transparent;
+  border: 2px solid var(--ck-off);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  transition: transform .06s ease;
+}
+
+/* Checkbox states */
+.ck.off .ckbox {
+  border-color: var(--ck-off);
+}
+
+.ck.pending .ckbox {
+  border-color: var(--ck-pending);
+}
+
+.ck.ok .ckbox {
+  border-color: var(--ck-ok);
+  background: var(--ck-ok);
+}
+
+.ck.ok .ckbox::after {
+  content: "✓";
+  font-weight: 900;
+  font-size: 15px;
+  line-height: 1;
+  color: #0b1510;
+  transform: translateY(-1px);
+}
+
+/* ========================
+   PAIRING ROWS
+   ======================== */
+tr.summary,
+tr.summary td {
+  cursor: pointer;
+}
+
+tr.summary td {
+  background: var(--pairing-bg);
+  border-top: 1px solid var(--pairing-border);
+  border-bottom: 1px solid var(--pairing-border);
+}
+
+tr.summary:hover td {
+  background: var(--pairing-bg-hover);
+}
+
+tr.summary td:first-child {
+  border-left: 1px solid var(--pairing-border);
+  border-top-left-radius: 12px;
+  border-bottom-left-radius: 12px;
+}
+
+tr.summary td:last-child {
+  border-right: 1px solid var(--pairing-border);
+  border-top-right-radius: 12px;
+  border-bottom-right-radius: 12px;
+}
+
+/* ========================
+   NON-PAIRING EVENTS (e.g. Training, CBT)
+   ======================== */
+tr.summary.non-pairing td {
+  background: var(--event-bg);
+  border-top: 1px solid var(--event-border);
+  border-bottom: 1px solid var(--event-border);
+}
+
+tr.summary.non-pairing:hover td {
+  background: var(--event-bg-hover);
+}
+
+tr.summary.non-pairing td:first-child {
+  border-left: 1px solid var(--event-border);
+}
+
+tr.summary.non-pairing td:last-child {
+  border-right: 1px solid var(--event-border);
+}
+
+/* ========================
+   OFF ROWS
+   ======================== */
+tr.off td {
+  background: var(--row);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+tr.off td:first-child {
+  border-left: 1px solid var(--border);
+  border-top-left-radius: 12px;
+  border-bottom-left-radius: 12px;
+}
+
+tr.off td:last-child {
+  border-right: 1px solid var(--border);
+  border-top-right-radius: 12px;
+  border-bottom-right-radius: 12px;
+}
+
+.off-label,
+.off-dur {
+  font-weight: 800;
+  color: var(--off);
+}
+
+.off-dur {
+  white-space: nowrap;
+}
+
+/* OFF text that should stay orange but not bold */
+.off-text-normal,
+.off-label .off-text-normal,
+.off-dur .off-text-normal,
+tr.off .off-text-normal {
+  font-weight: 400 !important;
+  color: var(--off) !important;
+}
+
+/* ========================
+   DETAILS ROWS
+   ======================== */
+tr.details {
+  display: none;
+}
+
+tr.summary.open + tr.details {
+  display: table-row;
+}
+
+tr.details > td {
+  position: relative;
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+
+tr.details > td::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  background: var(--row-alt);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  z-index: 0;
+}
+
+.daysbox {
+  position: relative;
+  z-index: 1;
+  padding: 12px 16px 14px;
+  border-radius: 10px;
+  margin-left: 0;
+}
+
+/* ========================
+   DAY HEADERS & LEGS
+   ======================== */
+.day {
+  margin: 8px 0 14px;
+}
+
+.dayhdr {
+  background: rgba(73, 179, 124, .14);
+  border: 0;
+  border-radius: 10px;
+  padding: 8px 10px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.dayhdr .daytitle {
+  font-weight: 600;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #7ee2a1;
+  display: inline-block;
+  margin-right: 4px;
+}
+
+/* ========================
+   LEGS TABLE
+   ======================== */
+.legs {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  display: none;
+}
+
+.legs.table-visible {
+  display: table !important;
+}
+
+.legs th,
+.legs td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+  text-align: left;
+}
+
+.legs th {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* Legs column widths */
+.legs th:first-child,
+.legs td:first-child {
+  width: 18% !important;
+  white-space: nowrap;
+}
+
+.legs th:nth-child(2),
+.legs td:nth-child(2) {
+  width: 32% !important;
+  padding-right: 8px;
+}
+
+.legs th:nth-child(3),
+.legs td:nth-child(3) {
+  width: 30% !important;
+  padding-left: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.legs th:nth-child(4),
+.legs td:nth-child(4) {
+  width: 20% !important;
+}
+
+.leg-done td {
+  text-decoration: line-through;
+  color: var(--strike);
+}
+
+.legs td.bt {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ========================
+   PILLS & STATUS BADGES
+   ======================== */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  color: #021216;
+  background: var(--green);
+  padding: 3px 8px;
+  border-radius: 999px;
+  margin-left: 8px;
+}
+
+.pill-red {
+  background: var(--red);
+  color: #130606;
+  margin-left: 8px;
+}
+
+.progress {
+  font-weight: 800;
+  margin-left: 8px;
+  color: var(--green);
+}
+
+/* ========================
+   MODAL STYLES
+   ======================== */
+body.modal-open {
+  overflow: hidden;
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: rgba(0, 0, 0, .55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  touch-action: none;
+}
+
+.modal-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  width: calc(100% - 32px);
+  max-width: 720px;
+  max-height: 85vh;
+  overflow: auto;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, .6);
+}
+
+.modal-header,
+.modal-footer {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+}
+
+.modal-footer {
+  border-top: 1px solid var(--border);
+  border-bottom: 0;
+  justify-content: flex-end;
+}
+
+.modal-header h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.modal-close {
+  margin-left: auto;
+  background: transparent;
+  border: 0;
+  color: #fff;
+  font-size: 20px;
+  cursor: pointer;
+}
+
+.modal-content {
+  padding: 14px;
+}
+
+/* ========================
+   PLAN TABLE
+   ======================== */
+.plan-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.plan-table th,
+.plan-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 8px 10px;
+  width: 33.3333%;
+}
+
+.plan-table th:nth-child(1),
+.plan-table td:nth-child(1) {
+  text-align: left;
+}
+
+.plan-table th:nth-child(2),
+.plan-table td:nth-child(2) {
+  text-align: center;
+}
+
+.plan-table th:nth-child(3),
+.plan-table td:nth-child(3) {
+  text-align: left;
+}
+
+.plan-meta {
+  margin-bottom: 8px;
+}
+
+/* ========================
+   UTILITY CLASSES
+   ======================== */
+.muted {
+  color: var(--muted);
+}
+
+.hidden {
+  display: none !important;
+}
+
+.no-legs-block {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  padding: 18px;
+  text-align: center;
+}
+
+.text-muted-normal {
+  font-weight: 400 !important;
+  color: var(--muted) !important;
+}
+
+.text-center {
+  text-align: center !important;
+}
+
+.flight-track-link {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.flight-track-link:hover {
+  text-decoration: underline;
+}
+
+/* iOS specific fixes */
+.ios table {
+  table-layout: fixed;
+}
+
+.ios th,
+.ios td {
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* ========================
+   ANIMATIONS
+   ======================== */
 @keyframes highlight-flash {
-  0% { background-color: rgba(111, 177, 255, 0.4) !important; }
-  100% { background-color: inherit; }
+  0% {
+    background-color: rgba(111, 177, 255, 0.4) !important;
+  }
+  100% {
+    background-color: inherit;
+  }
 }
 
 tr.highlight td {
   animation: highlight-flash 2s ease-out;
 }
 
-/* Mobile adjustments for calendar */
-@media (max-width:640px){
-  #calendar-container{
-    position:static;
-    justify-content:center;
-    margin-bottom:12px;
-    margin-top: 24px; /* INCREASED from 0 to 24px for more spacing */
+/* ================================================
+   LAYOUT STATE CLASSES
+   ================================================ */
+
+/* Layout states for body */
+.layout-desktop #pairings {
+  margin-top: 120px !important;
+}
+
+.layout-desktop-locked #pairings {
+  margin-top: 120px !important;
+}
+
+.layout-desktop-locked body,
+.layout-desktop-locked .wrap {
+  min-width: 990px !important;
+}
+
+.layout-mobile #pairings {
+  margin-top: 12px !important;
+}
+
+.layout-mobile-narrow #pairings {
+  margin-top: 12px !important;
+}
+
+.layout-mobile-narrow body,
+.layout-mobile-narrow .wrap {
+  min-width: 350px !important;
+}
+
+/* ================================================
+   MOBILE RESPONSIVE STYLES
+   ================================================ */
+@media (max-width: 640px) {
+  /* Update column variable */
+  :root {
+    --ckcol: var(--ckcol-mobile);
   }
-  #calendar-next{
-    display:none;
+  
+  /* Calendar positioning for mobile */
+  #calendar-container {
+    position: static;
+    justify-content: center;
+    margin-bottom: 12px;
+    margin-top: 24px;
   }
-  .calendar-widget{
-    width:220px;
+  
+  /* Hide second calendar on mobile */
+  #calendar-next {
+    display: none;
   }
-  #pairings{
-    margin-top:10px;
+  
+  .calendar-widget {
+    width: 220px;
+  }
+  
+  /* Adjust table margin */
+  #pairings {
+    margin-top: 10px;
+  }
+  
+  #pairings th:first-child {
+    white-space: normal;
+  }
+  
+  /* Legs table mobile adjustments */
+  .legs td:first-child {
+    white-space: nowrap;
+    word-break: normal;
+  }
+  
+  .legs td:nth-child(3) {
+    white-space: normal;
+    word-break: normal;
+    overflow-wrap: anywhere;
   }
 }
 
-/* =========================
-   Main table
-   ========================= */
-#pairings{width:100%;border-collapse:separate;border-spacing:0 10px;table-layout:fixed;margin-top:135px}
-#pairings th,#pairings td{padding:10px 10px;vertical-align:middle;text-align:left}
-#pairings th{color:var(--muted);font-weight:600;border-bottom:1px solid var(--border);white-space:nowrap}
-
-/* 4 columns: (check), Pairing, Report, Release */
-#pairings th:nth-child(1), #pairings td:nth-child(1){width:var(--ckcol);min-width:var(--ckcol);padding-left:0;padding-right:0}
-#pairings th:nth-child(2), #pairings td:nth-child(2){width:48%}
-#pairings th:nth-child(3), #pairings td:nth-child(3){width:26%}
-#pairings th:nth-child(4), #pairings td:nth-child(4){width:26%}
-
-@media (max-width:640px){
-  :root{--ckcol:var(--ckcol-mobile)}
-  #pairings th:first-child{white-space:normal}
+/* ========================
+   MOBILE CALENDAR SIZING
+   ======================== */
+.cal-below .calendar-widget .fc tbody tr {
+  height: 20px !important;
 }
 
-/* ✓ label centered in the check header */
-.ckhdr{ text-align:center }
-.ckhdr span{ display:inline-flex; width:100%; justify-content:center; font-weight:900; color:var(--ck-ok) }
-
-/* clickable cues */
-tr.summary,tr.summary td{cursor:pointer}
-.dayhdr{cursor:pointer}
-
-/* spacer / checkbox column */
-td.ckcol{padding:0!important}
-
-/* checkbox visuals — slightly larger, nudged down 3px */
-.ckbtn{
-  appearance:none;background:transparent;border:0;padding:0;margin:0;
-  cursor:pointer;line-height:0;display:inline-flex;align-items:center;justify-content:center;width:100%;
-  margin-top:3px;
-}
-.ck{display:inline-flex;align-items:center;justify-content:center;width:100%}
-.ckbox{width:24px;height:24px;border-radius:7px;background:transparent;border:2px solid var(--ck-off);display:inline-flex;align-items:center;justify-content:center;position:relative;transition:transform .06s ease}
-.ck.off .ckbox{border-color:var(--ck-off)}
-.ck.pending .ckbox{border-color:var(--ck-pending)}
-.ck.ok .ckbox{border-color:var(--ck-ok);background:var(--ck-ok)}
-.ck.ok .ckbox::after{content:"✓";font-weight:900;font-size:15px;line-height:1;color:#0b1510;transform:translateY(-1px)}
-
-/* capsules extend across ALL columns */
-tr.summary td{background:var(--pairing-bg);border-top:1px solid var(--pairing-border);border-bottom:1px solid var(--pairing-border)}
-tr.summary:hover td{background:var(--pairing-bg-hover)}
-tr.summary td:first-child{border-left:1px solid var(--pairing-border);border-top-left-radius:12px;border-bottom-left-radius:12px}
-tr.summary td:last-child{border-right:1px solid var(--pairing-border);border-top-right-radius:12px;border-bottom-right-radius:12px}
-
-/* OFF rows — OFF label sits in Pairing col, duration in Report col */
-tr.off td{background:var(--row);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
-tr.off td:first-child{border-left:1px solid var(--border);border-top-left-radius:12px;border-bottom-left-radius:12px}
-tr.off td:last-child{border-right:1px solid var(--border);border-top-right-radius:12px;border-bottom-right-radius:12px}
-.off-label,.off-dur{font-weight:800;color:var(--off)}
-.off-dur{white-space:nowrap}
-
-/* "(Remaining)" tag - NOT bold - needs !important to override parent */
-.off-remaining-tag {
-  font-weight: 400 !important;
-  color: var(--muted) !important;
-}
-
-/* details capsule includes check column */
-tr.details{display:none}
-tr.summary.open+tr.details{display:table-row}
-tr.details>td{position:relative;background:transparent;border:0;padding:0}
-tr.details>td::before{content:"";position:absolute;left:0;right:0;top:0;bottom:0;background:var(--row-alt);border:1px solid var(--border);border-radius:12px;z-index:0}
-.daysbox{position:relative;z-index:1;padding:12px 16px 14px;border-radius:10px;margin-left:0}
-
-/* Day header */
-.day{margin:8px 0 14px}
-.dayhdr{background:rgba(73,179,124,.14);border:0;border-radius:10px;padding:8px 10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-weight:600}
-.dayhdr .daytitle{font-weight:600}
-.dot{width:6px;height:6px;border-radius:999px;background:#7ee2a1;display:inline-block;margin-right:4px}
-
-/* Legs table */
-.legs{width:100%;border-collapse:collapse;table-layout:fixed}
-.legs th,.legs td{padding:6px 8px;border-bottom:1px solid var(--border);vertical-align:middle;text-align:left}
-.legs th{color:var(--muted);font-size:12px;white-space:nowrap}
-.legs th:first-child,.legs td:first-child{width:18%!important;white-space:nowrap}
-.legs th:nth-child(2),.legs td:nth-child(2){width:32%!important;padding-right:8px}
-.legs th:nth-child(3),.legs td:nth-child(3){width:30%!important;padding-left:12px;font-variant-numeric:tabular-nums}
-.legs th:nth-child(4),.legs td:nth-child(4){width:20%!important}
-.leg-done td{text-decoration:line-through;color:var(--strike)}
-.legs td.bt{font-variant-numeric:tabular-nums;white-space:nowrap}
-
-/* Mobile wrapping */
-@media (max-width:640px){
-  .legs td:first-child{white-space:nowrap;word-break:normal}
-  .legs td:nth-child(3){white-space:normal;word-break:normal;overflow-wrap:anywhere}
-}
-
-/* pills */
-.pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700;white-space:nowrap;color:#021216;background:var(--green);padding:3px 8px;border-radius:999px;margin-left:8px}
-.pill-red{background:var(--red);color:#130606;margin-left:8px}
-.progress{font-weight:800;margin-left:8px;color:var(--green)}
-
-/* Modal */
-body.modal-open{overflow:hidden}
-.modal{position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px;touch-action:none}
-.modal-card{background:var(--card);border:1px solid var(--border);border-radius:12px;width:calc(100% - 32px);max-width:720px;max-height:85vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.6)}
-.modal-header,.modal-footer{padding:12px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center}
-.modal-footer{border-top:1px solid var(--border);border-bottom:0;justify-content:flex-end}
-.modal-header h2{margin:0;font-size:18px}
-.modal-close{margin-left:auto;background:transparent;border:0;color:#fff;font-size:20px;cursor:pointer}
-.modal-content{padding:14px}
-
-/* Plan table */
-.plan-table{width:100%;border-collapse:collapse;table-layout:fixed}
-.plan-table th,.plan-table td{border-bottom:1px solid var(--border);padding:8px 10px;width:33.3333%}
-.plan-table th:nth-child(1),.plan-table td:nth-child(1){text-align:left}
-.plan-table th:nth-child(2),.plan-table td:nth-child(2){text-align:center}
-.plan-table th:nth-child(3),.plan-table td:nth-child(3){text-align:left}
-.plan-meta{margin-bottom:8px}
-
-/* utils */
-.muted{color:var(--muted)}
-.hidden{display:none!important}
-
-.ios table{table-layout:fixed}
-.ios th,.ios td{word-break:break-word;overflow-wrap:anywhere}
-
-/* === FullCalendar multi-day span fix === */
-
-/* Let event rows breathe across cell boundaries */
-.fc-scrollgrid { overflow: visible !important; }
-.fc-daygrid-day-events { overflow: visible !important; }
-
-/* The harness should not clip the event */
-.fc-daygrid-event-harness { overflow: visible !important; }
-
-/* Base: make multi-day segments join seamlessly */
-.fc-h-event {
-  border-radius: 0 !important;      /* no rounding on middle segments */
-  margin: 1px 0 !important;          /* no side margins on middle segments */
-}
-
-/* First day of span: round left only + keep your left margin */
-.fc-h-event.fc-event-start {
-  border-top-left-radius: 10px !important;
-  border-bottom-left-radius: 10px !important;
-  margin-left: 3px !important;
-}
-
-/* Last day of span: round right only + keep your right margin */
-.fc-h-event.fc-event-end {
-  border-top-right-radius: 10px !important;
-  border-bottom-right-radius: 10px !important;
-  margin-right: 3px !important;
-}
-
-/* Single-day events (start & end on same day) still look like pills */
-.fc-h-event.fc-event-start.fc-event-end {
-  border-radius: 10px !important;
-  margin: 1px 3px !important;
-}
-
-/* Tighter padding around each calendar */
-.calendar-widget{
-  padding: 8px 8px; /* was 12px */
-}
-
-/* Smaller day-of-week header cells */
-.fc-col-header-cell {
-  padding: 0 2px !important; /* was 2px all-around; trims left/right */
-}
-
-/* Make the single-letter headers a touch bolder and centered */
-.fc-col-header-cell-cushion {
-  padding: 2px 0 !important;
-  font-weight: 700 !important;
-  text-align: center !important;
-}
-
-/* Tighter side padding on each calendar */
-.calendar-widget{
-  padding: 0px; /* was 12px */
-}
-
-/* When calendars are placed below settings */
-.cal-below .calendar-widget .fc tbody tr { height: 20px !important; }      /* was 30px */
 .cal-below .calendar-widget .fc-daygrid-day,
 .cal-below .calendar-widget .fc-daygrid-day-frame,
 .cal-below .calendar-widget .fc-daygrid-day-bg {

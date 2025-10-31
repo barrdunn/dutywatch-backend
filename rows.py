@@ -87,14 +87,47 @@ def _day_signature(day: Dict[str, Any]) -> str:
     leg_sig = "|".join(f"{leg.get('flight')}:{leg.get('dep')}:{leg.get('arr')}:{leg.get('dep_time')}:{leg.get('arr_time')}" for leg in legs)
     return f"{report}||{leg_sig}"
 
+def event_has_legs(event: Dict[str, Any]) -> bool:
+    """Check if an event has flight legs in its description."""
+    description = event.get("description", "")
+    if not description:
+        return False
+    
+    parsed = parse_pairing_days(description)
+    days = parsed.get("days", [])
+    
+    for day in days:
+        if day.get("legs"):
+            return True
+    
+    return False
+
 def build_pairing_rows(
     events: List[Dict[str, Any]],
     is_24h: bool,
     only_reports: bool,
 ) -> List[Dict[str, Any]]:
-    # First pass: group by pairing ID only
-    initial_groups: Dict[str, List[Dict[str, Any]]] = {}
+    
+    print(f"\n=== DEBUG: Processing {len(events)} total events ===")
+    
+    # STEP 1: Separate events into pairings (with legs) and non-pairings (without legs)
+    pairings_events = []
+    non_pairing_events = []
+    
     for e in events:
+        has_legs = event_has_legs(e)
+        event_name = e.get("summary", "Unknown")
+        print(f"DEBUG: Event '{event_name}' has_legs={has_legs}")
+        if has_legs:
+            pairings_events.append(e)
+        else:
+            non_pairing_events.append(e)
+    
+    print(f"DEBUG: Separated into {len(pairings_events)} pairings and {len(non_pairing_events)} non-pairing events\n")
+    
+    # STEP 2: Process ONLY the actual pairings (exactly like before)
+    initial_groups: Dict[str, List[Dict[str, Any]]] = {}
+    for e in pairings_events:
         pid = (e.get("summary") or "").strip()
         if not pid:
             uid = (e.get("uid") or "")[:8]
@@ -142,8 +175,6 @@ def build_pairing_rows(
         for e in evs_sorted:
             parsed = parse_pairing_days(e.get("description") or "")
             days = parsed.get("days") or []
-            if only_reports:
-                days = [d for d in days if d.get("report")]
             
             for d in days:
                 # Deduplicate days with identical report times and legs
@@ -182,20 +213,48 @@ def build_pairing_rows(
         now_local = dt.datetime.now(LOCAL_TZ)
         in_progress = bool(pairing_report_local and pairing_release_local and pairing_report_local <= now_local <= pairing_release_local)
 
+        # IMPORTANT FIX #1: Only filter by report if NOT in progress
+        # This keeps all days of in-progress pairings intact
+        if only_reports and not in_progress:
+            parsed_days = [d for d in parsed_days if d.get("report")]
+
         days_with_flags: List[Dict[str, Any]] = []
         for idx, d in enumerate(parsed_days, start=1):
             anchor_date = start_anchor_date + dt.timedelta(days=idx - 1) if start_anchor_date else None
             legs = d.get("legs", [])
+            
             for leg in legs:
                 dep_dt = arr_dt = None
                 if anchor_date:
                     if leg.get("dep_time"):
-                        dep_dt = dt.datetime(anchor_date.year, anchor_date.month, anchor_date.day, int(leg["dep_time"][:2]), int(leg["dep_time"][2:]), tzinfo=LOCAL_TZ)
+                        dep_dt = dt.datetime(anchor_date.year, anchor_date.month, anchor_date.day, 
+                                           int(leg["dep_time"][:2]), int(leg["dep_time"][2:]), tzinfo=LOCAL_TZ)
                     if leg.get("arr_time"):
-                        arr_dt = dt.datetime(anchor_date.year, anchor_date.month, anchor_date.day, int(leg["arr_time"][:2]), int(leg["arr_time"][2:]), tzinfo=LOCAL_TZ)
+                        arr_dt = dt.datetime(anchor_date.year, anchor_date.month, anchor_date.day, 
+                                           int(leg["arr_time"][:2]), int(leg["arr_time"][2:]), tzinfo=LOCAL_TZ)
                         if dep_dt and arr_dt and arr_dt < dep_dt:
                             arr_dt += dt.timedelta(days=1)
+                
+                # Mark legs as done if arrival time has passed
                 leg["done"] = bool(arr_dt and now_local >= arr_dt)
+                
+                # FIX #2: Add tracking availability info
+                # Tracking is available 24 hours before departure
+                if dep_dt:
+                    tracking_available_dt = dep_dt - dt.timedelta(hours=24)
+                    leg["tracking_available"] = now_local >= tracking_available_dt
+                    leg["tracking_available_time"] = tracking_available_dt
+                    
+                    # Add a display message for when tracking will be available
+                    if not leg.get("tracking_available"):
+                        # Show the date when tracking will be available (the day of the flight)
+                        leg["tracking_message"] = f"Tracking available {dep_dt.strftime('%b %d')}"
+                    else:
+                        leg["tracking_message"] = "Tracking available"
+                else:
+                    leg["tracking_available"] = False
+                    leg["tracking_message"] = ""
+                    
             days_with_flags.append({**d, "day_index": idx})
 
         def dword(d: Optional[dt.datetime]) -> str:
@@ -227,12 +286,89 @@ def build_pairing_rows(
 
     pairings.sort(key=lambda r: r.get("report_local_iso") or "")
 
+    # STEP 3: Build rows with OFF times between pairings ONLY
+    print(f"\n=== DEBUG: Building rows from {len(pairings)} pairings ===")
     rows: List[Dict[str, Any]] = []
     for i, p in enumerate(pairings):
+        print(f"DEBUG: Adding pairing {p.get('pairing_id')} at position {len(rows)}")
         rows.append(p)
         if i + 1 < len(pairings):
             release = iso_to_dt(p.get("release_local_iso"))
             nxt_report = iso_to_dt(pairings[i + 1].get("report_local_iso"))
             gap = (nxt_report - release) if (release and nxt_report) else dt.timedelta(0)
-            rows.append({"kind": "off", "display": {"off_dur": _human_dur(gap if gap.total_seconds() >= 0 else dt.timedelta(0))}})
-    return rows
+            gap_str = _human_dur(gap if gap.total_seconds() >= 0 else dt.timedelta(0))
+            print(f"DEBUG: Adding OFF {gap_str} between {p.get('pairing_id')} and {pairings[i+1].get('pairing_id')}")
+            rows.append({"kind": "off", "display": {"off_dur": gap_str}})
+    
+    # STEP 4: Process non-pairing events for insertion
+    non_pairing_rows = []
+    for e in non_pairing_events:
+        pid = (e.get("summary") or "").strip()
+        if not pid:
+            uid = (e.get("uid") or "")[:8]
+            pid = f"EVENT-{uid}"
+        
+        start_utc = iso_to_dt(e.get("start_utc"))
+        start_local = to_local(start_utc) if start_utc else None
+        
+        report_disp = ""
+        if start_local:
+            report_disp = f"{start_local.strftime('%a %b %d')} {_to_12h(start_local.strftime('%H%M'))}".strip()
+        
+        non_pairing_rows.append({
+            "kind": "pairing",  # Still kind=pairing for display purposes
+            "pairing_id": pid,
+            "in_progress": 0,
+            "report_local_iso": start_local.isoformat() if start_local else None,
+            "release_local_iso": None,  # No release for non-pairing events
+            "display": {"report_str": report_disp, "release_str": ""},
+            "days": [],  # Empty days array = no legs
+            "uid": e.get("uid"),
+        })
+    
+    # STEP 5: Insert non-pairing events into the correct positions
+    print(f"\n=== DEBUG: Inserting {len(non_pairing_rows)} non-pairing events into {len(rows)} rows ===")
+    for npr in non_pairing_rows:
+        print(f"DEBUG: Non-pairing event '{npr.get('pairing_id')}' at {npr.get('report_local_iso')}")
+    
+    final_rows: List[Dict[str, Any]] = []
+    i = 0
+    
+    while i < len(rows):
+        current = rows[i]
+        
+        # Add the current row (pairing or OFF)
+        final_rows.append(current)
+        
+        # If this is an OFF row, check if any non-pairing events belong in this OFF period
+        if current.get("kind") == "off" and i > 0:
+            # Get the pairing before this OFF
+            prev_pairing_idx = i - 1
+            prev_pairing = rows[prev_pairing_idx] if prev_pairing_idx >= 0 else None
+            
+            # Get the pairing after this OFF (if exists)
+            next_pairing_idx = i + 1
+            next_pairing = rows[next_pairing_idx] if next_pairing_idx < len(rows) else None
+            
+            if prev_pairing and next_pairing:
+                prev_release = iso_to_dt(prev_pairing.get("release_local_iso"))
+                next_report = iso_to_dt(next_pairing.get("report_local_iso"))
+                
+                print(f"DEBUG: Checking OFF period between {prev_pairing.get('pairing_id')} and {next_pairing.get('pairing_id')}")
+                print(f"       Release: {prev_release}, Next Report: {next_report}")
+                
+                if prev_release and next_report:
+                    # Find non-pairing events that fall in this OFF period
+                    for np in non_pairing_rows:
+                        np_time = iso_to_dt(np.get("report_local_iso"))
+                        print(f"       Checking {np.get('pairing_id')} at {np_time}")
+                        if np_time and prev_release <= np_time < next_report:
+                            print(f"       ✓ INSERTING {np.get('pairing_id')}")
+                            final_rows.append(np)
+                        else:
+                            print(f"       ✗ Not in range")
+        
+        i += 1
+    
+    print(f"=== DEBUG: Final output has {len(final_rows)} rows ===\n")
+    return final_rows
