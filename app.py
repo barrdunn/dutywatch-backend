@@ -393,18 +393,24 @@ def _window_state(report_local: Optional[dt.datetime]) -> Dict[str, Any]:
 
 # ---------------- Viewing window ----------------
 def compute_window_bounds_local() -> Tuple[dt.datetime, dt.datetime, str]:
+    """
+    Compute viewing window bounds. Modified to start from beginning of current month
+    so calendar can show past events in the current month (grayed out).
+    """
     mode = VIEW_WINDOW_MODE
     now_local = dt.datetime.now(LOCAL_TZ)
 
     if mode == "TODAY_TO_END_OF_NEXT_MONTH":
-        start_local = now_local
+        # Start from beginning of current month (not today) for calendar display
+        start_local = dt.datetime(now_local.year, now_local.month, 1, tzinfo=LOCAL_TZ)
         end_local = end_of_next_month_local()
-        label = f"Today – {end_local.strftime('%b %d (%a)')}"
+        label = f"{start_local.strftime('%b 1')} – {end_local.strftime('%b %d')}"
         return start_local, end_local, label
 
-    start_local = now_local
+    # Default: also start from beginning of current month
+    start_local = dt.datetime(now_local.year, now_local.month, 1, tzinfo=LOCAL_TZ)
     end_local = end_of_next_month_local()
-    label = f"Today – {end_local.strftime('%b %d (%a)')}"
+    label = f"{start_local.strftime('%b 1')} – {end_local.strftime('%b %d')}"
     return start_local, end_local, label
 
 def window_bounds_utc() -> Tuple[dt.datetime, dt.datetime, dt.datetime, dt.datetime, str]:
@@ -419,6 +425,305 @@ def health():
     return {"ok": True}
 
 @app.get("/api/pairings")
+async def api_pairings(
+    year: Optional[int] = Query(default=None, ge=1970, le=2100),
+    month: Optional[int] = Query(default=None, ge=1, le=12),
+    only_reports: int = Query(default=1),
+    is_24h: int = Query(default=0),
+):
+    """
+    Builds visible rows:
+      - Filters hidden zero-leg items (by UID) and pairing_id hides.
+      - Keeps in-progress pairings sticky unless the release time has passed.
+      - Recomputes OFF rows after hide/unhide and on every paint.
+      - TOP OFF row when 'now' < first report shows: 'OFF (Now)' and remaining.
+      - OFF rows show the previous pairing's release time under the "Report" column.
+    """
+    try:
+        meta = await run_in_threadpool(read_cache_meta)
+        events = normalize_cached_events(meta)
+
+        start_utc, end_utc, start_local, end_local, window_label = window_bounds_utc()
+        UTC_MIN = dt.datetime.min.replace(tzinfo=dt.timezone.utc)
+        UTC_MAX = dt.datetime.max.replace(tzinfo=dt.timezone.utc)
+
+        def safe_start(ev: Dict[str, Any]) -> dt.datetime:
+            s = iso_to_dt(ev.get("start_utc"))
+            return s if (s and s.tzinfo) else (s or UTC_MIN).replace(tzinfo=dt.timezone.utc)
+
+        def safe_end(ev: Dict[str, Any]) -> dt.datetime:
+            e = iso_to_dt(ev.get("end_utc"))
+            return e if (e and e.tzinfo) else (e or UTC_MAX).replace(tzinfo=dt.timezone.utc)
+
+        window_events = [e for e in events if (safe_end(e) > start_utc) and (safe_start(e) < end_utc)]
+
+        # Build rows fresh every time.
+        rows = await run_in_threadpool(build_pairing_rows, window_events, bool(is_24h), bool(only_reports))
+        
+        # Keep a copy of ALL rows for the calendar (including past events)
+        calendar_rows = list(rows)
+
+        # Map pairing -> uids
+        pid_to_uids: Dict[str, List[str]] = {}
+        for ev in window_events:
+            pid = grouping_key(ev)
+            uid = str(ev.get("uid") or "")
+            if uid:
+                pid_to_uids.setdefault(pid, []).append(uid)
+
+        hidden_uids = await run_in_threadpool(list_hidden_uids)
+        hidden_pids = set(await run_in_threadpool(hidden_all))
+        use_24h = bool(is_24h)
+
+        visible: List[Dict[str, Any]] = []
+
+        def fmt_top(disp_map: Dict[str, Any], r: Dict[str, Any]):
+            rep = disp_map.get("report_hhmm") or r.get("report_hhmm") or r.get("report")
+            rel = disp_map.get("release_hhmm") or r.get("release_hhmm") or r.get("release")
+            if isinstance(rep, str) and rep.isdigit():
+                disp_map["report_str"] = _fmt_time(rep, use_24h)
+            if isinstance(rel, str) and rel.isdigit():
+                disp_map["release_str"] = _fmt_time(rel, use_24h)
+
+        # Process ALL rows for calendar (don't filter by time)
+        for r in calendar_rows:
+            if r.get("kind") != "pairing":
+                continue
+            pid = str(r.get("pairing_id") or "")
+            r["uids"] = pid_to_uids.get(pid, [])
+            total_legs = sum(len((d.get("legs") or [])) for d in (r.get("days") or []))
+            r["can_hide"] = (total_legs == 0)
+
+            fmt_top(r.setdefault("display", {}), r)
+
+            for d in (r.get("days") or []):
+                for leg in (d.get("legs") or []):
+                    if leg.get("dep_time") and not leg.get("dep_time_str"):
+                        leg["dep_time_str"] = _fmt_time(str(leg["dep_time"]).zfill(4), use_24h)
+                    if leg.get("arr_time") and not leg.get("arr_time_str"):
+                        leg["arr_time_str"] = _fmt_time(str(leg["arr_time"]).zfill(4), use_24h)
+
+        # Now filter for TABLE display (only future events)
+        now_local = dt.datetime.now(LOCAL_TZ)
+        
+        for r in rows:
+            if r.get("kind") != "pairing":
+                continue
+            
+            # Check if this pairing is in the past
+            release_iso = r.get("release_local_iso")
+            if release_iso:
+                release_time = iso_to_dt(release_iso)
+                release_local = to_local(release_time) if release_time else None
+                # Skip past pairings unless in progress
+                if release_local and release_local < now_local and not r.get("in_progress"):
+                    continue
+            
+            pid = str(r.get("pairing_id") or "")
+            r["uids"] = pid_to_uids.get(pid, [])
+            total_legs = sum(len((d.get("legs") or [])) for d in (r.get("days") or []))
+            r["can_hide"] = (total_legs == 0)
+
+            fmt_top(r.setdefault("display", {}), r)
+
+            for d in (r.get("days") or []):
+                for leg in (d.get("legs") or []):
+                    if leg.get("dep_time") and not leg.get("dep_time_str"):
+                        leg["dep_time_str"] = _fmt_time(str(leg["dep_time"]).zfill(4), use_24h)
+                    if leg.get("arr_time") and not leg.get("arr_time_str"):
+                        leg["arr_time_str"] = _fmt_time(str(leg["arr_time"]).zfill(4), use_24h)
+
+            # hide logic: hide if ALL UIDs are hidden OR if pairing_id is hidden
+            all_hidden = (len(r["uids"]) > 0) and all(uid in hidden_uids for uid in r["uids"])
+            pid_hidden = pid in hidden_pids
+            if (pid_hidden or all_hidden) and (r["can_hide"] or not r.get("in_progress")):
+                continue
+
+            # IMPORTANT: Only add real pairings (with legs) to visible array
+            # Non-pairing events are already properly positioned in rows from rows.py
+            if total_legs > 0:
+                visible.append(r)
+
+        # Sticky in-progress pairings: keep them even if missing from feed,
+        # unless the release time has already passed (covers fetch gaps around UTC midnight).
+        live_rows = await run_in_threadpool(list_live_rows)
+        current_feed_pids = set(str(p.get("pairing_id") or "") for p in visible if p.get("kind") == "pairing")
+        live_to_delete: List[str] = []
+
+        for lr in live_rows:
+            pid = str(lr.get("pairing_id") or "")
+            if not pid:
+                continue
+
+            rel_iso = lr.get("release_local_iso")
+            rel_dt = to_local(iso_to_dt(rel_iso)) if rel_iso else None
+
+            if STICKY_REQUIRE_FEED and pid not in current_feed_pids:
+                if rel_dt and rel_dt < now_local:
+                    live_to_delete.append(pid)
+                    continue
+                # else: keep sticky visible
+
+            if pid in current_feed_pids:
+                continue
+            if rel_dt and rel_dt >= now_local and not lr.get("can_hide"):
+                visible.append(lr)
+
+        # Remove live rows that actually expired
+        for pid in live_to_delete:
+            await run_in_threadpool(delete_live_row, pid)
+
+        # Keep live rows updated; purge expired by time
+        for r in visible:
+            if r.get("in_progress") and not r.get("can_hide"):
+                await run_in_threadpool(upsert_live_row, r)
+        await run_in_threadpool(purge_expired_live, now_local.isoformat())
+
+        # ---- Rebuild OFF rows across final visible
+        def _dt(s):
+            return iso_to_dt(s) if s else None
+
+        visible.sort(key=lambda x: x.get("report_local_iso") or "")
+        final_rows: List[Dict[str, Any]] = []
+
+        # (A) TOP OFF
+        if visible:
+            first_report_iso = visible[0].get("report_local_iso")
+            first_report = to_local(iso_to_dt(first_report_iso)) if first_report_iso else None
+            if first_report and now_local < first_report:
+                remaining = first_report - now_local
+                hrs = int(remaining.total_seconds() // 3600)
+                if hrs >= 24:
+                    d = hrs // 24
+                    h = hrs % 24
+                    off_str = f"{d}d {h}h (Remaining)"
+                else:
+                    off_str = f"{hrs}h (Remaining)"
+                final_rows.append({
+                    "kind": "off",
+                    "display": {"off_dur": off_str, "off_label": "OFF (Now)"}
+                })
+
+        # (B) Rebuild OFF rows between VISIBLE pairings only
+        # We need to filter out past pairings and rebuild OFF rows between what's actually shown
+        
+        # Filter the rows to only include future pairings for the table
+        future_rows = []
+        for r in rows:
+            if r.get("kind") == "pairing":
+                # Check if this is a future event
+                release_iso = r.get("release_local_iso")
+                if release_iso:
+                    release_time = iso_to_dt(release_iso)
+                    release_local = to_local(release_time) if release_time else None
+                    # Skip past pairings unless in progress
+                    if release_local and release_local < now_local and not r.get("in_progress"):
+                        continue
+                
+                pid = str(r.get("pairing_id") or "")
+                total_legs = sum(len((d.get("legs") or [])) for d in (r.get("days") or []))
+                
+                # Check if hidden
+                all_hidden = (len(r.get("uids", [])) > 0) and all(uid in hidden_uids for uid in r.get("uids", []))
+                pid_hidden = pid in hidden_pids
+                if (pid_hidden or all_hidden) and (r.get("can_hide") or not r.get("in_progress")):
+                    continue
+                
+                # Check for non-pairing events (future only)
+                if total_legs == 0:
+                    report_iso = r.get("report_local_iso")
+                    if report_iso:
+                        report_time = iso_to_dt(report_iso)
+                        report_local = to_local(report_time) if report_time else None
+                        # Skip past non-pairing events
+                        if report_local and report_local < now_local:
+                            continue
+                
+                future_rows.append(r)
+        
+        # Now rebuild OFF rows between the visible future pairings
+        future_rows.sort(key=lambda x: x.get("report_local_iso") or "")
+        
+        # Build final rows with proper OFF periods
+        for i, r in enumerate(future_rows):
+            final_rows.append(r)
+            
+            # Add OFF row between this and next pairing
+            if i + 1 < len(future_rows):
+                release = iso_to_dt(r.get("release_local_iso"))
+                next_report = iso_to_dt(future_rows[i + 1].get("report_local_iso"))
+                
+                if release and next_report:
+                    release_local = to_local(release)
+                    next_report_local = to_local(next_report)
+                    
+                    if release_local and next_report_local:
+                        gap = next_report_local - release_local
+                        if gap.total_seconds() > 0:
+                            total_hours = int(gap.total_seconds() // 3600)
+                            if total_hours >= 24:
+                                days = total_hours // 24
+                                hours = total_hours % 24
+                                off_str = f"{days}d {hours}h"
+                            else:
+                                off_str = f"{total_hours}h"
+                            
+                            final_rows.append({
+                                "kind": "off",
+                                "display": {"off_dur": off_str}
+                            })
+
+        # ---- Header meta
+        lp_iso = meta.get("last_pull_utc")
+        nr_iso = meta.get("next_run_utc")
+        lp_local = to_local(iso_to_dt(lp_iso)) if lp_iso else None
+        nr_local = to_local(iso_to_dt(nr_iso)) if nr_iso else None
+        guard_now = dt.datetime.now(LOCAL_TZ)
+        if not nr_local or nr_local <= guard_now:
+            mins = int(meta.get("refresh_minutes", max(1, state.refresh_seconds // 60)))
+            nr_local = guard_now + dt.timedelta(minutes=mins)
+            meta["next_run_utc"] = to_utc(nr_local).replace(microsecond=0).isoformat()
+            await run_in_threadpool(write_cache_meta, meta)
+
+        last_pull_local = human_ago_precise(lp_local)
+        last_pull_human_simple = human_ago(lp_local)
+        next_refresh_local_clock = nr_local.strftime("%I:%M %p").lstrip("0") if nr_local else ""
+        seconds_to_next = max(0, int((nr_local - dt.datetime.now(LOCAL_TZ)).total_seconds())) if nr_local else 0
+
+        window_obj = {
+            "start_local_iso": start_local.isoformat(),
+            "end_local_iso": end_local.isoformat(),
+            "label": window_label,
+        }
+
+        hc = await run_in_threadpool(hidden_count)
+
+        return {
+            "window": window_obj,
+            "window_config": {"mode": VIEW_WINDOW_MODE, "tz": str(LOCAL_TZ)},
+            "looking_through": window_label,
+            "last_pull_local": last_pull_local,
+            "last_pull_local_simple": last_pull_human_simple,
+            "last_pull_local_iso": lp_local.isoformat() if lp_local else "",
+            "next_pull_local": next_refresh_local_clock,
+            "next_pull_local_iso": nr_local.isoformat() if nr_local else "",
+            "seconds_to_next": seconds_to_next,
+            "tz_label": "CT",
+            "rows": final_rows,  # Table rows (future events only)
+            "calendar_rows": calendar_rows,  # All rows for calendar (including past)
+            "version": state.version,
+            "refresh_minutes": int(meta.get("refresh_minutes", max(1, state.refresh_seconds // 60))),
+            "ack_policy": ACK_POLICY,
+            "is_24h": use_24h,
+            "hidden_count": int(hc),
+        }
+    except Exception as e:
+        tb = traceback.format_exc(limit=12)
+        logger.error("api_pairings failed: %s\n%s", e, tb)
+        return JSONResponse(
+            status_code=500,
+            content={"error": "pairings_failed", "message": str(e), "trace": tb},
+        )
 async def api_pairings(
     year: Optional[int] = Query(default=None, ge=1970, le=2100),
     month: Optional[int] = Query(default=None, ge=1, le=12),

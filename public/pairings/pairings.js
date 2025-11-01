@@ -30,37 +30,80 @@
 
   function buildCalendarEvents(rows) {
     const events = [];
+    const now = new Date();
+    const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    
+    if (!rows || !Array.isArray(rows)) return events;
+    
     rows.forEach(row => {
-      if (row?.kind === 'off') return;
-      if (!row?.report_local_iso) return;
-
-      const start = new Date(row.report_local_iso);
-      if (isNaN(start)) return;
-
-      const tripDays = Math.max(1, Array.isArray(row.days) && row.days.length ? row.days.length : 1);
-      const end = new Date(start);
-      end.setDate(end.getDate() + tripDays);
+      // Skip OFF rows
+      if (!row || row.kind === 'off') return;
       
-      // Check if it's a non-pairing event (no legs)
-      let totalLegs = 0;
-      const days = row?.days || [];
-      for(const d of days) totalLegs += (d.legs || []).length;
-      const isNonPairing = totalLegs === 0;
-
-      events.push({
-        title: '',
-        start: start.toISOString().split('T')[0],
-        end: end.toISOString().split('T')[0],
-        allDay: true,
-        color: isNonPairing ? '#4287f5' : (row.in_progress ? '#ffd166' : '#49b37c'), // Blue for non-pairing
-        display: 'block',
-        extendedProps: {
-          pairingId: row.pairing_id,
-          report: row.display?.report_str || '',
-          release: row.display?.release_str || ''
+      // Must have a report time
+      if (!row.report_local_iso) return;
+      
+      try {
+        const startDate = new Date(row.report_local_iso);
+        if (isNaN(startDate.getTime())) return;
+        
+        // Calculate end date
+        let endDate;
+        if (row.release_local_iso) {
+          endDate = new Date(row.release_local_iso);
+          if (isNaN(endDate.getTime())) {
+            endDate = new Date(startDate);
+            endDate.setDate(endDate.getDate() + 1);
+          }
+        } else {
+          const tripDays = (row.days && row.days.length > 0) ? row.days.length : 1;
+          endDate = new Date(startDate);
+          endDate.setDate(endDate.getDate() + tripDays);
         }
-      });
+        
+        // Determine if it's a non-pairing event (no legs)
+        let hasLegs = false;
+        if (row.days && Array.isArray(row.days)) {
+          row.days.forEach(day => {
+            if (day.legs && Array.isArray(day.legs) && day.legs.length > 0) {
+              hasLegs = true;
+            }
+          });
+        }
+        
+        // Determine if this event is in the past
+        const isPast = endDate < now;
+        
+        // Use same colors but with opacity for past events
+        let color;
+        if (!hasLegs) {
+          // Non-pairing events (like CBT) - blue
+          color = '#4287f5';
+        } else {
+          // All pairings - green
+          color = '#49b37c';
+        }
+        
+        // Add opacity for past events (60% opacity = 99 in hex)
+        const bgColor = isPast ? color + '99' : color;
+        const txtColor = isPast ? '#ffffffb3' : '#ffffff'; // 70% opacity for text on past events
+        
+        events.push({
+          id: row.pairing_id || 'event-' + Math.random(),
+          title: row.pairing_id || 'Event',
+          start: startDate.toISOString().split('T')[0],
+          end: endDate.toISOString().split('T')[0],
+          backgroundColor: bgColor,
+          borderColor: bgColor,
+          textColor: txtColor,
+          allDay: true,
+          classNames: isPast ? ['past-event'] : []
+        });
+        
+      } catch (err) {
+        console.error('Error creating event:', err);
+      }
     });
+    
     return events;
   }
 
@@ -143,8 +186,10 @@
     const calendarElNext = document.getElementById('calendar-next');
 
     if (calendarElCurrent && !calendarCurrent) {
+      // Current month calendar
       calendarCurrent = new FullCalendar.Calendar(calendarElCurrent, {
         initialView: 'dayGridMonth',
+        initialDate: new Date(), // Current month
         headerToolbar: { left: '', center: 'title', right: '' },
         titleFormat: { month: 'long' },
         height: 'auto',
@@ -191,14 +236,6 @@
                     lastWeek.classList.add('week-hidden');
                   }
                 }
-              } else if (today.getMonth() !== currentMonth || today.getFullYear() !== currentYear) {
-                const viewDate = new Date(currentYear, currentMonth, 1);
-                if (viewDate > today) {
-                  const lastWeek = weeks[weeks.length - 1];
-                  if (lastWeek) {
-                    lastWeek.classList.add('week-hidden');
-                  }
-                }
               }
             }
             
@@ -211,12 +248,13 @@
     }
 
     if (calendarElNext && !calendarNext) {
-      const nextMonth = new Date();
-      nextMonth.setMonth(nextMonth.getMonth() + 1);
+      // Next month calendar - properly calculate next month
+      const today = new Date();
+      const nextMonth = new Date(today.getFullYear(), today.getMonth() + 1, 1);
 
       calendarNext = new FullCalendar.Calendar(calendarElNext, {
         initialView: 'dayGridMonth',
-        initialDate: nextMonth,
+        initialDate: nextMonth, // Next month (November if current is October)
         headerToolbar: { left: '', center: 'title', right: '' },
         titleFormat: { month: 'long' },
         height: 'auto',
@@ -250,26 +288,20 @@
             const weeks = calendarEl.querySelectorAll('.fc-daygrid-body tbody tr');
             
             if (weeks.length === 6) {
-              const today = new Date();
-              const currentMonth = info.view.currentStart.getMonth();
-              const currentYear = info.view.currentStart.getFullYear();
-              
               weeks.forEach(w => w.classList.remove('week-hidden'));
               
-              if (today.getMonth() === currentMonth && today.getFullYear() === currentYear) {
-                if (today.getDate() <= 2) {
-                  const lastWeek = weeks[weeks.length - 1];
-                  if (lastWeek) {
-                    lastWeek.classList.add('week-hidden');
+              // Hide last week if it's mostly next month
+              const lastWeek = weeks[weeks.length - 1];
+              if (lastWeek) {
+                const days = lastWeek.querySelectorAll('.fc-daygrid-day');
+                let nextMonthDays = 0;
+                days.forEach(day => {
+                  if (day.classList.contains('fc-day-other')) {
+                    nextMonthDays++;
                   }
-                }
-              } else if (today.getMonth() !== currentMonth || today.getFullYear() !== currentYear) {
-                const viewDate = new Date(currentYear, currentMonth, 1);
-                if (viewDate > today) {
-                  const lastWeek = weeks[weeks.length - 1];
-                  if (lastWeek) {
-                    lastWeek.classList.add('week-hidden');
-                  }
+                });
+                if (nextMonthDays >= 5) {
+                  lastWeek.classList.add('week-hidden');
                 }
               }
             }
@@ -287,15 +319,29 @@
 
   function updateCalendarsWithRows(rows) {
     ensureCalendars();
+    
+    if (!rows || !Array.isArray(rows)) return;
+    
     const events = buildCalendarEvents(rows);
-    if (calendarCurrent) { 
-      calendarCurrent.removeAllEvents(); 
-      calendarCurrent.addEventSource(events); 
+    
+    // Update current month calendar
+    if (calendarCurrent) {
+      calendarCurrent.removeAllEvents();
+      // Add events one by one - this is more reliable than addEventSource
+      events.forEach(event => {
+        calendarCurrent.addEvent(event);
+      });
     }
-    if (calendarNext) { 
-      calendarNext.removeAllEvents(); 
-      calendarNext.addEventSource(events); 
+    
+    // Update next month calendar
+    if (calendarNext) {
+      calendarNext.removeAllEvents();
+      // Add events one by one
+      events.forEach(event => {
+        calendarNext.addEvent(event);
+      });
     }
+    
     setTimeout(applyCalendarLayout, 0);
   }
 
@@ -486,23 +532,27 @@
       nextEl.innerHTML = base;
     }
 
-    const rows=data.rows||[];
-    updateCalendarsWithRows(rows);
+    // Use calendar_rows if available (includes past events), otherwise fall back to rows
+    const calendarData = data.calendar_rows || data.rows || [];
+    const tableRows = data.rows || [];
+    
+    // Update calendars with ALL events (including past)
+    updateCalendarsWithRows(calendarData);
 
     let firstOffIndex=-1;
-    for(let i=0;i<rows.length;i++){
-      if(rows[i]&&rows[i].kind==='off'){
+    for(let i=0;i<tableRows.length;i++){
+      if(tableRows[i]&&tableRows[i].kind==='off'){
         firstOffIndex=i;
         break;
       }
     }
     
     // Calculate precise remaining time for first OFF row if under 24 hours
-    if(firstOffIndex === 0 && rows[0] && rows[0].kind === 'off'){
+    if(firstOffIndex === 0 && tableRows[0] && tableRows[0].kind === 'off'){
       let nextPairing = null;
-      for(let i = 1; i < rows.length; i++){
-        if(rows[i] && rows[i].kind === 'pairing'){
-          nextPairing = rows[i];
+      for(let i = 1; i < tableRows.length; i++){
+        if(tableRows[i] && tableRows[i].kind === 'pairing'){
+          nextPairing = tableRows[i];
           break;
         }
       }
@@ -518,14 +568,15 @@
           const minutes = totalMinutes % 60;
           
           if(hours < 24){
-            rows[0].display.off_dur = `${hours}h ${minutes}m (Remaining)`;
+            tableRows[0].display.off_dur = `${hours}h ${minutes}m (Remaining)`;
           }
         }
       }
     }
     
+    // Render table with future events only
     const tbody=qs('#pairings-body');
-    tbody.innerHTML=rows.map((row,idx)=>renderRowHTML(row,HOME_BASE,idx===firstOffIndex)).join('');
+    tbody.innerHTML=tableRows.map((row,idx)=>renderRowHTML(row,HOME_BASE,idx===firstOffIndex)).join('');
 
     repaintTimesOnly();
     applyCalendarLayout();
@@ -636,7 +687,7 @@
 
     return `
       <tr class="summary ${isNonPairing?'non-pairing':''}" data-row-id="${esc(row.pairing_id||'')}">
-        ${isNonPairing?'<td class="ckcol"></td>':renderCheckCell(row)}
+        ${renderCheckCell(row)}
         <td class="sum-first">
           <strong>${esc(row.pairing_id||'')}</strong>${pairingNowTag(row)}
           ${hasLegs?`<span class="pill">${row.days?.length||1} day</span>`:``}
@@ -653,6 +704,26 @@
   }
 
   function renderCheckCell(row){
+    // Handle both regular pairings and non-pairing events
+    // If no ack data exists (non-pairing events), create a basic checkbox
+    if (!row.ack) {
+      return `
+        <td class="ckcol">
+          <button class="ckbtn ck off"
+                  type="button"
+                  role="checkbox"
+                  aria-checked="false"
+                  aria-disabled="false"
+                  title="Click to view reminder plan"
+                  data-ck="off"
+                  data-pairing="${esc(row.pairing_id||'')}"
+                  data-report="${esc(row.report_local_iso||'')}">
+            <span class="ckbox" aria-hidden="true"></span>
+          </button>
+        </td>`;
+    }
+    
+    // Regular logic for pairings with ack data
     const ack=row.ack||{};
     const acknowledged=!!ack.acknowledged;
     const windowOpen=!!ack.window_open;
@@ -743,7 +814,7 @@
         <div class="dayhdr">
           <span class="dot"></span>
           <span class="daytitle">Day ${idx+1}</span>
-          ${dayRepRaw?`· Report: ${esc(dow)} <span data-dw="day-report" data-hhmm="${esc(dayRepRaw)}">${esc(repDisp)}</span>`:''}
+          ${dayRepRaw?` · Report: ${esc(dow)} <span data-dw="day-report" data-hhmm="${esc(dayRepRaw)}">${esc(repDisp)}</span>`:''}
           ${dayRelRaw?` · Release: <span data-dw="day-release" data-hhmm="${esc(dayRelRaw)}">${esc(relDisp)}</span>`:''}
           ${day.hotel?` · Hotel: ${esc(day.hotel)}`:''}
         </div>
