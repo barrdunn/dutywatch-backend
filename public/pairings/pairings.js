@@ -83,9 +83,9 @@
           color = '#49b37c';
         }
         
-        // Add opacity for past events (60% opacity = 99 in hex)
-        const bgColor = isPast ? color + '99' : color;
-        const txtColor = isPast ? '#ffffffb3' : '#ffffff'; // 70% opacity for text on past events
+        // Add opacity for past events (25% opacity = 40 in hex)
+        const bgColor = isPast ? color + '40' : color;
+        const txtColor = isPast ? '#ffffff66' : '#ffffff'; // 40% opacity for text on past events
         
         events.push({
           id: row.pairing_id || 'event-' + Math.random(),
@@ -186,10 +186,12 @@
     const calendarElNext = document.getElementById('calendar-next');
 
     if (calendarElCurrent && !calendarCurrent) {
-      // Current month calendar
+      // Current month calendar - November 2025
+      const currentDate = new Date(2025, 10, 1); // November 2025 (month 10 = November)
+      
       calendarCurrent = new FullCalendar.Calendar(calendarElCurrent, {
         initialView: 'dayGridMonth',
-        initialDate: new Date(), // Current month
+        initialDate: currentDate, // November 2025
         headerToolbar: { left: '', center: 'title', right: '' },
         titleFormat: { month: 'long' },
         height: 'auto',
@@ -248,13 +250,12 @@
     }
 
     if (calendarElNext && !calendarNext) {
-      // Next month calendar - properly calculate next month
-      const today = new Date();
-      const nextMonth = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+      // Next month calendar - December 2025
+      const nextMonth = new Date(2025, 11, 1); // December 2025 (month 11 = December)
 
       calendarNext = new FullCalendar.Calendar(calendarElNext, {
         initialView: 'dayGridMonth',
-        initialDate: nextMonth, // Next month (November if current is October)
+        initialDate: nextMonth, // December 2025
         headerToolbar: { left: '', center: 'title', right: '' },
         titleFormat: { month: 'long' },
         height: 'auto',
@@ -320,9 +321,12 @@
   function updateCalendarsWithRows(rows) {
     ensureCalendars();
     
+    console.log('updateCalendarsWithRows called with rows:', rows);
+    
     if (!rows || !Array.isArray(rows)) return;
     
     const events = buildCalendarEvents(rows);
+    console.log('Built events for calendar:', events);
     
     // Update current month calendar
     if (calendarCurrent) {
@@ -331,6 +335,7 @@
       events.forEach(event => {
         calendarCurrent.addEvent(event);
       });
+      console.log('Added', events.length, 'events to October calendar');
     }
     
     // Update next month calendar
@@ -340,6 +345,7 @@
       events.forEach(event => {
         calendarNext.addEvent(event);
       });
+      console.log('Added', events.length, 'events to November calendar');
     }
     
     setTimeout(applyCalendarLayout, 0);
@@ -462,7 +468,7 @@
     if(sum&&!e.target.closest('[data-ck]')){
       sum.classList.toggle('open');
       const details=sum.nextElementSibling;
-      if(!details||!details.classList.contains('details'))return;
+      if(!details||!details.contains('details'))return;
       const open=sum.classList.contains('open');
       details.querySelectorAll('.day .legs').forEach(tbl=>{
         tbl.classList.toggle('table-visible', open);
@@ -518,6 +524,10 @@
       return;
     }
 
+    console.log('API response data:', data);
+    console.log('calendar_rows field:', data.calendar_rows);
+    console.log('rows field:', data.rows);
+
     state.lastPullIso=data.last_pull_local_iso||null;
     state.nextRefreshIso=data.next_pull_local_iso||null;
 
@@ -534,11 +544,122 @@
 
     // Use calendar_rows if available (includes past events), otherwise fall back to rows
     const calendarData = data.calendar_rows || data.rows || [];
-    const tableRows = data.rows || [];
+    let tableRows = data.rows || [];
+    
+    console.log('Using for calendar:', calendarData.length, 'items');
+    console.log('Using for table:', tableRows.length, 'items (before filtering)');
     
     // Update calendars with ALL events (including past)
     updateCalendarsWithRows(calendarData);
 
+    // FRONTEND OFF CALCULATION - Filter out backend OFF rows and recalculate
+    const pairingsOnly = tableRows.filter(row => row.kind !== 'off');
+    const actualPairings = pairingsOnly.filter(row => {
+      const hasLegs = row.days && row.days.some(d => d.legs && d.legs.length > 0);
+      return hasLegs;
+    });
+    const nonPairingEvents = pairingsOnly.filter(row => {
+      const hasLegs = row.days && row.days.some(d => d.legs && d.legs.length > 0);
+      return !hasLegs;
+    });
+    
+    console.log('Filtered to', actualPairings.length, 'actual pairings and', nonPairingEvents.length, 'non-pairing events');
+    
+    // Build new rows array with proper OFF calculation
+    const rowsWithOff = [];
+    
+    // Add OFF (Now) if the first pairing hasn't started yet
+    const now = new Date();
+    if(actualPairings.length > 0){
+      const firstPairing = actualPairings[0];
+      if(firstPairing.report_local_iso){
+        const firstReportTime = new Date(firstPairing.report_local_iso);
+        const msUntilFirst = firstReportTime - now;
+        
+        if(msUntilFirst > 0){
+          // We're currently OFF until the first pairing
+          const totalMinutes = Math.floor(msUntilFirst / (1000 * 60));
+          
+          // Round total minutes to nearest hour
+          let displayHours = Math.round(totalMinutes / 60);
+          
+          let offStr;
+          if(displayHours >= 24){
+            const days = Math.floor(displayHours / 24);
+            const remainingHours = displayHours % 24;
+            if(remainingHours > 0){
+              offStr = `${days}d ${remainingHours}h`;
+            } else {
+              offStr = `${days}d`;
+            }
+          } else {
+            offStr = `${displayHours}h`;
+          }
+          
+          rowsWithOff.push({
+            kind: 'off',
+            display: { 
+              off_dur: offStr + ' (Remaining)',
+              off_label: 'OFF (Now)'
+            }
+          });
+        }
+      }
+    }
+    
+    // Add actual pairings with OFF between them
+    for(let i = 0; i < actualPairings.length; i++){
+      const pairing = actualPairings[i];
+      rowsWithOff.push(pairing);
+      
+      // Calculate OFF to next actual pairing
+      if(i + 1 < actualPairings.length){
+        const nextPairing = actualPairings[i + 1];
+        
+        if(pairing.release_local_iso && nextPairing.report_local_iso){
+          const releaseTime = new Date(pairing.release_local_iso);
+          const nextReportTime = new Date(nextPairing.report_local_iso);
+          const gapMs = nextReportTime - releaseTime;
+          
+          if(gapMs > 0){
+            const totalHours = Math.floor(gapMs / (1000 * 60 * 60));
+            let offStr;
+            if(totalHours >= 24){
+              const days = Math.floor(totalHours / 24);
+              const hours = totalHours % 24;
+              offStr = `${days}d ${hours}h`;
+            } else {
+              offStr = `${totalHours}h`;
+            }
+            
+            // Add OFF row
+            rowsWithOff.push({
+              kind: 'off',
+              display: { off_dur: offStr }
+            });
+            
+            // Add any non-pairing events that fall within this OFF period
+            for(const npe of nonPairingEvents){
+              if(npe.report_local_iso){
+                const eventTime = new Date(npe.report_local_iso);
+                if(eventTime > releaseTime && eventTime < nextReportTime){
+                  // Check if not already added
+                  if(!rowsWithOff.some(r => r.pairing_id === npe.pairing_id)){
+                    rowsWithOff.push(npe);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    
+    // Replace tableRows with our recalculated version
+    tableRows = rowsWithOff;
+    console.log('After OFF recalculation:', tableRows.length, 'total rows');
+    
+    // Find first OFF index for special handling
     let firstOffIndex=-1;
     for(let i=0;i<tableRows.length;i++){
       if(tableRows[i]&&tableRows[i].kind==='off'){
@@ -704,26 +825,7 @@
   }
 
   function renderCheckCell(row){
-    // Handle both regular pairings and non-pairing events
-    // If no ack data exists (non-pairing events), create a basic checkbox
-    if (!row.ack) {
-      return `
-        <td class="ckcol">
-          <button class="ckbtn ck off"
-                  type="button"
-                  role="checkbox"
-                  aria-checked="false"
-                  aria-disabled="false"
-                  title="Click to view reminder plan"
-                  data-ck="off"
-                  data-pairing="${esc(row.pairing_id||'')}"
-                  data-report="${esc(row.report_local_iso||'')}">
-            <span class="ckbox" aria-hidden="true"></span>
-          </button>
-        </td>`;
-    }
-    
-    // Regular logic for pairings with ack data
+    // All events get checkboxes, including non-pairing events
     const ack=row.ack||{};
     const acknowledged=!!ack.acknowledged;
     const windowOpen=!!ack.window_open;

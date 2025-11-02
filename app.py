@@ -177,19 +177,62 @@ def _fmt_time(hhmm: str, use_24h: bool) -> str:
 # ---------------- Calendar fetch ----------------
 def fetch_current_to_next_eom() -> List[Dict[str, Any]]:
     """
-    Fetch from a looked-back start in UTC through the end of next month (UTC),
-    so late-day local events (which start earlier in UTC) are still present.
+    Fetch events from the beginning of LAST month through end of next month.
+    This ensures we get October events (when in November) for calendar display.
     """
     now_utc = _now_utc()
-    start_utc = now_utc - dt.timedelta(hours=LOOKBACK_HOURS)
-    y, m = now_utc.year, now_utc.month
-    end_utc = dt.datetime(y + (1 if m >= 11 else 0), ((m + 1) % 12) + 1, 1, tzinfo=dt.timezone.utc)
+    now_local = now_utc.astimezone(LOCAL_TZ)
+    
+    # Start from beginning of LAST month to get October when we're in November
+    if now_local.month == 1:
+        start_month = 12
+        start_year = now_local.year - 1
+    else:
+        start_month = now_local.month - 1
+        start_year = now_local.year
+    
+    start_local = dt.datetime(start_year, start_month, 1, tzinfo=LOCAL_TZ)
+    start_utc = start_local.astimezone(dt.timezone.utc)
+    
+    # Calculate end of next month properly
+    y, m = now_local.year, now_local.month
+    
+    # Next month
+    if m == 12:
+        next_month = 1
+        next_year = y + 1
+    else:
+        next_month = m + 1
+        next_year = y
+    
+    # Month after next
+    if next_month == 12:
+        end_month = 1
+        end_year = next_year + 1
+    else:
+        end_month = next_month + 1
+        end_year = next_year
+    
+    # First day of month after next
+    end_utc = dt.datetime(end_year, end_month, 1, tzinfo=dt.timezone.utc)
+
+    logger.info(f"FETCH DEBUG: Fetching events from {start_utc.isoformat()} to {end_utc.isoformat()}")
+    logger.info(f"FETCH DEBUG: That's {start_local.strftime('%B %d, %Y')} to {end_utc.astimezone(LOCAL_TZ).strftime('%B %d, %Y')} in local time")
 
     if hasattr(cal, "fetch_events_between"):
-        return cal.fetch_events_between(start_utc.isoformat(), end_utc.isoformat())
-
-    hours = int((end_utc - start_utc).total_seconds() // 3600) + 1
-    return cal.fetch_upcoming_events(hours_ahead=hours)
+        logger.info("FETCH DEBUG: Using fetch_events_between")
+        result = cal.fetch_events_between(start_utc.isoformat(), end_utc.isoformat())
+    else:
+        # Fallback: calculate hours from start to end
+        hours = int((end_utc - start_utc).total_seconds() // 3600) + 1
+        logger.info(f"FETCH DEBUG: Using fetch_upcoming_events with hours_ahead={hours}")
+        result = cal.fetch_upcoming_events(hours_ahead=hours)
+    
+    logger.info(f"FETCH DEBUG: Got {len(result)} events back")
+    for evt in result[:5]:  # Log first 5 events
+        logger.info(f"FETCH DEBUG: Event '{evt.get('summary')}' starts {evt.get('start_utc')}")
+    
+    return result
 
 # ---------------- SSE + Poller ----------------
 async def _emit(event_type: str, payload: dict | None = None):
@@ -238,9 +281,12 @@ async def pull_and_update_once() -> bool:
     """
     try:
         events = await run_in_threadpool(fetch_current_to_next_eom)
+        logger.info(f"DEBUG pull_and_update_once: Fetched {len(events)} events from calendar")
 
         # --- scrub any mock events by UID prefix (belt-and-suspenders) ---
+        events_before_scrub = len(events)
         events = [e for e in events if not str(e.get("uid", "")).startswith("mock-")]
+        logger.info(f"DEBUG pull_and_update_once: After scrubbing mock events: {len(events)} events (removed {events_before_scrub - len(events)})")
 
         meta = await run_in_threadpool(read_cache_meta)
 
@@ -248,6 +294,7 @@ async def pull_and_update_once() -> bool:
         new_digest = _events_digest(events)
         changed = (new_digest != old_digest)
 
+        logger.info(f"DEBUG pull_and_update_once: About to save {len(events)} events to cache")
         meta["events"] = events
         meta["events_digest"] = new_digest
         meta["last_pull_utc"] = _now_utc().isoformat()
@@ -255,6 +302,10 @@ async def pull_and_update_once() -> bool:
         mins = int(meta.get("refresh_minutes", 30))
         meta["next_run_utc"] = (_now_utc() + dt.timedelta(minutes=mins)).replace(microsecond=0).isoformat()
         await run_in_threadpool(write_cache_meta, meta)
+        
+        # Verify what got saved
+        verify_meta = await run_in_threadpool(read_cache_meta)
+        logger.info(f"DEBUG pull_and_update_once: Verified cache now has {len(verify_meta.get('events', []))} events")
 
         if changed:
             state.version += 1
@@ -394,21 +445,29 @@ def _window_state(report_local: Optional[dt.datetime]) -> Dict[str, Any]:
 # ---------------- Viewing window ----------------
 def compute_window_bounds_local() -> Tuple[dt.datetime, dt.datetime, str]:
     """
-    Compute viewing window bounds. Modified to start from beginning of current month
-    so calendar can show past events in the current month (grayed out).
+    Compute viewing window bounds. Start from beginning of LAST month (October when in November)
+    so calendar can show past month's events in the calendar (grayed out).
     """
     mode = VIEW_WINDOW_MODE
     now_local = dt.datetime.now(LOCAL_TZ)
 
+    # Calculate start from PREVIOUS month to include October events
+    if now_local.month == 1:
+        start_month = 12
+        start_year = now_local.year - 1
+    else:
+        start_month = now_local.month - 1
+        start_year = now_local.year
+    
     if mode == "TODAY_TO_END_OF_NEXT_MONTH":
-        # Start from beginning of current month (not today) for calendar display
-        start_local = dt.datetime(now_local.year, now_local.month, 1, tzinfo=LOCAL_TZ)
+        # Start from beginning of LAST month for calendar display
+        start_local = dt.datetime(start_year, start_month, 1, tzinfo=LOCAL_TZ)
         end_local = end_of_next_month_local()
         label = f"{start_local.strftime('%b 1')} – {end_local.strftime('%b %d')}"
         return start_local, end_local, label
 
-    # Default: also start from beginning of current month
-    start_local = dt.datetime(now_local.year, now_local.month, 1, tzinfo=LOCAL_TZ)
+    # Default: also start from beginning of LAST month  
+    start_local = dt.datetime(start_year, start_month, 1, tzinfo=LOCAL_TZ)
     end_local = end_of_next_month_local()
     label = f"{start_local.strftime('%b 1')} – {end_local.strftime('%b %d')}"
     return start_local, end_local, label
@@ -460,9 +519,6 @@ async def api_pairings(
         # Build rows fresh every time.
         rows = await run_in_threadpool(build_pairing_rows, window_events, bool(is_24h), bool(only_reports))
         
-        # Keep a copy of ALL rows for the calendar (including past events)
-        calendar_rows = list(rows)
-
         # Map pairing -> uids
         pid_to_uids: Dict[str, List[str]] = {}
         for ev in window_events:
@@ -475,8 +531,6 @@ async def api_pairings(
         hidden_pids = set(await run_in_threadpool(hidden_all))
         use_24h = bool(is_24h)
 
-        visible: List[Dict[str, Any]] = []
-
         def fmt_top(disp_map: Dict[str, Any], r: Dict[str, Any]):
             rep = disp_map.get("report_hhmm") or r.get("report_hhmm") or r.get("report")
             rel = disp_map.get("release_hhmm") or r.get("release_hhmm") or r.get("release")
@@ -484,26 +538,34 @@ async def api_pairings(
                 disp_map["report_str"] = _fmt_time(rep, use_24h)
             if isinstance(rel, str) and rel.isdigit():
                 disp_map["release_str"] = _fmt_time(rel, use_24h)
+        
+        # Keep ALL rows for the calendar (including past events, including hidden)
+        # Just format them for display
+        calendar_rows = []
+        for r in rows:
+            r_copy = dict(r)  # Make a copy for calendar
+            if r_copy.get("kind") == "pairing":
+                pid = str(r_copy.get("pairing_id") or "")
+                r_copy["uids"] = pid_to_uids.get(pid, [])
+                total_legs = sum(len((d.get("legs") or [])) for d in (r_copy.get("days") or []))
+                r_copy["can_hide"] = (total_legs == 0)
 
-        # Process ALL rows for calendar (don't filter by time)
-        for r in calendar_rows:
-            if r.get("kind") != "pairing":
-                continue
-            pid = str(r.get("pairing_id") or "")
-            r["uids"] = pid_to_uids.get(pid, [])
-            total_legs = sum(len((d.get("legs") or [])) for d in (r.get("days") or []))
-            r["can_hide"] = (total_legs == 0)
+                fmt_top(r_copy.setdefault("display", {}), r_copy)
 
-            fmt_top(r.setdefault("display", {}), r)
+                for d in (r_copy.get("days") or []):
+                    for leg in (d.get("legs") or []):
+                        if leg.get("dep_time") and not leg.get("dep_time_str"):
+                            leg["dep_time_str"] = _fmt_time(str(leg["dep_time"]).zfill(4), use_24h)
+                        if leg.get("arr_time") and not leg.get("arr_time_str"):
+                            leg["arr_time_str"] = _fmt_time(str(leg["arr_time"]).zfill(4), use_24h)
+            
+            calendar_rows.append(r_copy)
+        
+        logger.info(f"DEBUG: calendar_rows has {len(calendar_rows)} items")
+        logger.info(f"DEBUG: calendar_rows sample: {calendar_rows[:2] if calendar_rows else 'empty'}")
 
-            for d in (r.get("days") or []):
-                for leg in (d.get("legs") or []):
-                    if leg.get("dep_time") and not leg.get("dep_time_str"):
-                        leg["dep_time_str"] = _fmt_time(str(leg["dep_time"]).zfill(4), use_24h)
-                    if leg.get("arr_time") and not leg.get("arr_time_str"):
-                        leg["arr_time_str"] = _fmt_time(str(leg["arr_time"]).zfill(4), use_24h)
-
-        # Now filter for TABLE display (only future events)
+        # Process rows for the TABLE display (filter by time and visibility)
+        visible: List[Dict[str, Any]] = []
         now_local = dt.datetime.now(LOCAL_TZ)
         
         for r in rows:
@@ -540,7 +602,7 @@ async def api_pairings(
                 continue
 
             # IMPORTANT: Only add real pairings (with legs) to visible array
-            # Non-pairing events are already properly positioned in rows from rows.py
+            # Non-pairing events are handled separately
             if total_legs > 0:
                 visible.append(r)
 
@@ -607,31 +669,63 @@ async def api_pairings(
         # (B) Rebuild OFF rows between VISIBLE pairings only
         # We need to filter out past pairings and rebuild OFF rows between what's actually shown
         
-        # Filter the rows to only include future pairings for the table
-        future_rows = []
-        for r in rows:
+        # Just pass through the rows from rows.py which already has correct OFF calculations
+        # Filter out past events and hidden items, but keep the OFF structure intact
+        
+        # First, find the first future pairing
+        first_future_pairing_index = None
+        for i, r in enumerate(rows):
             if r.get("kind") == "pairing":
-                # Check if this is a future event
-                release_iso = r.get("release_local_iso")
-                if release_iso:
-                    release_time = iso_to_dt(release_iso)
-                    release_local = to_local(release_time) if release_time else None
-                    # Skip past pairings unless in progress
-                    if release_local and release_local < now_local and not r.get("in_progress"):
-                        continue
-                
-                pid = str(r.get("pairing_id") or "")
                 total_legs = sum(len((d.get("legs") or [])) for d in (r.get("days") or []))
                 
-                # Check if hidden
-                all_hidden = (len(r.get("uids", [])) > 0) and all(uid in hidden_uids for uid in r.get("uids", []))
-                pid_hidden = pid in hidden_pids
-                if (pid_hidden or all_hidden) and (r.get("can_hide") or not r.get("in_progress")):
-                    continue
-                
-                # Check for non-pairing events (future only)
-                if total_legs == 0:
+                # Check if this is a future event
+                if total_legs > 0:
+                    release_iso = r.get("release_local_iso")
+                    if release_iso:
+                        release_time = iso_to_dt(release_iso)
+                        release_local = to_local(release_time) if release_time else None
+                        if release_local and release_local > now_local:
+                            first_future_pairing_index = i
+                            break
+                        elif r.get("in_progress"):
+                            first_future_pairing_index = i
+                            break
+                else:
+                    # Non-pairing event - check report time
                     report_iso = r.get("report_local_iso")
+                    if report_iso:
+                        report_time = iso_to_dt(report_iso)
+                        report_local = to_local(report_time) if report_time else None
+                        if report_local and report_local > now_local:
+                            # This is a future non-pairing event, but keep looking for actual pairing
+                            continue
+        
+        # Now process rows starting from just before the first future pairing
+        start_index = max(0, first_future_pairing_index - 1) if first_future_pairing_index is not None else len(rows)
+        
+        for i in range(start_index, len(rows)):
+            r = rows[i]
+            
+            if r.get("kind") == "off":
+                # Only include OFF rows between future pairings
+                final_rows.append(r)
+                
+            elif r.get("kind") == "pairing":
+                # Check if this should be shown
+                release_iso = r.get("release_local_iso")
+                report_iso = r.get("report_local_iso")
+                
+                # For pairings with legs, check release time
+                total_legs = sum(len((d.get("legs") or [])) for d in (r.get("days") or []))
+                if total_legs > 0:
+                    if release_iso:
+                        release_time = iso_to_dt(release_iso)
+                        release_local = to_local(release_time) if release_time else None
+                        # Skip past pairings unless in progress
+                        if release_local and release_local < now_local and not r.get("in_progress"):
+                            continue
+                else:
+                    # For non-pairing events, check report time
                     if report_iso:
                         report_time = iso_to_dt(report_iso)
                         report_local = to_local(report_time) if report_time else None
@@ -639,39 +733,16 @@ async def api_pairings(
                         if report_local and report_local < now_local:
                             continue
                 
-                future_rows.append(r)
-        
-        # Now rebuild OFF rows between the visible future pairings
-        future_rows.sort(key=lambda x: x.get("report_local_iso") or "")
-        
-        # Build final rows with proper OFF periods
-        for i, r in enumerate(future_rows):
-            final_rows.append(r)
-            
-            # Add OFF row between this and next pairing
-            if i + 1 < len(future_rows):
-                release = iso_to_dt(r.get("release_local_iso"))
-                next_report = iso_to_dt(future_rows[i + 1].get("report_local_iso"))
+                pid = str(r.get("pairing_id") or "")
                 
-                if release and next_report:
-                    release_local = to_local(release)
-                    next_report_local = to_local(next_report)
-                    
-                    if release_local and next_report_local:
-                        gap = next_report_local - release_local
-                        if gap.total_seconds() > 0:
-                            total_hours = int(gap.total_seconds() // 3600)
-                            if total_hours >= 24:
-                                days = total_hours // 24
-                                hours = total_hours % 24
-                                off_str = f"{days}d {hours}h"
-                            else:
-                                off_str = f"{total_hours}h"
-                            
-                            final_rows.append({
-                                "kind": "off",
-                                "display": {"off_dur": off_str}
-                            })
+                # Check if hidden
+                all_hidden = (len(r.get("uids", [])) > 0) and all(uid in hidden_uids for uid in r.get("uids", []))
+                pid_hidden = pid in hidden_pids
+                if (pid_hidden or all_hidden) and (r.get("can_hide") or not r.get("in_progress")):
+                    continue
+                
+                # Include this pairing
+                final_rows.append(r)
 
         # ---- Header meta
         lp_iso = meta.get("last_pull_utc")
