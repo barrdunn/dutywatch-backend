@@ -132,6 +132,19 @@
 
     cc.classList.remove('calendar-desktop');
     cc.classList.add('calendar-mobile');
+    
+    // Ensure both calendar divs are visible in mobile
+    const calCurrent = document.getElementById('calendar-current');
+    const calNext = document.getElementById('calendar-next');
+    if(calCurrent) calCurrent.style.display = 'block';
+    if(calNext) {
+      // Force override any CSS hiding the second calendar
+      calNext.style.cssText = 'display: block !important; visibility: visible !important; opacity: 1 !important;';
+    }
+    
+    // Make sure container has enough height for both
+    cc.style.height = 'auto';
+    cc.style.overflow = 'visible';
   }
 
   function moveCalendarsTopRight() {
@@ -170,6 +183,15 @@
     } else {
       moveCalendarsBelow();
       body.classList.add('cal-below');
+      
+      // In mobile, make sure both calendars are side by side
+      const cc = document.getElementById('calendar-container');
+      if(cc) {
+        cc.style.display = 'flex';
+        cc.style.flexDirection = 'row'; // Side by side, not column
+        cc.style.gap = '8px';
+        cc.style.justifyContent = 'center';
+      }
       
       if (vw <= 350) {
         body.classList.add('layout-mobile-narrow');
@@ -349,6 +371,17 @@
     }
     
     setTimeout(applyCalendarLayout, 0);
+    
+    // Force both calendars visible on mobile
+    setTimeout(() => {
+      const isMobile = window.innerWidth <= 640;
+      if(isMobile) {
+        const calNext = document.getElementById('calendar-next');
+        if(calNext) {
+          calNext.style.cssText = 'display: block !important; visibility: visible !important; opacity: 1 !important;';
+        }
+      }
+    }, 100);
   }
 
   // ===== Time helpers =====
@@ -468,7 +501,7 @@
     if(sum&&!e.target.closest('[data-ck]')){
       sum.classList.toggle('open');
       const details=sum.nextElementSibling;
-      if(!details||!details.contains('details'))return;
+      if(!details||!details.classList.contains('details'))return;  // FIX: classList.contains not contains
       const open=sum.classList.contains('open');
       details.querySelectorAll('.day .legs').forEach(tbl=>{
         tbl.classList.toggle('table-visible', open);

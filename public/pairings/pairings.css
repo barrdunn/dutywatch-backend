@@ -1,6 +1,7 @@
 /* ================================================
    PAIRINGS DASHBOARD - COMPLETE STYLESHEET
    Dark theme optimized for pilot scheduling
+   Properly engineered responsive breakpoints
    ================================================ */
 
 /* ========================
@@ -76,6 +77,7 @@ body {
   max-width: 1100px;
   margin: 28px auto;
   padding: 0 16px;
+  min-width: 994px; /* Minimum width for desktop */
 }
 
 .card {
@@ -185,7 +187,7 @@ select.toggle {
 }
 
 /* ================================================
-   CALENDAR WIDGET STYLES
+   CALENDAR WIDGET STYLES - DESKTOP (994px+)
    ================================================ */
 #calendar-container {
   position: absolute;
@@ -218,10 +220,12 @@ select.toggle {
 .calendar-mobile {
   position: static !important;
   display: flex !important;
+  flex-direction: row !important;
   width: 100% !important;
   justify-content: center !important;
   align-items: flex-start !important;
   margin-top: 24px !important;
+  gap: 12px !important;
 }
 
 /* ========================
@@ -1058,31 +1062,67 @@ tr.highlight td {
 }
 
 /* ================================================
-   MOBILE RESPONSIVE STYLES
+   RESPONSIVE BREAKPOINT: 740px - TABLET
+   Calendars move below, side by side
    ================================================ */
-@media (max-width: 640px) {
+@media (max-width: 740px) {
+  /* Allow wrap to shrink now */
+  .wrap {
+    min-width: 400px;
+    max-width: 100%;
+  }
+
   /* Update column variable */
   :root {
     --ckcol: var(--ckcol-mobile);
   }
   
-  /* Calendar positioning for mobile */
+  /* Move calendars below content, horizontally side by side */
   #calendar-container {
-    position: static;
-    justify-content: center;
-    margin-bottom: 12px;
-    margin-top: 24px;
+    position: static !important;
+    display: flex !important;
+    flex-direction: row !important;
+    justify-content: center !important;
+    margin: 24px auto 12px !important;
+    gap: 10px !important;
+    align-items: flex-start !important;
+    flex-wrap: nowrap !important;
   }
   
+  /* Force both calendars visible */
+  #calendar-current,
+  #calendar-next {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+  }
+  
+  /* Size calendars appropriately */
   .calendar-widget {
-    width: 220px;
+    width: calc(50% - 5px) !important;
+    max-width: 200px !important;
+    flex-shrink: 0 !important;
   }
   
-  /* Adjust table margin */
+  /* Adjust calendar font sizes for smaller size */
+  .calendar-widget .fc-toolbar-title {
+    font-size: 16px !important;
+  }
+  
+  .calendar-widget .fc-col-header-cell {
+    font-size: 9px !important;
+  }
+  
+  .calendar-widget .fc-daygrid-day-number {
+    font-size: 8px !important;
+  }
+  
+  /* Adjust table margin since calendars are below */
   #pairings {
-    margin-top: 10px;
+    margin-top: 10px !important;
   }
   
+  /* Table adjustments */
   #pairings th:first-child {
     white-space: normal;
   }
@@ -1098,18 +1138,38 @@ tr.highlight td {
     word-break: normal;
     overflow-wrap: anywhere;
   }
+  
+  /* Override any conflicting calendar-mobile styles */
+  .calendar-mobile {
+    flex-direction: row !important;
+  }
 }
 
-/* ========================
-   MOBILE CALENDAR SIZING
-   ======================== */
-.cal-below .calendar-widget .fc tbody tr {
-  height: 20px !important;
-}
-
-.cal-below .calendar-widget .fc-daygrid-day,
-.cal-below .calendar-widget .fc-daygrid-day-frame,
-.cal-below .calendar-widget .fc-daygrid-day-bg {
-  min-height: 25px !important;
-  max-height: 25px !important;
+/* ================================================
+   RESPONSIVE BREAKPOINT: 400px - MOBILE
+   Minimum width reached
+   ================================================ */
+@media (max-width: 400px) {
+  /* Lock minimum width at 400px */
+  body {
+    min-width: 400px;
+  }
+  
+  .wrap {
+    min-width: 400px;
+  }
+  
+  /* Make calendars even smaller if needed */
+  .calendar-widget {
+    width: calc(50% - 5px) !important;
+    max-width: 180px !important;
+  }
+  
+  .calendar-widget .fc-toolbar-title {
+    font-size: 14px !important;
+  }
+  
+  .calendar-widget .fc-daygrid-day-number {
+    font-size: 7px !important;
+  }
 }
