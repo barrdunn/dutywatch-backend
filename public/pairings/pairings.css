@@ -1222,91 +1222,25 @@ tr.highlight td {
   html, body {
     overflow-x: hidden !important;
     overflow-y: auto !important;
-    width: 100% !important;
   }
   
-  /* Update wrapper to fit screen */
   .wrap {
-    min-width: 0 !important;
-    max-width: 100% !important;
-    width: 100% !important;
+    min-width: 0;
+    max-width: 100%;
     padding: 0 8px;
-    margin: 12px auto;
   }
   
-  /* Card fits within screen */
   .card {
     overflow-x: hidden !important;
-    width: 100% !important;
     padding: 12px 8px;
   }
 
-  /* Update column variable */
-  :root {
-    --ckcol: var(--ckcol-mobile);
-  }
+  /* Calendars, etc - keep as is */
   
-  /* Move calendars below content, horizontally side by side */
-  #calendar-container {
-    position: static !important;
-    display: flex !important;
-    flex-direction: row !important;
-    justify-content: center !important;
-    margin: 20px auto 12px !important;
-    gap: 8px !important;
-    align-items: flex-start !important;
-    flex-wrap: nowrap !important;
-  }
-  
-  /* Force both calendars visible */
-  #calendar-current,
-  #calendar-next {
-    display: block !important;
-    visibility: visible !important;
-    opacity: 1 !important;
-  }
-  
-  /* Size calendars appropriately */
-  .calendar-widget {
-    width: calc(50% - 4px) !important;
-    max-width: 180px !important;
-    flex-shrink: 0 !important;
-  }
-  
-  /* Adjust calendar font sizes */
-  .calendar-widget .fc-toolbar-title {
-    font-size: 15px !important;
-  }
-  
-  .calendar-widget .fc-col-header-cell {
-    font-size: 9px !important;
-  }
-  
-  .calendar-widget .fc-daygrid-day-number {
-    font-size: 8px !important;
-  }
-  
-  /* Main table - fits screen width */
-  #pairings {
-    margin-top: 10px !important;
-    width: 100% !important;
-    min-width: 0 !important;
-    table-layout: auto !important;
-  }
-  
-  /* Details box - no scrolling */
-  .daysbox {
-    overflow: hidden !important;
-    width: 100% !important;
-    padding: 12px 8px 14px;
-  }
-  
-  /* Legs table - FIT TO SCREEN WIDTH */
+  /* LEGS TABLE - Make it fit screen width */
   .legs-wrap {
     overflow: hidden !important;
     width: 100% !important;
-    padding: 0;
-    margin: 0;
   }
   
   .legs {
@@ -1315,60 +1249,45 @@ tr.highlight td {
     table-layout: fixed !important;
   }
   
-  /* Responsive column widths using percentages */
+  /* Keep normal font sizes - DON'T MAKE THEM TINY */
   .legs th,
   .legs td {
-    padding: 4px 2px !important;
-    font-size: 11px !important;
+    padding: 6px 4px !important;
+    font-size: 12px !important; /* Normal readable size */
   }
   
-  /* Flight column - narrow */
+  /* Flight column - just needs flight number */
   .legs th:first-child,
   .legs td:first-child {
-    width: 12% !important;
-    min-width: 0 !important;
+    width: 15% !important;
     white-space: nowrap !important;
-    overflow: hidden !important;
-    text-overflow: ellipsis !important;
   }
   
-  /* Route column */
+  /* Route column - cities */
   .legs th:nth-child(2),
   .legs td:nth-child(2) {
-    width: 23% !important;
-    min-width: 0 !important;
-    font-size: 10px !important;
+    width: 25% !important;
   }
   
-  /* Block time column - can wrap */
+  /* Block time - THIS ONE WRAPS */
   .legs th:nth-child(3),
   .legs td:nth-child(3) {
     width: 35% !important;
-    min-width: 0 !important;
-    white-space: normal !important; /* Allow wrapping */
-    word-break: break-word !important;
-    line-height: 1.3 !important;
+    white-space: normal !important; /* ALLOW WRAPPING */
+    word-break: break-all !important; /* Force wrap at any character */
+    line-height: 1.4 !important;
   }
   
   /* Tracking column */
   .legs th:nth-child(4),
   .legs td:nth-child(4) {
-    width: 30% !important;
-    min-width: 0 !important;
+    width: 25% !important;
     white-space: nowrap !important;
-    overflow: hidden !important;
-    text-overflow: ellipsis !important;
-    font-size: 10px !important;
   }
   
-  /* Make tracking links smaller on mobile */
+  /* Keep flight track links readable */
   .flight-track-link {
-    font-size: 10px !important;
-  }
-  
-  /* Override calendar mobile class */
-  .calendar-mobile {
-    flex-direction: row !important;
+    font-size: 12px !important;
   }
 }
 
