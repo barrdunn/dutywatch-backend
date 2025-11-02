@@ -1240,10 +1240,6 @@ tr.highlight td {
     overflow: visible !important;
   }
   
-  #pairings {
-    min-width: 300px !important;
-  }
-  
   .table-scroll-container,
   .daysbox,
   .legs-wrap {
