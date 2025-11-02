@@ -1074,11 +1074,6 @@ tr.highlight td {
     margin-top: 24px;
   }
   
-  /* Hide second calendar on mobile */
-  #calendar-next {
-    display: none;
-  }
-  
   .calendar-widget {
     width: 220px;
   }
