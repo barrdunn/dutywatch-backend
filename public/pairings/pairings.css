@@ -1240,15 +1240,15 @@ tr.highlight td {
     overflow: visible !important;
   }
   
+  #pairings {
+    min-width: 300px !important;
+  }
+  
   .table-scroll-container,
   .daysbox,
   .legs-wrap {
     overflow-x: auto !important;
     -webkit-overflow-scrolling: touch !important;
-  }
-  
-  .legs {
-    min-width: 300px !important;
   }
   
   /* Fixed column widths */
