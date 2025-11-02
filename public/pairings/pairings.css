@@ -1210,37 +1210,232 @@ tr.highlight td {
 }
 
 /* ================================================
-   MOBILE FIXES - Add to END of pairings.css
+   MOBILE NO-SCROLL CSS FIXES
+   Replace the mobile section in your pairings.css with this
+   ================================================ */
+
+/* ================================================
+   RESPONSIVE BREAKPOINT: 740px - MOBILE/TABLET
    ================================================ */
 @media (max-width: 740px) {
-  /* Force scrolling to work everywhere */
-  html {
-    overflow-x: auto !important;
+  /* Prevent horizontal scrolling */
+  html, body {
+    overflow-x: hidden !important;
     overflow-y: auto !important;
+    width: 100% !important;
   }
   
-  body {
-    overflow-x: auto !important;
-    overflow-y: auto !important;
-    min-width: 100% !important;
-  }
-  
+  /* Update wrapper to fit screen */
   .wrap {
     min-width: 0 !important;
     max-width: 100% !important;
+    width: 100% !important;
+    padding: 0 8px;
+    margin: 12px auto;
+  }
+  
+  /* Card fits within screen */
+  .card {
+    overflow-x: hidden !important;
+    width: 100% !important;
+    padding: 12px 8px;
+  }
+
+  /* Update column variable */
+  :root {
+    --ckcol: var(--ckcol-mobile);
+  }
+  
+  /* Move calendars below content, horizontally side by side */
+  #calendar-container {
+    position: static !important;
+    display: flex !important;
+    flex-direction: row !important;
+    justify-content: center !important;
+    margin: 20px auto 12px !important;
+    gap: 8px !important;
+    align-items: flex-start !important;
+    flex-wrap: nowrap !important;
+  }
+  
+  /* Force both calendars visible */
+  #calendar-current,
+  #calendar-next {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+  }
+  
+  /* Size calendars appropriately */
+  .calendar-widget {
+    width: calc(50% - 4px) !important;
+    max-width: 180px !important;
+    flex-shrink: 0 !important;
+  }
+  
+  /* Adjust calendar font sizes */
+  .calendar-widget .fc-toolbar-title {
+    font-size: 15px !important;
+  }
+  
+  .calendar-widget .fc-col-header-cell {
+    font-size: 9px !important;
+  }
+  
+  .calendar-widget .fc-daygrid-day-number {
+    font-size: 8px !important;
+  }
+  
+  /* Main table - fits screen width */
+  #pairings {
+    margin-top: 10px !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    table-layout: auto !important;
+  }
+  
+  /* Details box - no scrolling */
+  .daysbox {
+    overflow: hidden !important;
+    width: 100% !important;
+    padding: 12px 8px 14px;
+  }
+  
+  /* Legs table - FIT TO SCREEN WIDTH */
+  .legs-wrap {
+    overflow: hidden !important;
+    width: 100% !important;
+    padding: 0;
+    margin: 0;
+  }
+  
+  .legs {
+    width: 100% !important;
+    min-width: 0 !important;
+    table-layout: fixed !important;
+  }
+  
+  /* Responsive column widths using percentages */
+  .legs th,
+  .legs td {
+    padding: 4px 2px !important;
+    font-size: 11px !important;
+  }
+  
+  /* Flight column - narrow */
+  .legs th:first-child,
+  .legs td:first-child {
+    width: 12% !important;
+    min-width: 0 !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+  
+  /* Route column */
+  .legs th:nth-child(2),
+  .legs td:nth-child(2) {
+    width: 23% !important;
+    min-width: 0 !important;
+    font-size: 10px !important;
+  }
+  
+  /* Block time column - can wrap */
+  .legs th:nth-child(3),
+  .legs td:nth-child(3) {
+    width: 35% !important;
+    min-width: 0 !important;
+    white-space: normal !important; /* Allow wrapping */
+    word-break: break-word !important;
+    line-height: 1.3 !important;
+  }
+  
+  /* Tracking column */
+  .legs th:nth-child(4),
+  .legs td:nth-child(4) {
+    width: 30% !important;
+    min-width: 0 !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    font-size: 10px !important;
+  }
+  
+  /* Make tracking links smaller on mobile */
+  .flight-track-link {
+    font-size: 10px !important;
+  }
+  
+  /* Override calendar mobile class */
+  .calendar-mobile {
+    flex-direction: row !important;
+  }
+}
+
+/* ================================================
+   LANDSCAPE MODE - Use full width, no scrolling
+   ================================================ */
+@media (orientation: landscape) and (max-width: 900px) {
+  /* Prevent any horizontal scroll in landscape */
+  html, body {
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+  
+  .wrap {
+    width: 100% !important;
+    max-width: 100% !important;
+    padding: 0 12px;
   }
   
   .card {
-    overflow-x: auto !important;
-    min-width: 0 !important;
+    width: 100% !important;
+    overflow-x: hidden !important;
   }
   
-  .calendar-widget,
-  .calendar-widget .fc {
-    overflow: visible !important;
+  /* Smaller calendars in landscape to save vertical space */
+  #calendar-container {
+    margin: 10px auto 8px !important;
   }
   
-  #pairings {
-    min-width: 300px !important;
+  .calendar-widget {
+    max-width: 140px !important;
+  }
+  
+  /* Better column proportions for landscape - more space */
+  .legs th,
+  .legs td {
+    font-size: 12px !important;
+    padding: 6px 4px !important;
+  }
+  
+  .legs th:first-child,
+  .legs td:first-child {
+    width: 10% !important;
+  }
+  
+  .legs th:nth-child(2),
+  .legs td:nth-child(2) {
+    width: 25% !important;
+    font-size: 11px !important;
+  }
+  
+  .legs th:nth-child(3),
+  .legs td:nth-child(3) {
+    width: 35% !important;
+  }
+  
+  .legs th:nth-child(4),
+  .legs td:nth-child(4) {
+    width: 30% !important;
+    font-size: 11px !important;
+  }
+  
+  .flight-track-link {
+    font-size: 11px !important;
   }
 }
+
+/* Remove the duplicate mobile fixes section at the bottom */
