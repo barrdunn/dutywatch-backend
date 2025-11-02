@@ -1243,17 +1243,4 @@ tr.highlight td {
   #pairings {
     min-width: 300px !important;
   }
-  
-  .table-scroll-container,
-  .daysbox,
-  .legs-wrap {
-    overflow-x: auto !important;
-    -webkit-overflow-scrolling: touch !important;
-  }
-  
-  /* Fixed column widths */
-  .legs td:first-child { width: 70px !important; white-space: nowrap !important; }
-  .legs td:nth-child(2) { width: 140px !important; }
-  .legs td:nth-child(3) { width: 150px !important; white-space: nowrap !important; }
-  .legs td:nth-child(4) { width: 140px !important; white-space: nowrap !important; }
 }
