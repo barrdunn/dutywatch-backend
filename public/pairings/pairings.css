@@ -1210,22 +1210,54 @@ tr.highlight td {
 }
 
 /* ================================================
-   MOBILE LANDSCAPE SPECIFIC
+   MOBILE FIXES - Add to END of pairings.css
    ================================================ */
-@media (max-width: 740px) and (orientation: landscape) {
-  /* Keep scrolling enabled */
-  html, body {
+@media (max-width: 740px) {
+  /* Force scrolling to work everywhere */
+  html {
     overflow-x: auto !important;
     overflow-y: auto !important;
   }
   
-  /* Smaller calendars in landscape to save height */
-  .calendar-widget {
-    max-width: 150px !important;
+  body {
+    overflow-x: auto !important;
+    overflow-y: auto !important;
+    min-width: 100% !important;
   }
   
-  /* Reduce vertical spacing */
-  #calendar-container {
-    margin: 12px auto 8px !important;
+  .wrap {
+    min-width: 0 !important;
+    max-width: 100% !important;
   }
+  
+  .card {
+    overflow-x: auto !important;
+    min-width: 0 !important;
+  }
+  
+  .calendar-widget,
+  .calendar-widget .fc {
+    overflow: visible !important;
+  }
+  
+  #pairings {
+    min-width: 600px !important;
+  }
+  
+  .table-scroll-container,
+  .daysbox,
+  .legs-wrap {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+  
+  .legs {
+    min-width: 500px !important;
+  }
+  
+  /* Fixed column widths */
+  .legs td:first-child { width: 70px !important; white-space: nowrap !important; }
+  .legs td:nth-child(2) { width: 140px !important; }
+  .legs td:nth-child(3) { width: 150px !important; white-space: nowrap !important; }
+  .legs td:nth-child(4) { width: 140px !important; white-space: nowrap !important; }
 }
