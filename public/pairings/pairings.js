@@ -732,16 +732,6 @@
     const tbody=qs('#pairings-body');
     tbody.innerHTML=tableRows.map((row,idx)=>renderRowHTML(row,HOME_BASE,idx===firstOffIndex)).join('');
     
-    // Wrap table for mobile scrolling if not already wrapped
-    const table = qs('#pairings');
-    const isMobile = window.innerWidth <= 740;
-    if(isMobile && table && !table.parentElement.classList.contains('table-scroll-container')) {
-      const wrapper = document.createElement('div');
-      wrapper.className = 'table-scroll-container';
-      table.parentNode.insertBefore(wrapper, table);
-      wrapper.appendChild(table);
-    }
-    
     // Wrap table in scrollable container on mobile
     const isMobile = window.innerWidth <= 740;
     const table = qs('#pairings');
