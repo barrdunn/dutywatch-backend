@@ -731,6 +731,16 @@
     // Render table with future events only
     const tbody=qs('#pairings-body');
     tbody.innerHTML=tableRows.map((row,idx)=>renderRowHTML(row,HOME_BASE,idx===firstOffIndex)).join('');
+    
+    // Wrap table in scrollable container on mobile
+    const isMobile = window.innerWidth <= 740;
+    const table = qs('#pairings');
+    if(isMobile && table && !table.parentElement.classList.contains('table-wrapper')) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'table-wrapper';
+      table.parentNode.insertBefore(wrapper, table);
+      wrapper.appendChild(table);
+    }
 
     repaintTimesOnly();
     applyCalendarLayout();
