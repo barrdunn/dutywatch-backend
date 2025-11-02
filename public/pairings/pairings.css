@@ -1241,7 +1241,7 @@ tr.highlight td {
   }
   
   #pairings {
-    min-width: 400px !important;
+    min-width: 300px !important;
   }
   
   .table-scroll-container,
@@ -1252,7 +1252,7 @@ tr.highlight td {
   }
   
   .legs {
-    min-width: 500px !important;
+    min-width: 300px !important;
   }
   
   /* Fixed column widths */
