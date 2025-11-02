@@ -59,7 +59,8 @@
 
 html, 
 body {
-  overflow-x: hidden;
+  overflow-x: auto;  /* Allow horizontal scroll on mobile landscape */
+  -webkit-overflow-scrolling: touch;  /* Smooth scrolling on iOS */
 }
 
 body {
@@ -818,14 +819,16 @@ tr.details > td::before {
 
 .legs th:nth-child(3),
 .legs td:nth-child(3) {
-  width: 30% !important;
+  width: 28% !important;
   padding-left: 12px;
   font-variant-numeric: tabular-nums;
 }
 
 .legs th:nth-child(4),
 .legs td:nth-child(4) {
-  width: 20% !important;
+  width: 22% !important;
+  white-space: nowrap;
+  min-width: 80px;
 }
 
 .leg-done td {
@@ -1127,21 +1130,91 @@ tr.highlight td {
     white-space: normal;
   }
   
-  /* Legs table mobile adjustments */
+  /* Legs table mobile adjustments - better column widths */
+  .legs th:first-child,
   .legs td:first-child {
+    width: 15% !important;
     white-space: nowrap;
     word-break: normal;
   }
   
+  .legs th:nth-child(2),
+  .legs td:nth-child(2) {
+    width: 28% !important;
+    padding-right: 4px;
+  }
+  
+  .legs th:nth-child(3),
   .legs td:nth-child(3) {
-    white-space: normal;
-    word-break: normal;
-    overflow-wrap: anywhere;
+    width: 27% !important;
+    padding-left: 4px;
+    padding-right: 4px;
+    white-space: nowrap;
+    overflow-wrap: normal;
+  }
+  
+  .legs th:nth-child(4),
+  .legs td:nth-child(4) {
+    width: 30% !important;
+    white-space: nowrap;
+    min-width: 90px;
+    padding-right: 8px;
   }
   
   /* Override any conflicting calendar-mobile styles */
   .calendar-mobile {
     flex-direction: row !important;
+  }
+  
+  /* Make legs table horizontally scrollable if needed */
+  .legs-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  
+  .legs {
+    min-width: 100%;
+  }
+}
+
+/* ================================================
+   MOBILE LANDSCAPE SPECIFIC (short height, wider width)
+   ================================================ */
+@media (max-width: 740px) and (orientation: landscape) {
+  /* Allow horizontal scrolling on landscape */
+  html, body {
+    overflow-x: auto !important;
+    min-width: 400px;
+  }
+  
+  /* Ensure content is accessible with horizontal scroll */
+  .wrap {
+    min-width: 500px;  /* Slightly wider for landscape */
+  }
+  
+  /* Make calendars smaller in landscape to save vertical space */
+  .calendar-widget {
+    max-width: 160px !important;
+  }
+  
+  /* Reduce vertical spacing in landscape */
+  #calendar-container {
+    margin: 12px auto 8px !important;
+  }
+  
+  .card {
+    padding: 12px;
+  }
+  
+  /* Ensure legs table is scrollable */
+  .daysbox {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  
+  /* Fixed minimum width for legs table to prevent wrapping */
+  .legs {
+    min-width: 450px;
   }
 }
 
@@ -1156,7 +1229,7 @@ tr.highlight td {
   }
   
   .wrap {
-    min-width: 450px;
+    min-width: 400px;
   }
   
   /* Make calendars even smaller if needed */
