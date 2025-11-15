@@ -21,8 +21,10 @@ import re
 from typing import Any, Dict, Optional, List
 
 # --- core patterns ---
-REPORT_RE = re.compile(r"\bReport:\s*(\d{3,4})L?\b", re.IGNORECASE)
-LEG_RE = re.compile(r"\b(\d{3,4})\s+([A-Z]{3})-([A-Z]{3})\s+(\d{3,4})-(\d{3,4})\b")
+REPORT_RE = re.compile(r"\bReport:\s*(?:(\d{1,2}[A-Z]{3})\s+)?(\d{3,4})L?\b", re.IGNORECASE)
+# FIXED: Changed to \d+ to accept any number of digits for flight numbers
+# Added optional DH prefix detection for deadheads
+LEG_RE = re.compile(r"\b(?:([A-Z]{2}\d{1,2})\s+)?(DH\s*)?(\d+)\s+([A-Z]{3})-([A-Z]{3})\s+(\d{3,4})-(\d{3,4})\b", re.IGNORECASE)
 
 # Soft keywords to *prefer* but not require (kept broad and brand-agnostic)
 HOTELISH_KEYWORDS = re.compile(
@@ -114,14 +116,16 @@ def parse_pairing_days(text: str, location: Optional[str] = None) -> Dict[str, A
     """
     out: Dict[str, Any] = {"days": []}
 
-    # Report time (HHMM)
+    # Report time (HHMM) and optional date (e.g., "15NOV")
     m = REPORT_RE.search(text or "")
-    report = _ensure_hhmm(m.group(1)) if m else None
+    report_date_str = m.group(1) if m and m.group(1) else None  # e.g., "15NOV"
+    report = _ensure_hhmm(m.group(2)) if m else None  # e.g., "2334"
 
     # Legs
     legs: List[Dict[str, Any]] = []
     for m in LEG_RE.finditer(text or ""):
-        num, dep, arr, t_dep, t_arr = m.groups()
+        day_prefix, dh_prefix, num, dep, arr, t_dep, t_arr = m.groups()
+        is_deadhead = bool(dh_prefix)
         legs.append(
             {
                 # Keep numeric flight; prefixing (e.g., 'FFT') can be added by the caller.
@@ -130,6 +134,8 @@ def parse_pairing_days(text: str, location: Optional[str] = None) -> Dict[str, A
                 "arr": arr,
                 "dep_time": _ensure_hhmm(t_dep),
                 "arr_time": _ensure_hhmm(t_arr),
+                "deadhead": is_deadhead,
+                "day_prefix": day_prefix,  # e.g., "SU16" or None
             }
         )
 
@@ -147,6 +153,7 @@ def parse_pairing_days(text: str, location: Optional[str] = None) -> Dict[str, A
         out["days"].append(
             {
                 "report": report,
+                "report_date": report_date_str,  # e.g., "15NOV" or None
                 "legs": legs,
                 "release": release,
                 "hotel": hotel,

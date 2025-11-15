@@ -30,78 +30,39 @@
 
   function buildCalendarEvents(rows) {
     const events = [];
-    const now = new Date();
-    const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
     
     if (!rows || !Array.isArray(rows)) return events;
     
     rows.forEach(row => {
-      // Skip OFF rows
-      if (!row || row.kind === 'off') return;
+      // Only show pairings with legs
+      if (!row || row.kind === 'off' || !row.has_legs) return;
       
-      // Must have a report time
-      if (!row.report_local_iso) return;
+      // Need both report and release dates
+      if (!row.report_local_iso || !row.release_local_iso) return;
       
-      try {
-        const startDate = new Date(row.report_local_iso);
-        if (isNaN(startDate.getTime())) return;
-        
-        // Calculate end date
-        let endDate;
-        if (row.release_local_iso) {
-          endDate = new Date(row.release_local_iso);
-          if (isNaN(endDate.getTime())) {
-            endDate = new Date(startDate);
-            endDate.setDate(endDate.getDate() + 1);
-          }
-        } else {
-          const tripDays = (row.days && row.days.length > 0) ? row.days.length : 1;
-          endDate = new Date(startDate);
-          endDate.setDate(endDate.getDate() + tripDays);
+      // Extract date parts (YYYY-MM-DD)
+      const startDate = row.report_local_iso.split('T')[0];
+      const releaseDate = row.release_local_iso.split('T')[0];
+      
+      // FullCalendar end dates are EXCLUSIVE for all-day events
+      // So to include the release day, we need to add 1 day
+      const [year, month, day] = releaseDate.split('-').map(Number);
+      const endDateObj = new Date(year, month - 1, day + 1);
+      const endDate = endDateObj.toISOString().split('T')[0];
+      
+      events.push({
+        id: row.pairing_id || 'event-' + Math.random(),
+        title: row.pairing_id || 'Event',
+        start: startDate,
+        end: endDate,
+        allDay: true,
+        backgroundColor: '#49b37c',
+        borderColor: '#49b37c',
+        textColor: '#ffffff',
+        extendedProps: {
+          pairingId: row.pairing_id
         }
-        
-        // Determine if it's a non-pairing event (no legs)
-        let hasLegs = false;
-        if (row.days && Array.isArray(row.days)) {
-          row.days.forEach(day => {
-            if (day.legs && Array.isArray(day.legs) && day.legs.length > 0) {
-              hasLegs = true;
-            }
-          });
-        }
-        
-        // Determine if this event is in the past
-        const isPast = endDate < now;
-        
-        // Use same colors but with opacity for past events
-        let color;
-        if (!hasLegs) {
-          // Non-pairing events (like CBT) - blue
-          color = '#4287f5';
-        } else {
-          // All pairings - green
-          color = '#49b37c';
-        }
-        
-        // Add opacity for past events (25% opacity = 40 in hex)
-        const bgColor = isPast ? color + '40' : color;
-        const txtColor = isPast ? '#ffffff66' : '#ffffff'; // 40% opacity for text on past events
-        
-        events.push({
-          id: row.pairing_id || 'event-' + Math.random(),
-          title: row.pairing_id || 'Event',
-          start: startDate.toISOString().split('T')[0],
-          end: endDate.toISOString().split('T')[0],
-          backgroundColor: bgColor,
-          borderColor: bgColor,
-          textColor: txtColor,
-          allDay: true,
-          classNames: isPast ? ['past-event'] : []
-        });
-        
-      } catch (err) {
-        console.error('Error creating event:', err);
-      }
+      });
     });
     
     return events;
@@ -133,16 +94,13 @@
     cc.classList.remove('calendar-desktop');
     cc.classList.add('calendar-mobile');
     
-    // Ensure both calendar divs are visible in mobile
     const calCurrent = document.getElementById('calendar-current');
     const calNext = document.getElementById('calendar-next');
     if(calCurrent) calCurrent.style.display = 'block';
     if(calNext) {
-      // Force override any CSS hiding the second calendar
       calNext.style.cssText = 'display: block !important; visibility: visible !important; opacity: 1 !important;';
     }
     
-    // Make sure container has enough height for both
     cc.style.height = 'auto';
     cc.style.overflow = 'visible';
   }
@@ -184,11 +142,10 @@
       moveCalendarsBelow();
       body.classList.add('cal-below');
       
-      // In mobile, make sure both calendars are side by side
       const cc = document.getElementById('calendar-container');
       if(cc) {
         cc.style.display = 'flex';
-        cc.style.flexDirection = 'row'; // Side by side, not column
+        cc.style.flexDirection = 'row';
         cc.style.gap = '8px';
         cc.style.justifyContent = 'center';
       }
@@ -208,12 +165,11 @@
     const calendarElNext = document.getElementById('calendar-next');
 
     if (calendarElCurrent && !calendarCurrent) {
-      // Current month calendar - November 2025
-      const currentDate = new Date(2025, 10, 1); // November 2025 (month 10 = November)
+      const currentDate = new Date(2025, 10, 1);
       
       calendarCurrent = new FullCalendar.Calendar(calendarElCurrent, {
         initialView: 'dayGridMonth',
-        initialDate: currentDate, // November 2025
+        initialDate: currentDate,
         headerToolbar: { left: '', center: 'title', right: '' },
         titleFormat: { month: 'long' },
         height: 'auto',
@@ -222,10 +178,9 @@
         eventDisplay: 'block',
         dayMaxEvents: 3,
         moreLinkClick: 'popover',
-        dayHeaderContent(arg) {
-          const s = arg.date.toLocaleDateString(undefined, { weekday: 'short' });
-          return s?.charAt(0) || 'SMTWTFS'.charAt(arg.date.getDay());
-        },
+        firstDay: 0, // 0 = Sunday, 1 = Monday, etc.
+        locale: 'en-US', // Force US locale which starts with Sunday
+        dayHeaderFormat: { weekday: 'narrow' }, // Use narrow format for single letter
         eventClick(info) {
           const pairingId = info.event.extendedProps.pairingId;
           const row = document.querySelector(`[data-row-id="${pairingId}"]`);
@@ -243,9 +198,9 @@
           setTimeout(() => {
             stripYearFromTitle(calendarElCurrent.querySelector('.fc-toolbar-title'));
             
-            const calendarEl = calendarElCurrent;
-            const weeks = calendarEl.querySelectorAll('.fc-daygrid-body tbody tr');
+            const weeks = calendarElCurrent.querySelectorAll('.fc-daygrid-body tbody tr');
             
+            // For November calendar - original behavior
             if (weeks.length === 6) {
               const today = new Date();
               const currentMonth = info.view.currentStart.getMonth();
@@ -272,12 +227,11 @@
     }
 
     if (calendarElNext && !calendarNext) {
-      // Next month calendar - December 2025
-      const nextMonth = new Date(2025, 11, 1); // December 2025 (month 11 = December)
+      const nextMonth = new Date(2025, 11, 1);
 
       calendarNext = new FullCalendar.Calendar(calendarElNext, {
         initialView: 'dayGridMonth',
-        initialDate: nextMonth, // December 2025
+        initialDate: nextMonth,
         headerToolbar: { left: '', center: 'title', right: '' },
         titleFormat: { month: 'long' },
         height: 'auto',
@@ -286,10 +240,9 @@
         eventDisplay: 'block',
         dayMaxEvents: 3,
         moreLinkClick: 'popover',
-        dayHeaderContent(arg) {
-          const s = arg.date.toLocaleDateString(undefined, { weekday: 'short' });
-          return s?.charAt(0) || 'SMTWTFS'.charAt(arg.date.getDay());
-        },
+        firstDay: 0, // 0 = Sunday, 1 = Monday, etc.
+        locale: 'en-US', // Force US locale which starts with Sunday
+        dayHeaderFormat: { weekday: 'narrow' }, // Use narrow format for single letter
         eventClick(info) {
           const pairingId = info.event.extendedProps.pairingId;
           const row = document.querySelector(`[data-row-id="${pairingId}"]`);
@@ -307,13 +260,11 @@
           setTimeout(() => {
             stripYearFromTitle(calendarElNext.querySelector('.fc-toolbar-title'));
             
-            const calendarEl = calendarElNext;
-            const weeks = calendarEl.querySelectorAll('.fc-daygrid-body tbody tr');
+            const weeks = calendarElNext.querySelectorAll('.fc-daygrid-body tbody tr');
             
             if (weeks.length === 6) {
               weeks.forEach(w => w.classList.remove('week-hidden'));
               
-              // Hide last week if it's mostly next month
               const lastWeek = weeks[weeks.length - 1];
               if (lastWeek) {
                 const days = lastWeek.querySelectorAll('.fc-daygrid-day');
@@ -350,29 +301,24 @@
     const events = buildCalendarEvents(rows);
     console.log('Built events for calendar:', events);
     
-    // Update current month calendar
     if (calendarCurrent) {
       calendarCurrent.removeAllEvents();
-      // Add events one by one - this is more reliable than addEventSource
       events.forEach(event => {
         calendarCurrent.addEvent(event);
-      });
-      console.log('Added', events.length, 'events to October calendar');
-    }
-    
-    // Update next month calendar
-    if (calendarNext) {
-      calendarNext.removeAllEvents();
-      // Add events one by one
-      events.forEach(event => {
-        calendarNext.addEvent(event);
       });
       console.log('Added', events.length, 'events to November calendar');
     }
     
+    if (calendarNext) {
+      calendarNext.removeAllEvents();
+      events.forEach(event => {
+        calendarNext.addEvent(event);
+      });
+      console.log('Added', events.length, 'events to December calendar');
+    }
+    
     setTimeout(applyCalendarLayout, 0);
     
-    // Force both calendars visible on mobile
     setTimeout(() => {
       const isMobile = window.innerWidth <= 640;
       if(isMobile) {
@@ -501,7 +447,7 @@
     if(sum&&!e.target.closest('[data-ck]')){
       sum.classList.toggle('open');
       const details=sum.nextElementSibling;
-      if(!details||!details.classList.contains('details'))return;  // FIX: classList.contains not contains
+      if(!details||!details.classList.contains('details'))return;
       const open=sum.classList.contains('open');
       details.querySelectorAll('.day .legs').forEach(tbl=>{
         tbl.classList.toggle('table-visible', open);
@@ -558,8 +504,6 @@
     }
 
     console.log('API response data:', data);
-    console.log('calendar_rows field:', data.calendar_rows);
-    console.log('rows field:', data.rows);
 
     state.lastPullIso=data.last_pull_local_iso||null;
     state.nextRefreshIso=data.next_pull_local_iso||null;
@@ -575,162 +519,19 @@
       nextEl.innerHTML = base;
     }
 
-    // Use calendar_rows if available (includes past events), otherwise fall back to rows
-    const calendarData = data.calendar_rows || data.rows || [];
-    let tableRows = data.rows || [];
+    // Backend now sends properly formatted rows with OFF calculations already included
+    const calendarData = data.calendar_rows || [];
+    const tableRows = data.rows || [];  // These already include OFF rows between pairings!
     
     console.log('Using for calendar:', calendarData.length, 'items');
-    console.log('Using for table:', tableRows.length, 'items (before filtering)');
+    console.log('Using for table:', tableRows.length, 'items (including OFF rows)');
     
     // Update calendars with ALL events (including past)
     updateCalendarsWithRows(calendarData);
-
-    // FRONTEND OFF CALCULATION - Filter out backend OFF rows and recalculate
-    const pairingsOnly = tableRows.filter(row => row.kind !== 'off');
-    const actualPairings = pairingsOnly.filter(row => {
-      const hasLegs = row.days && row.days.some(d => d.legs && d.legs.length > 0);
-      return hasLegs;
-    });
-    const nonPairingEvents = pairingsOnly.filter(row => {
-      const hasLegs = row.days && row.days.some(d => d.legs && d.legs.length > 0);
-      return !hasLegs;
-    });
     
-    console.log('Filtered to', actualPairings.length, 'actual pairings and', nonPairingEvents.length, 'non-pairing events');
-    
-    // Build new rows array with proper OFF calculation
-    const rowsWithOff = [];
-    
-    // Add OFF (Now) if the first pairing hasn't started yet
-    const now = new Date();
-    if(actualPairings.length > 0){
-      const firstPairing = actualPairings[0];
-      if(firstPairing.report_local_iso){
-        const firstReportTime = new Date(firstPairing.report_local_iso);
-        const msUntilFirst = firstReportTime - now;
-        
-        if(msUntilFirst > 0){
-          // We're currently OFF until the first pairing
-          const totalMinutes = Math.floor(msUntilFirst / (1000 * 60));
-          
-          // Round total minutes to nearest hour
-          let displayHours = Math.round(totalMinutes / 60);
-          
-          let offStr;
-          if(displayHours >= 24){
-            const days = Math.floor(displayHours / 24);
-            const remainingHours = displayHours % 24;
-            if(remainingHours > 0){
-              offStr = `${days}d ${remainingHours}h`;
-            } else {
-              offStr = `${days}d`;
-            }
-          } else {
-            offStr = `${displayHours}h`;
-          }
-          
-          rowsWithOff.push({
-            kind: 'off',
-            display: { 
-              off_dur: offStr + ' (Remaining)',
-              off_label: 'OFF (Now)'
-            }
-          });
-        }
-      }
-    }
-    
-    // Add actual pairings with OFF between them
-    for(let i = 0; i < actualPairings.length; i++){
-      const pairing = actualPairings[i];
-      rowsWithOff.push(pairing);
-      
-      // Calculate OFF to next actual pairing
-      if(i + 1 < actualPairings.length){
-        const nextPairing = actualPairings[i + 1];
-        
-        if(pairing.release_local_iso && nextPairing.report_local_iso){
-          const releaseTime = new Date(pairing.release_local_iso);
-          const nextReportTime = new Date(nextPairing.report_local_iso);
-          const gapMs = nextReportTime - releaseTime;
-          
-          if(gapMs > 0){
-            const totalHours = Math.floor(gapMs / (1000 * 60 * 60));
-            let offStr;
-            if(totalHours >= 24){
-              const days = Math.floor(totalHours / 24);
-              const hours = totalHours % 24;
-              offStr = `${days}d ${hours}h`;
-            } else {
-              offStr = `${totalHours}h`;
-            }
-            
-            // Add OFF row
-            rowsWithOff.push({
-              kind: 'off',
-              display: { off_dur: offStr }
-            });
-            
-            // Add any non-pairing events that fall within this OFF period
-            for(const npe of nonPairingEvents){
-              if(npe.report_local_iso){
-                const eventTime = new Date(npe.report_local_iso);
-                if(eventTime > releaseTime && eventTime < nextReportTime){
-                  // Check if not already added
-                  if(!rowsWithOff.some(r => r.pairing_id === npe.pairing_id)){
-                    rowsWithOff.push(npe);
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-    
-    // Replace tableRows with our recalculated version
-    tableRows = rowsWithOff;
-    console.log('After OFF recalculation:', tableRows.length, 'total rows');
-    
-    // Find first OFF index for special handling
-    let firstOffIndex=-1;
-    for(let i=0;i<tableRows.length;i++){
-      if(tableRows[i]&&tableRows[i].kind==='off'){
-        firstOffIndex=i;
-        break;
-      }
-    }
-    
-    // Calculate precise remaining time for first OFF row if under 24 hours
-    if(firstOffIndex === 0 && tableRows[0] && tableRows[0].kind === 'off'){
-      let nextPairing = null;
-      for(let i = 1; i < tableRows.length; i++){
-        if(tableRows[i] && tableRows[i].kind === 'pairing'){
-          nextPairing = tableRows[i];
-          break;
-        }
-      }
-      
-      if(nextPairing && nextPairing.report_local_iso){
-        const reportTime = new Date(nextPairing.report_local_iso);
-        const now = new Date();
-        const diffMs = reportTime - now;
-        
-        if(diffMs > 0){
-          const totalMinutes = Math.floor(diffMs / 60000);
-          const hours = Math.floor(totalMinutes / 60);
-          const minutes = totalMinutes % 60;
-          
-          if(hours < 24){
-            tableRows[0].display.off_dur = `${hours}h ${minutes}m (Remaining)`;
-          }
-        }
-      }
-    }
-    
-    // Render table with future events only
+    // Render table - rows already have OFF times calculated by backend
     const tbody=qs('#pairings-body');
-    tbody.innerHTML=tableRows.map((row,idx)=>renderRowHTML(row,HOME_BASE,idx===firstOffIndex)).join('');
+    tbody.innerHTML=tableRows.map((row)=>renderRowHTML(row,HOME_BASE)).join('');
     
     // Wrap table in scrollable container on mobile
     const isMobile = window.innerWidth <= 740;
@@ -776,68 +577,68 @@
     });
   }
 
-  function firstDepartureAirport(row){
-    const days=row?.days||[];
-    for(const d of days){
-      const legs=d?.legs||[];
-      if(legs.length&&legs[0].dep)return String(legs[0].dep).toUpperCase();
-    }
-    return null;
-  }
-  
-  function wrapNotBoldBits(text,token){
-    if(!text)return'';
-    const re=new RegExp(`\\s*\\(${token}\\)`,'i');
-    if(re.test(text)){
-      const base=text.replace(re,'').trim();
-      const isSmall=window.matchMedia&&window.matchMedia('(max-width: 640px)').matches;
-      const shown=isSmall&&token==='Remaining'?'Rem.':token;
-      return `${esc(base)} <span class="off-text-normal">(${shown})</span>`;
-    }
-    return esc(text);
-  }
-  
-  function legsCount(row){
-    let n=0;
-    const days=row?.days||[];
-    for(const d of days)n+=(d.legs||[]).length;
-    return n;
-  }
-  
   function pairingNowTag(row){
     return row?.in_progress?' <span class="text-muted-normal">(Now)</span>':'';
   }
 
-  function renderRowHTML(row,homeBase,isFirstOff=false){
+  function renderRowHTML(row,homeBase){
     if(row.kind==='off'){
-      const rawLabel=(row.display&&row.display.off_label)?String(row.display.off_label):'OFF';
-      const labelHTML=wrapNotBoldBits(rawLabel,'Now');
-
-      let dur=String(row.display?.off_dur||'').trim();
-      const isMobile=window.matchMedia&&window.matchMedia('(max-width: 640px)').matches;
-      const remainingText=isMobile?'(Rem.)':'(Remaining)';
+      // Backend provides formatted OFF row with label and duration
+      const display = row.display || {};
+      const offLabel = display.off_label || 'OFF';
+      const offDur = display.off_dur || '';
+      const offDuration = display.off_duration || '';
+      const showRemaining = display.show_remaining || display.off_remaining;
+      const isCurrentOff = row.is_current === true;
       
-      if(/\(.*remaining.*\)/i.test(dur)){
-        dur = dur.replace(/\(\s*remaining\s*\)/i, ` <span class="off-text-normal">${remainingText}</span>`);
-      }else if(isFirstOff){
-        dur = `${dur} <span class="off-text-normal">${remainingText}</span>`;
+      // Format label based on whether this is current OFF period
+      let labelHtml;
+      if (isCurrentOff || offLabel.includes('(Now)')) {
+        // Remove any existing (Now) and add it with proper styling
+        const baseLabel = offLabel.replace('(Now)', '').trim();
+        labelHtml = `<span class="off-label">${esc(baseLabel)}</span> <span class="off-text-normal">(Now)</span>`;
+      } else {
+        labelHtml = `<span class="off-label">${esc(offLabel)}</span>`;
+      }
+      
+      // Format duration - just show the time and "(Remaining)" if applicable
+      let durHtml;
+      if (offDuration) {
+        // Use the clean duration if provided
+        durHtml = esc(offDuration);
+        if (showRemaining) {
+          durHtml += ' <span class="off-text-normal">(Remaining)</span>';
+        }
+      } else if (offDur.includes('Remaining:')) {
+        // Fix old format: "25h (Remaining: 25h)" -> "25h (Remaining)"
+        const match = offDur.match(/^(\d+h)(?:\s*\(Remaining:[^)]+\))?/);
+        if (match) {
+          durHtml = esc(match[1]) + ' <span class="off-text-normal">(Remaining)</span>';
+        } else {
+          durHtml = esc(offDur);
+        }
+      } else {
+        durHtml = esc(offDur);
       }
 
       return `
         <tr class="off">
           <td class="ckcol"></td>
-          <td class="sum-first"><span class="off-label">${labelHTML}</span></td>
-          <td class="off-dur" data-dw="report">${dur}</td>
+          <td class="sum-first">${labelHtml}</td>
+          <td class="off-dur" data-dw="report">${durHtml}</td>
           <td data-dw="release"></td>
         </tr>`;
     }
 
-    const totalLegs=legsCount(row);
-    const hasLegs=totalLegs>0;
-    const isNonPairing=!hasLegs; // Events without legs are non-pairing events
-    const startDep=firstDepartureAirport(row);
-    const showOOB=!!(startDep&&startDep!==homeBase);
-    const oobPill=showOOB?`<span class="pill pill-red">${esc(startDep)}</span>`:'';
+    // Backend provides has_legs and total_legs
+    const hasLegs = row.has_legs || false;
+    const totalLegs = row.total_legs || 0;
+    const isNonPairing = !hasLegs;
+    
+    // Backend provides out_of_base detection
+    const showOOB = row.out_of_base || false;
+    const oobAirport = row.out_of_base_airport || '';
+    const oobPill = showOOB ? `<span class="pill pill-red">${esc(oobAirport)}</span>` : '';
 
     const days=row.days||[];
     const detailsDays=hasLegs?days.map((day,i)=>renderDayHTML(row,day,i,days)).join(''):'';
@@ -849,12 +650,15 @@
            </button>
          </div>`:'';
 
+    // Use num_days from backend ONLY - no frontend calculations
+    const numDays = row.num_days || 1;
+
     return `
       <tr class="summary ${isNonPairing?'non-pairing':''}" data-row-id="${esc(row.pairing_id||'')}">
         ${renderCheckCell(row)}
         <td class="sum-first">
           <strong>${esc(row.pairing_id||'')}</strong>${pairingNowTag(row)}
-          ${hasLegs?`<span class="pill">${row.days?.length||1} day</span>`:``}
+          ${hasLegs?`<span class="pill">${numDays} day</span>`:``}
           ${oobPill}
         </td>
         <td data-dw="report">${esc(row.display?.report_str||'')}</td>
@@ -868,7 +672,6 @@
   }
 
   function renderCheckCell(row){
-    // All events get checkboxes, including non-pairing events
     const ack=row.ack||{};
     const acknowledged=!!ack.acknowledged;
     const windowOpen=!!ack.window_open;
@@ -896,53 +699,64 @@
     const isMobile=window.matchMedia&&window.matchMedia('(max-width: 640px)').matches;
     const dayISO=dayDateFromRow(row,idx,day);
     const dow=weekdayFromISO(dayISO);
+    
+    // Check if this is a layover day
+    if (day.is_layover) {
+      const layoverLocation = day.layover_location || '';
+      const hotel = day.hotel || '';
+      const noFlightsMsg = day.no_flights_message || '';
+      
+      return `
+        <div class="day">
+          <div class="dayhdr">
+            <span class="dot"></span>
+            <span class="daytitle">Day ${idx+1}</span>
+            ${layoverLocation ? ` · Layover: ${esc(layoverLocation)}` : ''}
+            ${hotel ? ` · Hotel: ${esc(hotel)}` : ''}
+          </div>
+          ${noFlightsMsg ? `
+          <div class="legs-wrap">
+            <table class="legs table-visible">
+              <tbody>
+                <tr>
+                  <td colspan="4" style="text-align: center; color: var(--muted); padding: 12px;">
+                    ${esc(noFlightsMsg)}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>` : ''}
+        </div>`;
+    }
+    
     const legs=(day.legs||[]).map(leg=>{
-      const depHHMM=pickHHMM(leg.dep_hhmm,leg.dep_time);
-      const arrHHMM=pickHHMM(leg.arr_hhmm,leg.arr_time);
-      const left=fmtHHMM(depHHMM,want24,false);
-      const right=fmtHHMM(arrHHMM,want24,false);
+      // Backend provides ALL formatted display strings
+      const route = leg.route_display || '';
       
-      // Create tracking cell with FlightAware link
+      // For block time: use backend formatting but store raw times for clock mode switching
+      const depTime = leg.dep_time || '';
+      const arrTime = leg.arr_time || '';
+      const blockTime = leg.block_display || '';
+      
+      // Tracking: use backend-provided display and URL
       let trackCell = '';
-      
-      if (leg.flight) {
-        const flightNum = 'FFT' + String(leg.flight).replace(/[^0-9]/g, '');
-        
-        let showTracking = row.in_progress || false;
-        
-        if (!showTracking && dayISO) {
-          const now = new Date();
-          const flightDate = new Date(dayISO);
-          
-          const todayStr = now.toDateString();
-          const tomorrowDate = new Date(now);
-          tomorrowDate.setDate(tomorrowDate.getDate() + 1);
-          const tomorrowStr = tomorrowDate.toDateString();
-          const flightDateStr = flightDate.toDateString();
-          
-          showTracking = (flightDateStr === todayStr || flightDateStr === tomorrowStr);
-        }
-        
-        if (showTracking) {
-          trackCell = `<a href="https://flightaware.com/live/flight/${flightNum}" target="_blank" class="flight-track-link">${flightNum}</a>`;
-        } else if (dayISO) {
-          const d = new Date(dayISO);
-          trackCell = `Avail. ${d.getMonth()+1}/${d.getDate()}`;
-        } else {
-          trackCell = '';
-        }
-      } else if (dayISO) {
-        const d = new Date(dayISO);
-        trackCell = `Avail. ${d.getMonth()+1}/${d.getDate()}`;
+      if (leg.tracking_url) {
+        // Backend provided a URL - make it a link
+        trackCell = `<a href="${esc(leg.tracking_url)}" target="_blank" class="flight-track-link">${esc(leg.tracking_display)}</a>`;
+      } else if (leg.tracking_display) {
+        // Backend provided display text only (e.g., "Check FLICA" or "Tracking available Nov 12")
+        trackCell = esc(leg.tracking_display);
       } else {
         trackCell = '';
       }
       
+      const isDeadhead = leg.deadhead || false;
+      
       return `
-        <tr class="leg-row ${leg.done?'leg-done':''}">
+        <tr class="leg-row ${leg.done?'leg-done':''}${isDeadhead?' leg-deadhead':''}">
           <td>${esc(leg.flight||'')}</td>
-          <td>${esc(leg.dep||'')}–${esc(leg.arr||'')}</td>
-          <td class="bt" data-dw="bt" data-dep="${esc(depHHMM)}" data-arr="${esc(arrHHMM)}">${left} → ${right}</td>
+          <td>${route}</td>
+          <td class="bt" data-dw="bt" data-dep="${esc(depTime)}" data-arr="${esc(arrTime)}">${blockTime}</td>
           <td>${trackCell}</td>
         </tr>`;
     }).join('');
@@ -1004,56 +818,6 @@
 
   function tickStatusLine(){
     if(state.lastPullIso)setText('#last-pull',minutesOnlyAgo(state.lastPullIso));
-    
-    // Update the first OFF row's remaining time if it exists
-    const tbody = qs('#pairings-body');
-    if(tbody){
-      const firstRow = tbody.querySelector('tr.off');
-      if(firstRow){
-        const offDurCell = firstRow.querySelector('td.off-dur');
-        const offLabelCell = firstRow.querySelector('.off-label');
-        
-        if(offDurCell && offLabelCell && offLabelCell.textContent.includes('(Now)')){
-          let nextPairingRow = firstRow.nextElementSibling;
-          while(nextPairingRow && !nextPairingRow.classList.contains('summary')){
-            nextPairingRow = nextPairingRow.nextElementSibling;
-          }
-          
-          if(nextPairingRow){
-            const reportCell = nextPairingRow.querySelector('td[data-dw="report"]');
-            const origText = reportCell?.getAttribute('data-orig') || reportCell?.textContent;
-            
-            if(origText){
-              const reportDate = new Date(origText);
-              if(!isNaN(reportDate)){
-                const now = new Date();
-                const diffMs = reportDate - now;
-                
-                if(diffMs > 0){
-                  const totalMinutes = Math.floor(diffMs / 60000);
-                  const hours = Math.floor(totalMinutes / 60);
-                  const minutes = totalMinutes % 60;
-                  
-                  const isMobile = window.matchMedia && window.matchMedia('(max-width: 640px)').matches;
-                  const remainingText = isMobile ? '(Rem.)' : '(Remaining)';
-                  
-                  let durText;
-                  if(hours >= 24){
-                    const days = Math.floor(hours / 24);
-                    const remainingHours = hours % 24;
-                    durText = `${days}d ${remainingHours}h`;
-                  } else {
-                    durText = `${hours}h ${minutes}m`;
-                  }
-                  
-                  offDurCell.innerHTML = `${durText} <span class="off-text-normal">${remainingText}</span>`;
-                }
-              }
-            }
-          }
-        }
-      }
-    }
     
     const etaEl=qs('#next-refresh-eta');
     if(!etaEl||!state.nextRefreshIso)return;

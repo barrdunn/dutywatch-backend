@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.css" rel="stylesheet" />
-  <link rel="stylesheet" href="/pairings/pairings.css?v=41">
+  <link rel="stylesheet" href="/pairings/pairings.css?v=44">
 </head>
 <body>
   <div class="wrap">
@@ -40,8 +40,8 @@
         </form>
       </div>
 
-      <!-- Settings block at the very bottom -->
-      <div id="settings-inline" style="display:flex;gap:16px;flex-wrap:wrap;margin-top:16px;flex-direction:row;justify-content:flex-start">
+      <!-- Settings inline -->
+      <div id="settings-inline" style="display:flex;gap:16px;flex-wrap:wrap;margin-top:16px;flex-direction:row">
         <label class="setting-row" style="gap:8px">
           <span>Auto-refresh:</span>
           <select id="refresh-mins" class="toggle">
@@ -59,6 +59,11 @@
             <option value="24">24h</option>
           </select>
         </label>
+      </div>
+
+      <!-- Medical Portal Link - Always visible -->
+      <div style="margin-top:12px">
+        <a href="/medical" class="btn" style="text-decoration:none">Medical Portal →</a>
       </div>
 
       <!-- Pairings table -->
@@ -86,6 +91,6 @@
   }</script>
 
   <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js"></script>
-  <script src="/pairings/pairings.js?v=41"></script>
+  <script src="/pairings/pairings.js?v=44"></script>
 </body>
 </html>

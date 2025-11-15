@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Medical Portal - Barry Dunn</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/pairings/med_portal.css">
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <!-- Header with navigation -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:12px">
+        <div style="display:flex;align-items:center;gap:12px">
+          <h1 style="margin:0">HIMS Medical Portal</h1>
+        </div>
+        <a href="/" class="btn">← Back to Pairings</a>
+      </div>
+
+      <!-- Status chips -->
+      <div class="sub">
+        <span class="chip" id="upcoming-chip">Upcoming: <strong id="upcoming-count">0</strong></span>
+        <span class="chip" id="overdue-chip" style="display:none">Overdue: <strong id="overdue-count">0</strong></span>
+        <span class="chip" id="complete-chip">Completed: <strong id="complete-count">0</strong></span>
+      </div>
+
+      <!-- Controls -->
+      <div class="controls">
+        <button class="btn" id="add-requirement-btn">+ Add Requirement</button>
+      </div>
+
+      <!-- Requirements table -->
+      <table id="requirements">
+        <thead>
+          <tr>
+            <th style="width:25%">Requirement</th>
+            <th style="width:15%">Type</th>
+            <th style="width:15%">Frequency</th>
+            <th style="width:20%">Next Due</th>
+            <th style="width:25%">Status</th>
+          </tr>
+        </thead>
+        <tbody id="requirements-body">
+          <!-- Rows will be inserted here -->
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Add/Edit Requirement Modal -->
+  <div id="requirement-modal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 id="modal-title">Add Requirement</h2>
+        <button class="modal-close" id="req-close-1">✕</button>
+      </div>
+      <div class="modal-content">
+        <form id="requirement-form">
+          <div class="form-group">
+            <label for="req-name">Requirement Name</label>
+            <input type="text" id="req-name" class="form-input" placeholder="e.g., Psychiatrist Evaluation" required />
+          </div>
+
+          <div class="form-group">
+            <label for="req-type">Type</label>
+            <select id="req-type" class="form-input" required>
+              <option value="appointment">Appointment</option>
+              <option value="document">Document</option>
+              <option value="both">Both (Appointment + Document)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="req-frequency">Frequency</label>
+            <select id="req-frequency" class="form-input" required>
+              <option value="monthly">Monthly</option>
+              <option value="quarterly">Quarterly (Every 3 months)</option>
+              <option value="semi-annual">Semi-Annual (Every 6 months)</option>
+              <option value="annual">Annual (Yearly)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="req-first-due">First Due Date</label>
+            <input type="date" id="req-first-due" class="form-input" required />
+          </div>
+
+          <div class="form-group">
+            <label for="req-due-timing">Due Timing</label>
+            <select id="req-due-timing" class="form-input">
+              <option value="end">End of Month</option>
+              <option value="beginning">Beginning of Month</option>
+              <option value="exact">Exact Date</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="req-notes">Notes (Optional)</label>
+            <textarea id="req-notes" class="form-input" rows="3" placeholder="Additional information..."></textarea>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button class="btn secondary" id="req-close-2">Cancel</button>
+        <button class="btn" id="req-save">Save Requirement</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Details Modal -->
+  <div id="details-modal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 id="details-title">Requirement Details</h2>
+        <button class="modal-close" id="details-close-1">✕</button>
+      </div>
+      <div class="modal-content">
+        <div id="details-content">
+          <!-- Appointment section -->
+          <div id="appointment-section" style="display:none">
+            <h3 style="margin-top:0">Appointment</h3>
+            <div class="form-group">
+              <label for="appt-date">Scheduled Date</label>
+              <input type="datetime-local" id="appt-date" class="form-input" />
+            </div>
+            <div class="form-group">
+              <label for="appt-location">Location (Optional)</label>
+              <input type="text" id="appt-location" class="form-input" placeholder="Office address or phone number" />
+            </div>
+          </div>
+
+          <!-- Document section -->
+          <div id="document-section" style="display:none">
+            <h3 style="margin-top:0">Document</h3>
+            <div class="form-group">
+              <label>Upload Letter/Document</label>
+              <input type="file" id="doc-upload" class="form-input" accept=".pdf,.doc,.docx" />
+              <div id="uploaded-docs" style="margin-top:8px"></div>
+            </div>
+          </div>
+
+          <!-- Notes section -->
+          <div class="form-group">
+            <label for="detail-notes">Notes</label>
+            <textarea id="detail-notes" class="form-input" rows="4" placeholder="Add notes about this requirement..."></textarea>
+          </div>
+
+          <!-- Completion -->
+          <div class="form-group">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+              <input type="checkbox" id="mark-complete" />
+              <span>Mark as Complete</span>
+            </label>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn secondary" id="details-close-2">Cancel</button>
+        <button class="btn danger" id="delete-req" style="margin-right:auto">Delete</button>
+        <button class="btn" id="details-save">Save Changes</button>
+      </div>
+    </div>
+  </div>
+
+  <script id="med-boot" type="application/json">{
+    "apiBase": ""
+  }</script>
+
+  <script src="/pairings/med_portal.js"></script>
+</body>
+</html>
