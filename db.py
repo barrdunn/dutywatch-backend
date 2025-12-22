@@ -1,23 +1,23 @@
-# db.py  /* CHANGED */
-from __future__ import annotations  # /* ADDED */
+# db.py
+from __future__ import annotations
 
-import os  # /* ADDED */
-import json  # /* ADDED */
-import sqlite3  # /* ADDED */
-import datetime as dt  # /* ADDED */
-from typing import Any, Dict, List, Optional  # /* ADDED */
+import os
+import json
+import sqlite3
+import datetime as dt
+from typing import Any, Dict, List, Optional
 
-# ---- Paths -----------------------------------------------------------------  /* ADDED */
+# ---- Paths -----------------------------------------------------------------
 
-BASE_DIR = os.path.dirname(__file__)  # /* ADDED */
-DATA_DIR = os.path.join(BASE_DIR, "data")  # /* ADDED */
-os.makedirs(DATA_DIR, exist_ok=True)  # /* ADDED */
-DB_FILE = os.path.join(DATA_DIR, "dutywatch.db")  # /* ADDED */
+BASE_DIR = os.path.dirname(__file__)
+DATA_DIR = os.path.join(BASE_DIR, "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+DB_FILE = os.path.join(DATA_DIR, "dutywatch.db")
 
 
-# ---- Connection -------------------------------------------------------------  /* ADDED */
+# ---- Connection -------------------------------------------------------------
 
-def get_db() -> sqlite3.Connection:  # /* ADDED */
+def get_db() -> sqlite3.Connection:
     con = sqlite3.connect(DB_FILE, check_same_thread=False)
     con.row_factory = sqlite3.Row
     # Pragmas tuned for a small local app
@@ -27,9 +27,9 @@ def get_db() -> sqlite3.Connection:  # /* ADDED */
     return con
 
 
-# ---- Schema (idempotent, safe on every start) ------------------------------  /* ADDED */
+# ---- Schema (idempotent, safe on every start) ------------------------------
 
-def init_db() -> None:  # /* ADDED */
+def init_db() -> None:
     with get_db() as c:
         c.executescript(
             """
@@ -100,6 +100,14 @@ def init_db() -> None:  # /* ADDED */
                 can_hide INTEGER DEFAULT 0,
                 updated_at TEXT
             );
+            
+            -- Commute preferences for out-of-base pairings
+            CREATE TABLE IF NOT EXISTS commute_prefs(
+                pairing_id TEXT PRIMARY KEY,
+                report_local_iso TEXT,
+                tracking_url TEXT,
+                last_updated TEXT
+            );
             """
         )
         # Ensure unique indexes (idempotent)
@@ -107,9 +115,9 @@ def init_db() -> None:  # /* ADDED */
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_hidden_uid ON hidden_uids(uid)")
 
 
-# -------------------- events_cache helpers ----------------------------------  /* ADDED */
+# -------------------- events_cache helpers ----------------------------------
 
-def read_events_cache(scope: str) -> List[Dict[str, Any]]:  # /* ADDED */
+def read_events_cache(scope: str) -> List[Dict[str, Any]]:
     with get_db() as c:
         row = c.execute("SELECT json FROM events_cache WHERE scope=?", (scope,)).fetchone()
         if not row or not row["json"]:
@@ -119,7 +127,7 @@ def read_events_cache(scope: str) -> List[Dict[str, Any]]:  # /* ADDED */
         except Exception:
             return []
 
-def overwrite_events_cache(scope: str, events: List[Dict[str, Any]], *, uid_hash: Optional[str] = None) -> None:  # /* ADDED */
+def overwrite_events_cache(scope: str, events: List[Dict[str, Any]], *, uid_hash: Optional[str] = None) -> None:
     payload = json.dumps(events, ensure_ascii=False)
     now = dt.datetime.utcnow().isoformat()
     with get_db() as c:
@@ -130,16 +138,16 @@ def overwrite_events_cache(scope: str, events: List[Dict[str, Any]], *, uid_hash
             (scope, uid_hash, payload, now),
         )
 
-def clear_events_cache(scope: str) -> None:  # /* ADDED */
+def clear_events_cache(scope: str) -> None:
     with get_db() as c:
         c.execute("DELETE FROM events_cache WHERE scope=?", (scope,))
 
-def read_uid_hash(scope: str) -> Optional[str]:  # /* ADDED */
+def read_uid_hash(scope: str) -> Optional[str]:
     with get_db() as c:
         row = c.execute("SELECT uid_hash FROM events_cache WHERE scope=?", (scope,)).fetchone()
         return row["uid_hash"] if row else None
 
-def write_uid_hash(scope: str, uid_hash: Optional[str]) -> None:  # /* ADDED */
+def write_uid_hash(scope: str, uid_hash: Optional[str]) -> None:
     now = dt.datetime.utcnow().isoformat()
     with get_db() as c:
         cur = c.execute("SELECT 1 FROM events_cache WHERE scope=?", (scope,)).fetchone()
@@ -149,15 +157,15 @@ def write_uid_hash(scope: str, uid_hash: Optional[str]) -> None:  # /* ADDED */
             c.execute("INSERT INTO events_cache(scope, uid_hash, json, updated_at) VALUES(?,?,?,?)", (scope, uid_hash, "[]", now))
 
 
-# -------------------- kv helpers (last pull time, misc) ---------------------  /* ADDED */
+# -------------------- kv helpers (last pull time, misc) ---------------------
 
-def read_last_pull_utc(scope: str) -> Optional[str]:  # /* ADDED */
+def read_last_pull_utc(scope: str) -> Optional[str]:
     key = f"{scope}:last_pull_utc"
     with get_db() as c:
         row = c.execute("SELECT value FROM kv WHERE key=?", (key,)).fetchone()
         return row["value"] if row else None
 
-def set_last_pull_utc(scope: str, iso_ts: Optional[str] = None) -> None:  # /* ADDED */
+def set_last_pull_utc(scope: str, iso_ts: Optional[str] = None) -> None:
     key = f"{scope}:last_pull_utc"
     if iso_ts is None:
         iso_ts = dt.datetime.utcnow().isoformat()
@@ -169,9 +177,9 @@ def set_last_pull_utc(scope: str, iso_ts: Optional[str] = None) -> None:  # /* A
         )
 
 
-# -------------------- hidden helpers (pairing_id) ---------------------------  /* ADDED */
+# -------------------- hidden helpers (pairing_id) ---------------------------
 
-def hidden_add(pairing_id: str, report_local_iso: Optional[str] = None) -> None:  # /* ADDED */
+def hidden_add(pairing_id: str, report_local_iso: Optional[str] = None) -> None:
     if not pairing_id:
         return
     now = dt.datetime.utcnow().isoformat()
@@ -182,16 +190,16 @@ def hidden_add(pairing_id: str, report_local_iso: Optional[str] = None) -> None:
             (pairing_id, report_local_iso or "", now),
         )
 
-def hidden_clear_all() -> None:  # /* ADDED */
+def hidden_clear_all() -> None:
     with get_db() as c:
         c.execute("DELETE FROM hidden_items")
 
-def hidden_all() -> List[str]:  # /* ADDED */
+def hidden_all() -> List[str]:
     with get_db() as c:
         rows = c.execute("SELECT pairing_id FROM hidden_items").fetchall()
         return [r["pairing_id"] for r in rows]
 
-def hidden_count() -> int:  # /* ADDED */
+def hidden_count() -> int:
     """Return total hidden count across both mechanisms for the UI chip."""
     with get_db() as c:
         r1 = c.execute("SELECT COUNT(*) AS n FROM hidden_items").fetchone()
@@ -201,9 +209,9 @@ def hidden_count() -> int:  # /* ADDED */
         return n1 + n2
 
 
-# -------------------- hidden helpers (UID-based) ----------------------------  /* ADDED */
+# -------------------- hidden helpers (UID-based) ----------------------------
 
-def hide_uid(uid: str) -> None:  # /* ADDED */
+def hide_uid(uid: str) -> None:
     if not uid:
         return
     now = dt.datetime.utcnow().isoformat()
@@ -214,19 +222,19 @@ def hide_uid(uid: str) -> None:  # /* ADDED */
             (uid, now),
         )
 
-def list_hidden_uids() -> List[str]:  # /* ADDED */
+def list_hidden_uids() -> List[str]:
     with get_db() as c:
         rows = c.execute("SELECT uid FROM hidden_uids").fetchall()
         return [r["uid"] for r in rows]
 
-def unhide_all() -> None:  # /* ADDED */
+def unhide_all() -> None:
     with get_db() as c:
         c.execute("DELETE FROM hidden_uids")
 
 
-# -------------------- live row helpers --------------------------------------  /* ADDED */
+# -------------------- live row helpers --------------------------------------
 
-def upsert_live_row(row: Dict[str, Any]) -> None:  # /* ADDED */
+def upsert_live_row(row: Dict[str, Any]) -> None:
     """
     Persist a rendered row so an in-progress pairing isn't dropped mid-fly.
     Expects row['pairing_id'] and (optionally) row['release_local_iso'], row['can_hide'].
@@ -249,7 +257,7 @@ def upsert_live_row(row: Dict[str, Any]) -> None:  # /* ADDED */
             (pid, blob, release_local_iso, can_hide_int, now),
         )
 
-def list_live_rows() -> List[Dict[str, Any]]:  # /* ADDED */
+def list_live_rows() -> List[Dict[str, Any]]:
     with get_db() as c:
         rows = c.execute("SELECT json FROM live_rows").fetchall()
         out: List[Dict[str, Any]] = []
@@ -260,7 +268,7 @@ def list_live_rows() -> List[Dict[str, Any]]:  # /* ADDED */
                 pass
         return out
 
-def purge_expired_live(now_iso: str) -> None:  # /* ADDED */
+def purge_expired_live(now_iso: str) -> None:
     """Remove sticky rows after their release time (if present)."""
     try:
         now = dt.datetime.fromisoformat(now_iso.replace("Z", "+00:00"))
@@ -283,10 +291,51 @@ def purge_expired_live(now_iso: str) -> None:  # /* ADDED */
         if to_delete:
             c.executemany("DELETE FROM live_rows WHERE pairing_id=?", [(pid,) for pid in to_delete])
 
+def delete_live_row(pairing_id: str) -> None:
+    """Delete a specific live row"""
+    with get_db() as c:
+        c.execute("DELETE FROM live_rows WHERE pairing_id=?", (pairing_id,))
 
-# -------------------- misc ---------------------------------------------------  /* ADDED */
 
-def list_scopes() -> List[str]:  # /* ADDED */
+# -------------------- misc ---------------------------------------------------
+
+def list_scopes() -> List[str]:
     with get_db() as c:
         rows = c.execute("SELECT scope FROM events_cache ORDER BY scope").fetchall()
         return [r["scope"] for r in rows]
+
+
+# -------------------- commute preferences -----------------------------------
+
+def get_commute_pref(pairing_id: str) -> Optional[Dict[str, Any]]:
+    """Get commute preferences for a pairing"""
+    with get_db() as c:
+        row = c.execute(
+            "SELECT * FROM commute_prefs WHERE pairing_id = ?",
+            (pairing_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+def save_commute_pref(pairing_id: str, report_iso: str = None, tracking_url: str = None):
+    """Save commute preferences for a pairing"""
+    now_iso = dt.datetime.utcnow().isoformat()
+    
+    with get_db() as c:
+        existing = c.execute(
+            "SELECT 1 FROM commute_prefs WHERE pairing_id = ?",
+            (pairing_id,)
+        ).fetchone()
+        
+        if existing:
+            c.execute(
+                """UPDATE commute_prefs 
+                   SET report_local_iso = ?, tracking_url = ?, last_updated = ?
+                   WHERE pairing_id = ?""",
+                (report_iso, tracking_url, now_iso, pairing_id)
+            )
+        else:
+            c.execute(
+                """INSERT INTO commute_prefs (pairing_id, report_local_iso, tracking_url, last_updated)
+                   VALUES (?, ?, ?, ?)""",
+                (pairing_id, report_iso, tracking_url, now_iso)
+            )

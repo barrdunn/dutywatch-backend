@@ -22,6 +22,7 @@ import cal_client as cal
 from cache_meta import read_cache_meta, write_cache_meta, normalize_cached_events
 from rows import build_pairing_rows, end_of_next_month_local, grouping_key
 from db import get_db, init_db
+from utils import iso_to_dt, to_local, to_utc, human_ago, human_ago_precise, fmt_time
 
 # ---- Optional DB helpers (server-side hidden + sticky rows) ----
 try:
@@ -55,9 +56,11 @@ except Exception:  # safe fallbacks
 # ---------------- Paths / Static ----------------
 BASE_DIR = Path(__file__).parent.resolve()
 PAIRINGS_DIR = BASE_DIR / "public" / "pairings"
+MED_PORTAL_DIR = BASE_DIR / "public" / "med_portal"
 
 app = FastAPI(title="DutyWatch Backend (Viewer-Only)")
 app.mount("/pairings", StaticFiles(directory=PAIRINGS_DIR, html=True), name="pairings")
+app.mount("/med_portal", StaticFiles(directory=MED_PORTAL_DIR, html=True), name="med_portal")
 
 @app.get("/pairings", include_in_schema=False)
 def pairings_index_direct():
@@ -70,7 +73,7 @@ def root_index():
 @app.get("/medical", include_in_schema=False)
 def medical_portal():
     """Serve the medical portal page"""
-    return FileResponse(PAIRINGS_DIR / "med_portal.html")
+    return FileResponse(MED_PORTAL_DIR / "index.html")
 
 # ---------------- Logging + middleware ----------------
 logging.basicConfig(
@@ -112,71 +115,6 @@ state = State()
 
 def _now_utc() -> dt.datetime:
     return dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc)
-
-def iso_to_dt(s: Optional[str]) -> Optional[dt.datetime]:
-    if not s:
-        return None
-    try:
-        s = s.replace("Z", "+00:00")
-        return dt.datetime.fromisoformat(s)
-    except Exception:
-        return None
-
-def to_local(d: Optional[dt.datetime]) -> Optional[dt.datetime]:
-    if not d:
-        return None
-    if d.tzinfo is None:
-        d = d.replace(tzinfo=dt.timezone.utc)
-    return d.astimezone(LOCAL_TZ)
-
-def to_utc(d: dt.datetime) -> dt.datetime:
-    if d.tzinfo is None:
-        d = d.replace(tzinfo=LOCAL_TZ)
-    return d.astimezone(dt.timezone.utc)
-
-def human_ago_precise(from_dt: Optional[dt.datetime]) -> str:
-    if not from_dt:
-        return "never"
-    now = dt.datetime.now(LOCAL_TZ)
-    delta = now - from_dt
-    if delta.total_seconds() < 0:
-        delta = dt.timedelta(0)
-    s = int(delta.total_seconds())
-    m = s // 60
-    s = s % 60
-    if m and s:
-        return f"{m}m {s}s ago"
-    if m:
-        return f"{m}m ago"
-    return f"{s}s ago"
-
-def human_ago(from_dt: Optional[dt.datetime]) -> str:
-    if not from_dt:
-        return "never"
-    now = dt.datetime.now(LOCAL_TZ)
-    delta = now - from_dt
-    secs = int(delta.total_seconds())
-    if secs < 60:
-        return "just now"
-    mins = secs // 60
-    if mins < 60:
-        return f"{mins} min{'s' if mins != 1 else ''} ago"
-    hours = mins // 60
-    if hours < 24:
-        return f"{hours} hour{'s' if hours != 1 else ''} ago"
-    days = hours // 24
-    return f"{days} day{'s' if days != 1 else ''} ago"
-
-def _fmt_time(hhmm: str, use_24h: bool) -> str:
-    if not hhmm:
-        return ""
-    s = str(hhmm).zfill(4)
-    h = int(s[:2]); m = int(s[2:])
-    if use_24h:
-        return f"{h:02d}:{m:02d}"
-    ampm = "AM" if h < 12 else "PM"
-    hh = h % 12 or 12
-    return f"{hh}:{m:02d} {ampm}"
 
 # ---------------- Calendar fetch ----------------
 def fetch_current_to_next_eom() -> List[Dict[str, Any]]:
@@ -492,9 +430,9 @@ async def api_pairings(
         # Filter events to future only (keep in-progress)
         future_events = []
         for ev in window_events:
-            end_utc = iso_to_dt(ev.get("end_utc"))
-            if end_utc:
-                end_local = to_local(end_utc)
+            end_utc_ev = iso_to_dt(ev.get("end_utc"))
+            if end_utc_ev:
+                end_local = to_local(end_utc_ev)
                 if end_local and end_local >= now_local:
                     future_events.append(ev)
         
@@ -534,14 +472,14 @@ async def api_pairings(
             for key in ["report_hhmm", "release_hhmm"]:
                 val = disp.get(key) or r.get(key)
                 if val and isinstance(val, str) and val.isdigit():
-                    disp[f"{key.split('_')[0]}_str"] = _fmt_time(val, use_24h)
+                    disp[f"{key.split('_')[0]}_str"] = fmt_time(val, use_24h)
 
             # Format leg times
             for d in (r.get("days") or []):
                 for leg in (d.get("legs") or []):
                     for t in ["dep_time", "arr_time"]:
                         if leg.get(t) and not leg.get(f"{t}_str"):
-                            leg[f"{t}_str"] = _fmt_time(str(leg[t]).zfill(4), use_24h)
+                            leg[f"{t}_str"] = fmt_time(str(leg[t]).zfill(4), use_24h)
 
         # Format ALL rows for calendar
         calendar_rows = []
@@ -552,7 +490,7 @@ async def api_pairings(
 
         logger.info(f"Built {len(calendar_rows)} calendar rows (including past)")
 
-        # Filter table rows by visibility and time - PRESERVE OFF ROWS
+        # Filter table rows by visibility and time - PRESERVE OFF ROWS AND COMMUTE ROWS
         visible: List[Dict[str, Any]] = []
         
         for r in table_rows:
@@ -560,6 +498,11 @@ async def api_pairings(
             
             # Always keep OFF rows - they were calculated by build_pairing_rows
             if r.get("kind") == "off":
+                visible.append(r)
+                continue
+            
+            # Always keep commute rows - they're associated with out-of-base pairings
+            if r.get("kind") == "commute":
                 visible.append(r)
                 continue
                 
@@ -765,6 +708,82 @@ log = _logging.getLogger("dutywatch")
 class _HideReq(BaseModel):
     pairing_id: str
     report_local_iso: str | None = None
+
+# ---------------- Commute API endpoints ----------------
+class CommuteUpdate(BaseModel):
+    report_time: Optional[str] = None  # Time in HH:MM format
+    tracking_url: Optional[str] = None
+
+@app.get("/api/commute/{pairing_id}")
+async def get_commute(pairing_id: str):
+    """Get commute preferences for a pairing"""
+    try:
+        # Try to import the function from db.py
+        try:
+            from db import get_commute_pref
+        except ImportError:
+            # Function doesn't exist yet, return empty
+            return {"ok": True, "data": {}}
+        
+        prefs = await run_in_threadpool(get_commute_pref, pairing_id)
+        return {"ok": True, "data": prefs or {}}
+    except Exception as e:
+        logger.exception("Failed to get commute prefs: %s", e)
+        return {"ok": False, "data": {}}
+
+@app.post("/api/commute/{pairing_id}")
+async def update_commute(pairing_id: str, update: CommuteUpdate):
+    """Update commute report time and/or tracking URL"""
+    try:
+        # Try to import the functions from db.py
+        try:
+            from db import save_commute_pref, get_commute_pref
+        except ImportError:
+            # Functions don't exist yet, return error
+            raise HTTPException(status_code=501, detail="Commute feature not yet implemented in database")
+        
+        # Get existing prefs
+        existing = await run_in_threadpool(get_commute_pref, pairing_id)
+        
+        # Parse the report time if provided
+        report_iso = None
+        if update.report_time:
+            # Parse HH:MM format 
+            time_parts = update.report_time.split(":")
+            if len(time_parts) == 2:
+                hour = int(time_parts[0])
+                minute = int(time_parts[1])
+                
+                # Get the date from the pairing ID (format: COMMUTE-D3301)
+                # For now, use tomorrow as a simple default
+                now = dt.datetime.now(LOCAL_TZ)
+                tomorrow = now + dt.timedelta(days=1)
+                report_dt = tomorrow.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                report_iso = report_dt.isoformat()
+        else:
+            report_iso = existing.get("report_local_iso") if existing else None
+        
+        tracking_url = update.tracking_url if update.tracking_url is not None else (existing.get("tracking_url") if existing else None)
+        
+        # Save to database
+        await run_in_threadpool(save_commute_pref, pairing_id, report_iso, tracking_url)
+        
+        # Return updated data
+        return {
+            "ok": True, 
+            "data": {
+                "pairing_id": pairing_id,
+                "report_local_iso": report_iso,
+                "tracking_url": tracking_url
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to update commute prefs: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ---------------- Hidden pairing endpoints ----------------
 
 @app.post("/api/hidden/hide")
 @app.post("/api/hidden/hide/")
