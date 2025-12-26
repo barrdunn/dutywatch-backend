@@ -1,6 +1,6 @@
 """
 Builds pairing/off rows for the frontend table.
-WORKING VERSION: Properly handles commutes with correct times and labels.
+WORKING VERSION: Properly handles pairings without commute rows.
 """
 
 from __future__ import annotations
@@ -14,6 +14,44 @@ from parser import parse_pairing_days
 from utils import iso_to_dt, to_local, ensure_hhmm, to_12h, time_display, human_duration
 
 LOCAL_TZ = ZoneInfo(os.getenv("LOCAL_TZ", "America/Chicago"))
+
+
+def format_off_duration(td: dt.timedelta, show_minutes: bool = False) -> str:
+    """Format duration for OFF rows. 
+    - If show_minutes=True (for current/remaining): shows hours+minutes when under 24h
+    - If show_minutes=False: rounds to nearest hour
+    """
+    total_seconds = int(td.total_seconds())
+    if total_seconds < 0:
+        return "0h"
+    
+    days = total_seconds // 86400
+    hours = (total_seconds % 86400) // 3600
+    minutes = (total_seconds % 3600) // 60
+    
+    if show_minutes:
+        # Show precise hours and minutes (for "Remaining" row)
+        if days == 0:
+            if minutes == 0:
+                return f"{hours}h"
+            return f"{hours}h {minutes}m"
+        else:
+            if hours == 0:
+                return f"{days}d"
+            return f"{days}d {hours}h"
+    else:
+        # Round to nearest hour
+        total_hours = total_seconds / 3600
+        rounded_hours = round(total_hours)
+        
+        if rounded_hours < 24:
+            return f"{rounded_hours}h"
+        else:
+            days = rounded_hours // 24
+            remaining_hours = rounded_hours % 24
+            if remaining_hours == 0:
+                return f"{days}d"
+            return f"{days}d {remaining_hours}h"
 
 
 def end_of_next_month_local() -> dt.datetime:
@@ -282,12 +320,14 @@ def build_pairing_rows(
         pairing_report_local = None
         if parsed_days and parsed_days[0].get("actual_date") and parsed_days[0].get("report"):
             import logging
-            logging.info(f"Building report from date {parsed_days[0]['actual_date']} and time {parsed_days[0]['report']}")
+            logging.info(f"Building report for {pairing_id} from date {parsed_days[0]['actual_date']} and time {parsed_days[0]['report']}")
             pairing_report_local = combine_local(parsed_days[0]["actual_date"], parsed_days[0]["report"])
-            logging.info(f"Report datetime: {pairing_report_local} ({pairing_report_local.strftime('%A') if pairing_report_local else 'None'})")
+            logging.info(f"Report datetime for {pairing_id}: {pairing_report_local} ({pairing_report_local.strftime('%A %H:%M') if pairing_report_local else 'None'})")
         elif not parsed_days or not parsed_days[0].get("report"):
             if evs_sorted:
                 pairing_report_local = to_local(iso_to_dt(evs_sorted[0].get("start_utc")))
+                import logging
+                logging.info(f"Using calendar start_utc for {pairing_id}: {pairing_report_local}")
         
         pairing_release_local = None
         if parsed_days and parsed_days[-1].get("actual_date") and parsed_days[-1].get("release"):
@@ -349,7 +389,7 @@ def build_pairing_rows(
                                 leg["tracking_message"] = "Track →"
                                 leg["tracking_clickable"] = True
                         else:
-                            leg["tracking_message"] = f"Tracking available {dep_dt.strftime('%b %d')}"
+                            leg["tracking_message"] = f"Avail. {dep_dt.strftime('%-m/%d')}"
                             leg["tracking_display"] = leg["tracking_message"]
                     else:
                         leg["tracking_available"] = False
@@ -476,23 +516,6 @@ def build_pairing_rows(
         if not out_of_base_airport and not is_home_pairing and first_dep_airport and first_dep_airport != home_base:
             out_of_base_airport = first_dep_airport
 
-        # Calculate commute times if out-of-base
-        commute_to_iso = None
-        commute_from_iso = None
-        if out_of_base_airport and pairing_report_local:
-            # Calculate commute times once, right here
-            commute_to_dt = pairing_report_local - dt.timedelta(hours=6)
-            commute_to_iso = commute_to_dt.isoformat()
-            
-            # Check if we end at home base or stay out
-            last_day = days_with_flags[-1] if days_with_flags else None
-            if last_day and last_day.get("legs"):
-                last_arrival = last_day["legs"][-1].get("arr", "").upper()
-                if last_arrival != home_base:
-                    # We're staying out, need return commute
-                    commute_from_dt = pairing_release_local + dt.timedelta(hours=1)
-                    commute_from_iso = commute_from_dt.isoformat()
-
         pairings.append({
             "kind": "pairing",
             "pairing_id": pairing_id,
@@ -508,9 +531,6 @@ def build_pairing_rows(
             "first_dep_airport": first_dep_airport,
             "out_of_base": bool(out_of_base_airport),
             "out_of_base_airport": out_of_base_airport,
-            # Store pre-calculated commute times
-            "commute_to_iso": commute_to_iso,
-            "commute_from_iso": commute_from_iso,
         })
 
     pairings.sort(key=lambda r: r.get("report_local_iso") or "")
@@ -518,7 +538,7 @@ def build_pairing_rows(
     if not include_off_rows:
         return pairings
 
-    # Build rows with OFF times and commutes
+    # Build rows with OFF times (no commutes)
     actual_pairings = []
     non_pairing_events = []
     now_local = dt.datetime.now(LOCAL_TZ)
@@ -526,16 +546,6 @@ def build_pairing_rows(
     for p in pairings:
         days = p.get("days", [])
         has_legs = any(day.get("legs") for day in days)
-        
-        # Debug D3301
-        if p.get("pairing_id") == "D3301":
-            import logging
-            logging.info(f"DEBUG D3301 CATEGORIZATION:")
-            logging.info(f"  - days count: {len(days)}")
-            logging.info(f"  - has_legs: {has_legs}")
-            logging.info(f"  - out_of_base: {p.get('out_of_base')}")
-            logging.info(f"  - out_of_base_airport: {p.get('out_of_base_airport')}")
-            logging.info(f"  - going to: {'actual_pairings' if has_legs else 'non_pairing_events'}")
         
         if has_legs:
             actual_pairings.append(p)
@@ -545,161 +555,11 @@ def build_pairing_rows(
     import logging
     logging.info(f"Building rows with {len(actual_pairings)} actual pairings and {len(non_pairing_events)} non-pairing events")
     
-    # Build all events (pairings + commutes) first
+    # Build all events (pairings only, no commutes)
     all_events = []
     
-    # Import database function for saved preferences
-    try:
-        from db import get_commute_pref
-    except ImportError:
-        get_commute_pref = lambda x: None
-    
     for p in actual_pairings:
-        pairing_id = p.get("pairing_id", "")
-        report_iso = p.get("report_local_iso")
-        release_iso = p.get("release_local_iso")
-        
-        # Debug ALL D-prefix pairings
-        if pairing_id.startswith("D"):
-            import logging
-            logging.info(f"DEBUG {pairing_id} IN COMMUTE LOOP:")
-            logging.info(f"  - report_iso: {report_iso}")
-            logging.info(f"  - out_of_base: {p.get('out_of_base')}")
-            logging.info(f"  - out_of_base_airport: {p.get('out_of_base_airport')}")
-        
-        # Parse to datetime preserving timezone
-        report_dt = None
-        release_dt = None
-        
-        if report_iso:
-            report_dt = dt.datetime.fromisoformat(report_iso)
-            if report_dt.tzinfo is None:
-                report_dt = report_dt.replace(tzinfo=LOCAL_TZ)
-        
-        if release_iso:
-            release_dt = dt.datetime.fromisoformat(release_iso)
-            if release_dt.tzinfo is None:
-                release_dt = release_dt.replace(tzinfo=LOCAL_TZ)
-        
-        # Check if out-of-base
-        out_of_base = p.get("out_of_base", False)
-        out_of_base_airport = p.get("out_of_base_airport")
-        
-        # Debug logging for D3301
-        if pairing_id == "D3301":
-            import logging
-            logging.info(f"DEBUG D3301: report_iso = {report_iso}")
-            logging.info(f"DEBUG D3301: report_dt = {report_dt}")
-            if report_dt:
-                logging.info(f"DEBUG D3301: report_dt day = {report_dt.strftime('%A')}")
-                logging.info(f"DEBUG D3301: report_dt formatted = {report_dt.strftime('%a %b %d %I:%M %p')}")
-        
-        # Add COMMUTE TO if out-of-base
-        if pairing_id.startswith("D"):
-            import logging
-            logging.info(f"DEBUG {pairing_id} COMMUTE CHECK:")
-            logging.info(f"  - out_of_base: {out_of_base}")
-            logging.info(f"  - out_of_base_airport: {out_of_base_airport}")
-            logging.info(f"  - report_dt: {report_dt}")
-            logging.info(f"  - condition result: {out_of_base and out_of_base_airport and report_dt}")
-        
-        if out_of_base and out_of_base_airport and report_dt:
-            commute_id = f"COMMUTE-TO-{pairing_id}"
-            
-            saved_prefs = get_commute_pref(commute_id) if get_commute_pref else None
-            
-            # Debug for D-prefix pairings
-            if pairing_id.startswith("D"):
-                import logging
-                logging.info(f"DEBUG {pairing_id} COMMUTE CALCULATION:")
-                logging.info(f"  - saved_prefs: {saved_prefs}")
-            
-            # Always calculate fresh from the pairing's report time
-            # Ignore any saved preferences (they might be wrong)
-            commute_report = report_dt - dt.timedelta(hours=6)
-            
-            # Final debug to show what we're actually using
-            if pairing_id.startswith("D"):
-                logging.info(f"  - FINAL commute_report: {commute_report}")
-                logging.info(f"  - FINAL formatted: {commute_report.strftime('%a %b %d %I:%M %p')}")
-            
-            tracking_url = saved_prefs.get("tracking_url") if saved_prefs else None
-            
-            # Format the commute report time string
-            commute_report_str = f"{commute_report.strftime('%a %b %d')} {commute_report.strftime('%-I:%M %p')}"
-            
-            all_events.append({
-                "kind": "commute",
-                "commute_id": commute_id,
-                "parent_pairing_id": pairing_id,
-                "pairing_id": commute_id,
-                "report_local_iso": commute_report.isoformat(),
-                "release_local_iso": report_dt.isoformat(),
-                "tracking_url": tracking_url,
-                "display": {
-                    "label": f"Commute → {out_of_base_airport}",
-                    "report_str": commute_report_str
-                },
-                "ack": {
-                    "acknowledged": False,
-                    "window_open": False,
-                    "report_local_iso": commute_report.isoformat()
-                },
-                "editable": True,
-                "can_hide": True
-            })
-        
-        # Add the pairing itself
         all_events.append(p)
-        
-        # Add COMMUTE FROM if pairing ends out-of-base
-        if out_of_base and out_of_base_airport and release_dt:
-            last_day = p.get("days", [])[-1] if p.get("days") else None
-            if last_day and last_day.get("legs"):
-                last_arrival = last_day["legs"][-1].get("arr", "").upper()
-                # Only add return commute if we don't end at home base
-                if last_arrival and last_arrival != home_base:
-                    commute_id = f"COMMUTE-FROM-{pairing_id}"
-                    
-                    saved_prefs = get_commute_pref(commute_id) if get_commute_pref else None
-                    
-                    if saved_prefs and saved_prefs.get("report_local_iso"):
-                        commute_from_start = dt.datetime.fromisoformat(saved_prefs["report_local_iso"])
-                        if commute_from_start.tzinfo is None:
-                            commute_from_start = commute_from_start.replace(tzinfo=LOCAL_TZ)
-                        commute_from_end = commute_from_start + dt.timedelta(hours=3)
-                    else:
-                        # Calculate 1 hour after pairing release
-                        # The release_dt already has the correct date and time
-                        # Simply add 1 hour - timedelta handles day boundaries automatically
-                        commute_from_start = release_dt + dt.timedelta(hours=1)
-                        commute_from_end = commute_from_start + dt.timedelta(hours=3)
-                    
-                    tracking_url = saved_prefs.get("tracking_url") if saved_prefs else None
-                    
-                    # Format the commute report time string
-                    commute_from_str = f"{commute_from_start.strftime('%a %b %d')} {commute_from_start.strftime('%-I:%M %p')}"
-                    
-                    all_events.append({
-                        "kind": "commute",
-                        "commute_id": commute_id,
-                        "parent_pairing_id": pairing_id,
-                        "pairing_id": commute_id,
-                        "report_local_iso": commute_from_start.isoformat(),
-                        "release_local_iso": commute_from_end.isoformat(),
-                        "tracking_url": tracking_url,
-                        "display": {
-                            "label": f"Commute → {home_base}",
-                            "report_str": commute_from_str
-                        },
-                        "ack": {
-                            "acknowledged": False,
-                            "window_open": False,
-                            "report_local_iso": commute_from_start.isoformat()
-                        },
-                        "editable": True,
-                        "can_hide": True
-                    })
     
     # Add non-flying events chronologically
     for npe in non_pairing_events:
@@ -718,28 +578,66 @@ def build_pairing_rows(
     # Build final rows with OFF periods
     rows = []
     
-    # Check for initial OFF period
+    # Common airport codes pattern for detecting commute flights
+    AIRPORT_CODE_PATTERN = re.compile(r'^[A-Z]{3}-[A-Z]{3}$')
+    
+    def is_commute_flight(event):
+        """Detect commute flights by naming pattern (e.g., LAS-ORD, DEN-DFW)."""
+        pid = event.get("pairing_id", "")
+        if AIRPORT_CODE_PATTERN.match(pid):
+            return True
+        return False
+    
+    # Helper to find the next actual pairing WITH LEGS (skipping commutes and non-pairing events)
+    def get_next_pairing_report(events_list, start_idx):
+        """Find the report time of the next actual pairing with legs, skipping commutes and non-pairing events."""
+        for j in range(start_idx, len(events_list)):
+            event = events_list[j]
+            # Skip commutes by kind
+            if event.get("kind") == "commute":
+                continue
+            # Skip commute flights detected by pattern (e.g., LAS-ORD)
+            if is_commute_flight(event):
+                continue
+            # Skip non-pairing events (no legs) - these are things like CBT, meetings, etc.
+            if not event.get("has_legs"):
+                continue
+            return iso_to_dt(event.get("report_local_iso")), event.get("pairing_id")
+        return None, None
+    
+    # Check for initial OFF period - only consider actual pairings with legs
     if all_events:
-        first_event = all_events[0]
-        first_report = iso_to_dt(first_event.get("report_local_iso"))
+        # Find first actual pairing with legs (not commute)
+        first_pairing_report, first_pid = get_next_pairing_report(all_events, 0)
         
+        logging.info(f"OFF CALC: now_local={now_local}, first_pairing_report={first_pairing_report}, first_pid={first_pid}")
+        
+        # Check if currently in a pairing (only consider real pairings with legs, not commutes)
         in_pairing = False
         for event in all_events:
+            if event.get("kind") == "commute":
+                continue
+            if is_commute_flight(event):
+                continue
+            if not event.get("has_legs"):
+                continue
             event_start = iso_to_dt(event.get("report_local_iso"))
             event_end = iso_to_dt(event.get("release_local_iso"))
             if event_start and event_end and event_start <= now_local <= event_end:
                 in_pairing = True
+                logging.info(f"OFF CALC: Currently in pairing {event.get('pairing_id')}")
                 break
         
-        if not in_pairing and first_report and first_report > now_local:
-            gap = first_report - now_local
+        if not in_pairing and first_pairing_report and first_pairing_report > now_local:
+            gap = first_pairing_report - now_local
+            logging.info(f"OFF CALC: gap={gap}, gap_hours={gap.total_seconds()/3600:.2f}")
             if gap.total_seconds() > 3600:
                 rows.append({
                     "kind": "off",
                     "is_current": True,
                     "display": {
                         "off_label": "OFF",
-                        "off_duration": human_duration(gap),
+                        "off_duration": format_off_duration(gap, show_minutes=True),
                         "show_remaining": True
                     }
                 })
@@ -749,11 +647,26 @@ def build_pairing_rows(
         rows.append(event)
         
         if i + 1 < len(all_events):
+            # Skip OFF calculation for commutes and non-pairing events
+            if event.get("kind") == "commute":
+                continue
+            # Skip commute flights (e.g., LAS-ORD)
+            if is_commute_flight(event):
+                continue
+            if not event.get("has_legs"):
+                # Non-pairing event (like CBT, etc.) - don't create OFF after it
+                continue
+            
             this_end = iso_to_dt(event.get("release_local_iso"))
-            next_start = iso_to_dt(all_events[i + 1].get("report_local_iso"))
+            
+            # Find next actual pairing with legs (skip commutes and non-pairing events)
+            next_start, next_pid = get_next_pairing_report(all_events, i + 1)
+            
+            logging.info(f"OFF CALC between: {event.get('pairing_id')} ends {this_end}, next {next_pid} starts {next_start}")
             
             if this_end and next_start and next_start > this_end:
                 gap = next_start - this_end
+                logging.info(f"OFF CALC between: gap={gap}, gap_hours={gap.total_seconds()/3600:.2f}")
                 if gap.total_seconds() > 3600:
                     is_current = (now_local >= this_end and now_local < next_start)
                     
@@ -762,7 +675,7 @@ def build_pairing_rows(
                         "is_current": is_current,
                         "display": {
                             "off_label": "OFF",
-                            "off_duration": human_duration(gap),
+                            "off_duration": format_off_duration(gap, show_minutes=is_current),
                             "show_remaining": is_current
                         }
                     })

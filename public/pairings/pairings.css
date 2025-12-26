@@ -621,6 +621,9 @@ tr.summary td {
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 tr.summary td {
@@ -629,8 +632,26 @@ tr.summary td {
   border-bottom: 1px solid var(--pairing-border);
 }
 
-tr.summary:hover td {
-  background: var(--pairing-bg-hover);
+/* Only apply hover on devices that support it (not touch) */
+@media (hover: hover) and (pointer: fine) {
+  tr.summary:hover td {
+    background: var(--pairing-bg-hover);
+  }
+}
+
+/* Reset any stuck states on touch devices */
+@media (hover: none), (pointer: coarse) {
+  tr.summary td,
+  tr.summary:hover td,
+  tr.summary:active td,
+  tr.summary:focus td,
+  tr.summary:focus-within td {
+    background: var(--pairing-bg) !important;
+  }
+  
+  tr.summary.open td {
+    background: var(--pairing-bg) !important;
+  }
 }
 
 tr.summary td:first-child {
@@ -654,8 +675,22 @@ tr.summary.non-pairing td {
   border-bottom: 1px solid var(--event-border);
 }
 
-tr.summary.non-pairing:hover td {
-  background: var(--event-bg-hover);
+/* Only apply hover on devices that support it (not touch) */
+@media (hover: hover) and (pointer: fine) {
+  tr.summary.non-pairing:hover td {
+    background: var(--event-bg-hover);
+  }
+}
+
+/* Reset any stuck states on touch devices */
+@media (hover: none), (pointer: coarse) {
+  tr.summary.non-pairing td,
+  tr.summary.non-pairing:hover td,
+  tr.summary.non-pairing:active td,
+  tr.summary.non-pairing:focus td,
+  tr.summary.non-pairing:focus-within td {
+    background: var(--event-bg) !important;
+  }
 }
 
 tr.summary.non-pairing td:first-child {
@@ -1086,13 +1121,25 @@ tr.highlight td {
   }
   
   /* Shrink columns to fit - normal sizing, normal fonts */
+  .legs-wrap {
+    width: 100%;
+    overflow-x: hidden;
+  }
+  
   .legs td:first-child { width: 15%; }
   .legs td:nth-child(2) { width: 25%; }
   .legs td:nth-child(3) { 
     width: 35%; 
-    white-space: normal; /* Only this column can wrap */
+    white-space: normal !important; /* Allow wrap */
   }
-  .legs td:nth-child(4) { width: 25%; }
+  .legs td:nth-child(4),
+  .legs th:nth-child(4) { 
+    width: 25%; 
+    min-width: 0;
+    white-space: normal !important; /* Allow wrap */
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
   
   /* Keep calendars side by side below header */
   #calendar-container {

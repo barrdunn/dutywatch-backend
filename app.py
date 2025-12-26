@@ -490,7 +490,7 @@ async def api_pairings(
 
         logger.info(f"Built {len(calendar_rows)} calendar rows (including past)")
 
-        # Filter table rows by visibility and time - PRESERVE OFF ROWS AND COMMUTE ROWS
+        # Filter table rows by visibility and time - PRESERVE OFF ROWS
         visible: List[Dict[str, Any]] = []
         
         for r in table_rows:
@@ -498,11 +498,6 @@ async def api_pairings(
             
             # Always keep OFF rows - they were calculated by build_pairing_rows
             if r.get("kind") == "off":
-                visible.append(r)
-                continue
-            
-            # Always keep commute rows - they're associated with out-of-base pairings
-            if r.get("kind") == "commute":
                 visible.append(r)
                 continue
                 
@@ -528,8 +523,6 @@ async def api_pairings(
                 continue
             
             visible.append(r)
-        
-        # Don't clean up OFF rows - keep them all as calculated by build_pairing_rows
 
         # Handle sticky in-progress pairings
         live_rows = await run_in_threadpool(list_live_rows)
@@ -708,80 +701,6 @@ log = _logging.getLogger("dutywatch")
 class _HideReq(BaseModel):
     pairing_id: str
     report_local_iso: str | None = None
-
-# ---------------- Commute API endpoints ----------------
-class CommuteUpdate(BaseModel):
-    report_time: Optional[str] = None  # Time in HH:MM format
-    tracking_url: Optional[str] = None
-
-@app.get("/api/commute/{pairing_id}")
-async def get_commute(pairing_id: str):
-    """Get commute preferences for a pairing"""
-    try:
-        # Try to import the function from db.py
-        try:
-            from db import get_commute_pref
-        except ImportError:
-            # Function doesn't exist yet, return empty
-            return {"ok": True, "data": {}}
-        
-        prefs = await run_in_threadpool(get_commute_pref, pairing_id)
-        return {"ok": True, "data": prefs or {}}
-    except Exception as e:
-        logger.exception("Failed to get commute prefs: %s", e)
-        return {"ok": False, "data": {}}
-
-@app.post("/api/commute/{pairing_id}")
-async def update_commute(pairing_id: str, update: CommuteUpdate):
-    """Update commute report time and/or tracking URL"""
-    try:
-        # Try to import the functions from db.py
-        try:
-            from db import save_commute_pref, get_commute_pref
-        except ImportError:
-            # Functions don't exist yet, return error
-            raise HTTPException(status_code=501, detail="Commute feature not yet implemented in database")
-        
-        # Get existing prefs
-        existing = await run_in_threadpool(get_commute_pref, pairing_id)
-        
-        # Parse the report time if provided
-        report_iso = None
-        if update.report_time:
-            # Parse HH:MM format 
-            time_parts = update.report_time.split(":")
-            if len(time_parts) == 2:
-                hour = int(time_parts[0])
-                minute = int(time_parts[1])
-                
-                # Get the date from the pairing ID (format: COMMUTE-D3301)
-                # For now, use tomorrow as a simple default
-                now = dt.datetime.now(LOCAL_TZ)
-                tomorrow = now + dt.timedelta(days=1)
-                report_dt = tomorrow.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                report_iso = report_dt.isoformat()
-        else:
-            report_iso = existing.get("report_local_iso") if existing else None
-        
-        tracking_url = update.tracking_url if update.tracking_url is not None else (existing.get("tracking_url") if existing else None)
-        
-        # Save to database
-        await run_in_threadpool(save_commute_pref, pairing_id, report_iso, tracking_url)
-        
-        # Return updated data
-        return {
-            "ok": True, 
-            "data": {
-                "pairing_id": pairing_id,
-                "report_local_iso": report_iso,
-                "tracking_url": tracking_url
-            }
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("Failed to update commute prefs: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
 
 # ---------------- Hidden pairing endpoints ----------------
 

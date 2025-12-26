@@ -180,9 +180,9 @@
         eventDisplay: 'block',
         dayMaxEvents: 3,
         moreLinkClick: 'popover',
-        firstDay: 0, // 0 = Sunday, 1 = Monday, etc.
-        locale: 'en-US', // Force US locale which starts with Sunday
-        dayHeaderFormat: { weekday: 'narrow' }, // Use narrow format for single letter
+        firstDay: 0,
+        locale: 'en-US',
+        dayHeaderFormat: { weekday: 'narrow' },
         eventClick(info) {
           const pairingId = info.event.extendedProps.pairingId;
           const row = document.querySelector(`[data-row-id="${pairingId}"]`);
@@ -202,7 +202,6 @@
             
             const weeks = calendarElCurrent.querySelectorAll('.fc-daygrid-body tbody tr');
             
-            // Hide last week if it's mostly next month days
             if (weeks.length === 6) {
               const today = new Date();
               const currentMonth = info.view.currentStart.getMonth();
@@ -229,7 +228,6 @@
     }
 
     if (calendarElNext && !calendarNext) {
-      // Use next month dynamically (handles year rollover automatically)
       const now = new Date();
       const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
 
@@ -244,9 +242,9 @@
         eventDisplay: 'block',
         dayMaxEvents: 3,
         moreLinkClick: 'popover',
-        firstDay: 0, // 0 = Sunday, 1 = Monday, etc.
-        locale: 'en-US', // Force US locale which starts with Sunday
-        dayHeaderFormat: { weekday: 'narrow' }, // Use narrow format for single letter
+        firstDay: 0,
+        locale: 'en-US',
+        dayHeaderFormat: { weekday: 'narrow' },
         eventClick(info) {
           const pairingId = info.event.extendedProps.pairingId;
           const row = document.querySelector(`[data-row-id="${pairingId}"]`);
@@ -350,114 +348,6 @@
     }catch(e){
       console.error(e);
     }
-  };
-  
-  // Commute functions
-  window.saveCommuteTime = async function(commuteId) {
-    const input = document.getElementById(`time-${commuteId}`);
-    if (!input || !input.value) {
-      alert('Please select a time');
-      return;
-    }
-    
-    // Get the date from the row's data attribute
-    const row = document.querySelector(`[data-commute-id="${commuteId}"]`);
-    const dateStr = row ? row.getAttribute('data-report-date') : '';
-    
-    try {
-      // Send just the time, backend will handle date
-      const response = await fetch(`${apiBase}/api/commute/${commuteId}`, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-          report_time: input.value,
-          date_context: dateStr
-        })
-      });
-      
-      if (response.ok) {
-        alert('Commute time saved!');
-        await renderOnce(); // Refresh the display
-      } else {
-        const error = await response.text();
-        alert(`Failed to save: ${error}`);
-      }
-    } catch(e) {
-      console.error('Failed to save commute time:', e);
-      alert('Failed to save commute time');
-    }
-  };
-  
-  window.saveCommuteTracking = async function(commuteId) {
-    const input = document.getElementById(`tracking-${commuteId}`);
-    if (!input) return;
-    
-    try {
-      const response = await fetch(`${apiBase}/api/commute/${commuteId}`, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({tracking_url: input.value || null})
-      });
-      
-      if (response.ok) {
-        await renderOnce(); // Refresh the display
-      } else {
-        const error = await response.text();
-        alert(`Failed to save: ${error}`);
-      }
-    } catch(e) {
-      console.error('Failed to save tracking URL:', e);
-      alert('Failed to save tracking URL');
-    }
-  };
-  
-  window.removeCommuteTracking = async function(commuteId) {
-    if (!confirm('Remove tracking link?')) return;
-    
-    try {
-      const response = await fetch(`${apiBase}/api/commute/${commuteId}`, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({tracking_url: ''})  // Send empty string instead of null
-      });
-      
-      if (response.ok) {
-        await renderOnce();
-      } else {
-        console.error('Failed to remove tracking URL');
-      }
-    } catch(e) {
-      console.error('Failed to remove tracking URL:', e);
-    }
-  };
-  
-  window.editCommuteTracking = function(commuteId) {
-    // Just show the input field again
-    const trackingDiv = document.querySelector(`#tracking-div-${commuteId}`);
-    const currentUrl = trackingDiv.querySelector('a')?.href || '';
-    
-    trackingDiv.innerHTML = `
-      <input type="url" id="tracking-${esc(commuteId)}" class="commute-tracking-input" 
-             placeholder="https://flightaware.com/..." value="${esc(currentUrl)}" 
-             style="width: 400px; padding: 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--card); color: var(--text);">
-      <button class="btn" style="margin-left: 8px;" onclick="saveCommuteTracking('${esc(commuteId)}')">Save</button>
-      <button class="btn" style="margin-left: 4px;" onclick="renderOnce()">Cancel</button>
-    `;
-  };
-  
-  window.hideCommute = async function(commuteId) {
-    if (!confirm('Hide this commute row?')) return;
-    
-    // For now, just hide it locally
-    const row = document.querySelector(`[data-commute-id="${commuteId}"]`);
-    const detailsRow = row ? row.nextElementSibling : null;
-    
-    if (row) row.style.display = 'none';
-    if (detailsRow && detailsRow.classList.contains('details')) {
-      detailsRow.style.display = 'none';
-    }
-    
-    // TODO: Save hide preference to backend
   };
 
   // ===== Inline settings =====
@@ -631,21 +521,17 @@
       nextEl.innerHTML = base;
     }
 
-    // Backend now sends properly formatted rows with OFF calculations already included
     const calendarData = data.calendar_rows || [];
-    const tableRows = data.rows || [];  // These already include OFF rows between pairings!
+    const tableRows = data.rows || [];
     
     console.log('Using for calendar:', calendarData.length, 'items');
     console.log('Using for table:', tableRows.length, 'items (including OFF rows)');
     
-    // Update calendars with ALL events (including past)
     updateCalendarsWithRows(calendarData);
     
-    // Render table - rows already have OFF times calculated by backend
     const tbody=qs('#pairings-body');
     tbody.innerHTML=tableRows.map((row)=>renderRowHTML(row,HOME_BASE)).join('');
     
-    // Wrap table in scrollable container on mobile
     const isMobile = window.innerWidth <= 740;
     const table = qs('#pairings');
     if(isMobile && table && !table.parentElement.classList.contains('table-wrapper')) {
@@ -695,7 +581,6 @@
 
   function renderRowHTML(row,homeBase){
     if(row.kind==='off'){
-      // Backend provides formatted OFF row with label and duration
       const display = row.display || {};
       const offLabel = display.off_label || 'OFF';
       const offDur = display.off_dur || '';
@@ -703,26 +588,21 @@
       const showRemaining = display.show_remaining || display.off_remaining;
       const isCurrentOff = row.is_current === true;
       
-      // Format label based on whether this is current OFF period
       let labelHtml;
       if (isCurrentOff || offLabel.includes('(Now)')) {
-        // Remove any existing (Now) and add it with proper styling
         const baseLabel = offLabel.replace('(Now)', '').trim();
         labelHtml = `<span class="off-label">${esc(baseLabel)}</span> <span class="off-text-normal">(Now)</span>`;
       } else {
         labelHtml = `<span class="off-label">${esc(offLabel)}</span>`;
       }
       
-      // Format duration - just show the time and "(Remaining)" if applicable
       let durHtml;
       if (offDuration) {
-        // Use the clean duration if provided
         durHtml = esc(offDuration);
         if (showRemaining) {
           durHtml += ' <span class="off-text-normal">(Remaining)</span>';
         }
       } else if (offDur.includes('Remaining:')) {
-        // Fix old format: "25h (Remaining: 25h)" -> "25h (Remaining)"
         const match = offDur.match(/^(\d+h)(?:\s*\(Remaining:[^)]+\))?/);
         if (match) {
           durHtml = esc(match[1]) + ' <span class="off-text-normal">(Remaining)</span>';
@@ -741,107 +621,11 @@
           <td data-dw="release"></td>
         </tr>`;
     }
-    
-    // Handle commute rows
-    if(row.kind==='commute'){
-      const display = row.display || {};
-      const commuteId = row.commute_id || '';
-      const reportStr = display.report_str || 'Set report time';
-      const reportIso = row.report_local_iso || '';
-      const releaseIso = row.release_local_iso || '';  // This is the arrival time
-      const trackingUrl = row.tracking_url || '';
-      const label = display.label || 'Commute';
-      
-      // Extract times from ISO strings
-      let timeValue = '';
-      let dateStr = '';
-      let arrivalStr = '';
-      
-      if (reportIso) {
-        const dt = new Date(reportIso);
-        const hours = String(dt.getHours()).padStart(2, '0');
-        const mins = String(dt.getMinutes()).padStart(2, '0');
-        timeValue = `${hours}:${mins}`;
-        dateStr = dt.toISOString().split('T')[0];
-      }
-      
-      if (releaseIso) {
-        const arrDt = new Date(releaseIso);
-        const arrHours = arrDt.getHours();
-        const arrMins = String(arrDt.getMinutes()).padStart(2, '0');
-        const ampm = arrHours >= 12 ? 'PM' : 'AM';
-        const displayHours = arrHours % 12 || 12;
-        arrivalStr = `Arrive: ${displayHours}:${arrMins} ${ampm}`;
-      }
-      
-      // Create tracking HTML based on whether URL exists
-      let trackingHtml = '';
-      if (trackingUrl && trackingUrl !== 'null' && trackingUrl !== '') {
-        trackingHtml = `
-          <div id="tracking-div-${esc(commuteId)}" style="display: flex; align-items: center; gap: 8px;">
-            <a href="${esc(trackingUrl)}" target="_blank" style="color: #0066cc; text-decoration: underline;">
-              Track Flight →
-            </a>
-            <button class="btn btn-icon" style="padding: 4px 8px; font-size: 14px; opacity: 1.0;" onclick="editCommuteTracking('${esc(commuteId)}')" title="Edit">✏️</button>
-            <button class="btn btn-icon" style="padding: 4px 8px; font-size: 14px; background: #aa3333; opacity: 1.0;" onclick="removeCommuteTracking('${esc(commuteId)}')" title="Remove">🗑️</button>
-          </div>
-        `;
-      } else {
-        trackingHtml = `
-          <div id="tracking-div-${esc(commuteId)}">
-            <input type="url" id="tracking-${esc(commuteId)}" class="commute-tracking-input" 
-                   placeholder="https://flightaware.com/..." value="" 
-                   style="width: 400px; padding: 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--card); color: var(--text);">
-            <button class="btn" style="margin-left: 8px;" onclick="saveCommuteTracking('${esc(commuteId)}')">Save</button>
-          </div>
-        `;
-      }
-      
-      return `
-        <tr class="summary commute" data-commute-id="${esc(commuteId)}" data-report-date="${esc(dateStr)}">
-          ${renderCheckCell(row)}
-          <td class="sum-first">
-            <strong>${label}</strong>
-          </td>
-          <td data-dw="report">${esc(reportStr)}</td>
-          <td data-dw="release">
-            ${trackingUrl && trackingUrl !== 'null' && trackingUrl !== '' ? 
-              `<a href="${esc(trackingUrl)}" target="_blank" style="color: #0066cc; text-decoration: underline;">Track →</a>` : ''}
-            ${arrivalStr ? `<div style="font-size: 0.9em; color: var(--muted); margin-top: 2px;">${esc(arrivalStr)}</div>` : ''}
-          </td>
-        </tr>
-        <tr class="details">
-          <td colspan="4">
-            <div class="daysbox" style="padding: 16px;">
-              <div style="margin-bottom: 12px;">
-                <label style="display: block; margin-bottom: 4px; font-weight: 600; color: var(--text);">Commute Report Time:</label>
-                <input type="time" id="time-${esc(commuteId)}" class="commute-report-input" value="${esc(timeValue)}" style="padding: 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--card); color: var(--text);">
-                <button class="btn" style="margin-left: 8px;" onclick="saveCommuteTime('${esc(commuteId)}')">Save</button>
-              </div>
-              <div style="margin-bottom: 12px;">
-                <label style="display: block; margin-bottom: 4px; font-weight: 600; color: var(--text);">Commute Arrival Time:</label>
-                <div style="padding: 6px; color: var(--text);">
-                  ${arrivalStr || 'Arrival time will be set based on pairing report time'}
-                </div>
-              </div>
-              <div style="margin-bottom: 12px;">
-                <label style="display: block; margin-bottom: 4px; font-weight: 600; color: var(--text);">FlightAware Tracking:</label>
-                ${trackingHtml}
-              </div>
-              <div>
-                <button class="btn" style="background: var(--accent); color: #031323;" onclick="hideCommute('${esc(commuteId)}')">Hide This Commute</button>
-              </div>
-            </div>
-          </td>
-        </tr>`;
-    }
 
-    // Backend provides has_legs and total_legs
     const hasLegs = row.has_legs || false;
     const totalLegs = row.total_legs || 0;
     const isNonPairing = !hasLegs;
     
-    // Backend provides out_of_base detection
     const showOOB = row.out_of_base || false;
     const oobAirport = row.out_of_base_airport || '';
     const oobPill = showOOB ? `<span class="pill pill-red">${esc(oobAirport)}</span>` : '';
@@ -856,7 +640,6 @@
            </button>
          </div>`:'';
 
-    // Use num_days from backend ONLY - no frontend calculations
     const numDays = row.num_days || 1;
 
     return `
@@ -906,7 +689,6 @@
     const dayISO=dayDateFromRow(row,idx,day);
     const dow=weekdayFromISO(dayISO);
     
-    // Check if this is a layover day
     if (day.is_layover) {
       const layoverLocation = day.layover_location || '';
       const hotel = day.hotel || '';
@@ -936,21 +718,15 @@
     }
     
     const legs=(day.legs||[]).map(leg=>{
-      // Backend provides ALL formatted display strings
       const route = leg.route_display || '';
-      
-      // For block time: use backend formatting but store raw times for clock mode switching
       const depTime = leg.dep_time || '';
       const arrTime = leg.arr_time || '';
       const blockTime = leg.block_display || '';
       
-      // Tracking: use backend-provided display and URL
       let trackCell = '';
       if (leg.tracking_url) {
-        // Backend provided a URL - make it a clickable link
         trackCell = `<a href="${esc(leg.tracking_url)}" target="_blank" style="color: #0066cc; text-decoration: underline; cursor: pointer;">Track →</a>`;
       } else if (leg.tracking_display) {
-        // Backend provided display text only (e.g., "Check FLICA" or "Tracking available Nov 12")
         trackCell = `<span style="color: var(--muted);">${esc(leg.tracking_display)}</span>`;
       } else {
         trackCell = '';
