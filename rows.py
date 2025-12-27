@@ -378,7 +378,7 @@ def build_pairing_rows(
                     if dep_dt and leg.get("flight"):
                         tracking_available_dt = dep_dt - dt.timedelta(hours=24)
                         leg["tracking_available"] = now_local >= tracking_available_dt
-                        leg["tracking_available_time"] = tracking_available_dt
+                        leg["tracking_available_time"] = tracking_available_dt.isoformat()
                         
                         if leg.get("tracking_available"):
                             flight_num = str(leg.get("flight", "")).replace("FFT", "")
@@ -409,6 +409,7 @@ def build_pairing_rows(
             days_with_flags.append({
                 **d, 
                 "day_index": idx,
+                "actual_date": anchor_date.isoformat() if anchor_date else None,
                 "date_local_iso": day_report_dt.isoformat() if day_report_dt else None,
                 "day_report_dt": day_report_dt.isoformat() if day_report_dt else None,
                 "day_release_dt": day_release_dt.isoformat() if day_release_dt else None,
@@ -426,8 +427,13 @@ def build_pairing_rows(
         if num_days > 1 and days_with_flags:
             legs_by_date = {}
             for d in days_with_flags:
-                if d.get("actual_date"):
-                    date_key = d["actual_date"].strftime("%Y-%m-%d")
+                actual_date_val = d.get("actual_date")
+                if actual_date_val:
+                    # actual_date is now an ISO string, extract the date part
+                    if isinstance(actual_date_val, str):
+                        date_key = actual_date_val[:10]  # YYYY-MM-DD
+                    else:
+                        date_key = actual_date_val.strftime("%Y-%m-%d")
                     if d.get("legs"):
                         legs_by_date[date_key] = d
             
@@ -451,7 +457,7 @@ def build_pairing_rows(
                         prev_hotel = day.get("hotel")
                 else:
                     layover_day = {
-                        "actual_date": current_date,
+                        "actual_date": current_date.isoformat(),
                         "day_index": day_num + 1,
                         "legs": [],
                         "is_layover": True,
