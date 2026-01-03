@@ -1,19 +1,253 @@
 """
-Builds pairing/off rows for the frontend table.
-WORKING VERSION: Properly handles pairings without commute rows.
+Row Builder - Builds display rows from pairings.
+
+This is the display/formatting layer:
+- Time formatting (12h/24h)
+- OFF period calculations
+- Tracking info (FlightAware links)
+- In-progress status
 """
 
 from __future__ import annotations
 import os
 import datetime as dt
 import re
+import logging
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
-from parser import parse_pairing_days
-from utils import iso_to_dt, to_local, ensure_hhmm, to_12h, time_display, human_duration
+from pairing_builder import build_pairings
+from parser import extract_pairing_id
+from utils import iso_to_dt, to_local, ensure_hhmm, to_12h, time_display
+
+logger = logging.getLogger("rows")
 
 LOCAL_TZ = ZoneInfo(os.getenv("LOCAL_TZ", "America/Chicago"))
+
+
+# =============================================================================
+# Utility functions needed by app.py
+# =============================================================================
+
+def end_of_next_month_local() -> dt.datetime:
+    """Get the end of next month in local timezone."""
+    now_local = dt.datetime.now(LOCAL_TZ)
+    y, m = now_local.year, now_local.month
+    first_next = dt.datetime(y + (1 if m == 12 else 0), (m % 12) + 1, 1, tzinfo=LOCAL_TZ)
+    y2 = first_next.year + (1 if first_next.month == 12 else 0)
+    m2 = (first_next.month % 12) + 1
+    first_after_next = dt.datetime(y2, m2, 1, tzinfo=LOCAL_TZ)
+    return (first_after_next - dt.timedelta(seconds=1)).replace(microsecond=0)
+
+
+def grouping_key(e: Dict[str, Any]) -> str:
+    """
+    Generate a grouping key for an event.
+    Used for compatibility with existing hiding/caching logic.
+    """
+    summary = (e.get("summary") or "").strip()
+    pid = extract_pairing_id(summary) or summary
+    
+    start_utc = iso_to_dt(e.get("start_utc"))
+    if pid and start_utc:
+        date_key = start_utc.strftime("%Y-%m-%d")
+        return f"{pid}|{date_key}"
+    elif pid:
+        return pid
+    
+    uid = (e.get("uid") or "")[:8]
+    return f"PAIR-{uid}"
+
+
+# =============================================================================
+# Main entry point for app.py
+# =============================================================================
+
+def build_pairing_rows(
+    events: List[Dict[str, Any]],
+    is_24h: bool = False,
+    only_reports: bool = False,
+    include_off_rows: bool = True,
+    home_base: str = "DFW",
+    filter_past: bool = False,
+    include_non_pairing_events: bool = True,
+) -> List[Dict[str, Any]]:
+    """
+    Build display rows from calendar events.
+    
+    ALWAYS rebuilds from scratch - no caching, no merging.
+    
+    Args:
+        include_non_pairing_events: If False, excludes CBT, VAC, meetings, etc.
+    """
+    logger.info(f"Building rows from {len(events)} events (fresh rebuild)")
+    
+    # Build pairings from ALL events
+    pairings = build_pairings(events)
+    
+    # Filter out non-pairing events if requested
+    if not include_non_pairing_events:
+        pairings = [p for p in pairings if p.is_pairing]
+        logger.info(f"Filtered to {len(pairings)} actual pairings (excluded non-pairing events)")
+    
+    # Convert to pairing dicts
+    pairing_dicts = [_pairing_to_dict(p) for p in pairings]
+    
+    # Build display rows
+    rows = build_rows(pairing_dicts, is_24h, include_off_rows, home_base)
+    
+    # Filter past rows if requested
+    if filter_past:
+        rows = _filter_past_rows(rows)
+    
+    logger.info(f"Built {len(rows)} rows")
+    return rows
+
+
+def _filter_past_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Filter out past pairings, keeping in-progress ones.
+    Then rebuild OFF rows for the remaining pairings.
+    """
+    now_local = dt.datetime.now(LOCAL_TZ)
+    
+    # First pass: keep future/in-progress pairings and other events
+    kept_pairings = []
+    kept_other = []
+    
+    for r in rows:
+        kind = r.get("kind")
+        
+        # Skip OFF rows - we'll rebuild them
+        if kind == "off":
+            continue
+        
+        # Check if past
+        release_iso = r.get("release_local_iso")
+        pid = r.get("pairing_id", "")
+        
+        # Debug C3075F
+        if pid == "C3075F":
+            logger.info(f"DEBUG C3075F: release_iso={release_iso}, in_progress={r.get('in_progress')}")
+        
+        if release_iso:
+            release_local = to_local(iso_to_dt(release_iso))
+            if release_local and release_local < now_local and not r.get("in_progress"):
+                # Past and not in progress - skip
+                if pid == "C3075F":
+                    logger.info(f"DEBUG C3075F: FILTERED OUT (release={release_local}, now={now_local})")
+                continue
+        
+        if r.get("has_legs"):
+            kept_pairings.append(r)
+        else:
+            kept_other.append(r)
+    
+    # Rebuild OFF rows between kept pairings
+    result = []
+    
+    # Sort kept pairings by report time
+    kept_pairings.sort(key=lambda r: r.get("report_local_iso") or "")
+    
+    # Check for initial OFF (before first pairing)
+    if kept_pairings:
+        first_report = to_local(iso_to_dt(kept_pairings[0].get("report_local_iso")))
+        
+        # Check if we're currently in a pairing
+        in_pairing = any(p.get("in_progress") for p in kept_pairings)
+        
+        if not in_pairing and first_report and first_report > now_local:
+            gap = first_report - now_local
+            if gap.total_seconds() > 0:  # Show any remaining OFF time
+                result.append({
+                    "kind": "off",
+                    "is_current": True,
+                    "display": {
+                        "off_label": "OFF",
+                        "off_duration": format_off_duration(gap, show_minutes=True),
+                        "show_remaining": True,
+                    }
+                })
+    
+    # Add pairings with OFF between them
+    for i, pairing_row in enumerate(kept_pairings):
+        result.append(pairing_row)
+        
+        if i + 1 < len(kept_pairings):
+            this_end = to_local(iso_to_dt(pairing_row.get("release_local_iso")))
+            next_start = to_local(iso_to_dt(kept_pairings[i + 1].get("report_local_iso")))
+            
+            if this_end and next_start and next_start > this_end:
+                gap = next_start - this_end
+                if gap.total_seconds() > 3600:
+                    is_current = (now_local >= this_end and now_local < next_start)
+                    result.append({
+                        "kind": "off",
+                        "is_current": is_current,
+                        "display": {
+                            "off_label": "OFF",
+                            "off_duration": format_off_duration(gap, show_minutes=is_current),
+                            "show_remaining": is_current,
+                        }
+                    })
+    
+    # Insert non-flying events chronologically
+    for nfe in kept_other:
+        nfe_time = iso_to_dt(nfe.get("report_local_iso"))
+        if nfe_time:
+            inserted = False
+            for i, row in enumerate(result):
+                if row.get("kind") == "off":
+                    continue
+                row_time = iso_to_dt(row.get("report_local_iso"))
+                if row_time and nfe_time < row_time:
+                    result.insert(i, nfe)
+                    inserted = True
+                    break
+            if not inserted:
+                result.append(nfe)
+    
+    return result
+
+
+def _pairing_to_dict(pairing) -> Dict[str, Any]:
+    """Convert a Pairing dataclass to a dict for build_rows."""
+    return {
+        "pairing_id": pairing.pairing_id,
+        "base_airports": pairing.base_airports,
+        "is_pairing": pairing.is_pairing,
+        "is_complete": pairing.is_complete,
+        "starts_at_base": pairing.starts_at_base,
+        "ends_at_base": pairing.ends_at_base,
+        "num_days": pairing.num_days,
+        "first_departure": pairing.first_departure,
+        "last_arrival": pairing.last_arrival,
+        "events": [
+            {
+                "uid": ev.uid,
+                "summary": ev.summary,
+                "pairing_id": ev.pairing_id,
+                "start_utc": ev.start_utc,
+                "end_utc": ev.end_utc,
+                "description": ev.description,
+                "location": ev.location,
+                "is_pairing": ev.is_pairing,
+                "legs": ev.legs,
+                "report_time": ev.report_time,
+                "report_date": ev.report_date,
+                "release_time": ev.release_time,
+                "hotel": ev.hotel,
+                "first_departure": ev.first_departure,
+                "last_arrival": ev.last_arrival,
+            }
+            for ev in pairing.events
+        ],
+    }
+
+
+# =============================================================================
+# Display formatting
+# =============================================================================
 
 
 def format_off_duration(td: dt.timedelta, show_minutes: bool = False) -> str:
@@ -30,7 +264,6 @@ def format_off_duration(td: dt.timedelta, show_minutes: bool = False) -> str:
     minutes = (total_seconds % 3600) // 60
     
     if show_minutes:
-        # Show precise hours and minutes (for "Remaining" row)
         if days == 0:
             if minutes == 0:
                 return f"{hours}h"
@@ -40,7 +273,6 @@ def format_off_duration(td: dt.timedelta, show_minutes: bool = False) -> str:
                 return f"{days}d"
             return f"{days}d {hours}h"
     else:
-        # Round to nearest hour
         total_hours = total_seconds / 3600
         rounded_hours = round(total_hours)
         
@@ -52,44 +284,6 @@ def format_off_duration(td: dt.timedelta, show_minutes: bool = False) -> str:
             if remaining_hours == 0:
                 return f"{days}d"
             return f"{days}d {remaining_hours}h"
-
-
-def end_of_next_month_local() -> dt.datetime:
-    now_local = dt.datetime.now(LOCAL_TZ)
-    y, m = now_local.year, now_local.month
-    first_next = dt.datetime(y + (1 if m == 12 else 0), (m % 12) + 1, 1, tzinfo=LOCAL_TZ)
-    y2 = first_next.year + (1 if first_next.month == 12 else 0)
-    m2 = (first_next.month % 12) + 1
-    first_after_next = dt.datetime(y2, m2, 1, tzinfo=LOCAL_TZ)
-    return (first_after_next - dt.timedelta(seconds=1)).replace(microsecond=0)
-
-
-def grouping_key(e: Dict[str, Any]) -> str:
-    """
-    Group events by pairing ID + start date.
-    This prevents separate trips with the same pairing number (e.g., W3086 on different weeks)
-    from being merged together.
-    """
-    pid = (e.get("summary") or "").strip()
-    start_utc = iso_to_dt(e.get("start_utc"))
-    
-    if pid and start_utc:
-        # Use the date (YYYY-MM-DD) as part of the key to separate same-numbered pairings on different dates
-        date_key = start_utc.strftime("%Y-%m-%d")
-        return f"{pid}|{date_key}"
-    elif pid:
-        return pid
-    
-    uid = (e.get("uid") or "")[:8]
-    return f"PAIR-{uid}"
-
-
-def _day_signature(day: Dict[str, Any]) -> str:
-    """Create a unique signature for a day based on report time and legs."""
-    report = day.get("report") or ""
-    legs = day.get("legs") or []
-    leg_sig = "|".join(f"{leg.get('flight')}:{leg.get('dep')}:{leg.get('arr')}:{leg.get('dep_time')}:{leg.get('arr_time')}" for leg in legs)
-    return f"{report}||{leg_sig}"
 
 
 def _parse_report_date(report_date_str: str, reference_date: dt.datetime) -> Optional[dt.date]:
@@ -118,562 +312,383 @@ def _parse_report_date(report_date_str: str, reference_date: dt.datetime) -> Opt
         elif month_num <= 2 and ref_month == 12:
             year += 1
         
-        result = dt.date(year, month_num, day_num)
-        import logging
-        logging.info(f"Parsed report date '{report_date_str}' as {result} ({result.strftime('%A')})")
-        return result
+        return dt.date(year, month_num, day_num)
     except Exception as e:
-        import logging
-        logging.error(f"Failed to parse report date '{report_date_str}': {e}")
+        logger.error(f"Failed to parse report date '{report_date_str}': {e}")
         return None
 
 
-def _parse_day_prefix(day_prefix: str, reference_date: dt.datetime) -> Optional[dt.date]:
-    """Parse a day prefix like 'SU16' or 'MO17' to get the actual date."""
-    if not day_prefix:
+def _combine_local(date_obj: Optional[dt.date], hhmm: Optional[str]) -> Optional[dt.datetime]:
+    """Combine a date and HHMM time string into a local datetime."""
+    if not date_obj or not hhmm:
         return None
+    hhmm = ensure_hhmm(hhmm)
+    return dt.datetime(date_obj.year, date_obj.month, date_obj.day, 
+                       int(hhmm[:2]), int(hhmm[2:]), tzinfo=LOCAL_TZ)
+
+
+def _build_day_row(event: Dict[str, Any], day_index: int, is_24h: bool) -> Dict[str, Any]:
+    """Build a day row from a stored event dict."""
     
-    try:
-        day_num = int(re.search(r'(\d+)', day_prefix).group(1))
-        year = reference_date.year
-        month = reference_date.month
-        date = dt.date(year, month, day_num)
-        
-        if day_num < 15 and reference_date.day > 15:
-            if month == 12:
-                date = dt.date(year + 1, 1, day_num)
-            else:
-                date = dt.date(year, month + 1, day_num)
-        elif day_num > 15 and reference_date.day < 15:
-            if month == 1:
-                date = dt.date(year - 1, 12, day_num)
-            else:
-                date = dt.date(year, month - 1, day_num)
-        
-        return date
-    except Exception:
-        return None
-
-
-def build_pairing_rows(
-    events: List[Dict[str, Any]],
-    is_24h: bool,
-    only_reports: bool,
-    include_off_rows: bool = False,
-    home_base: str = "DFW",
-) -> List[Dict[str, Any]]:
-    """Build pairing rows from calendar events."""
+    # Get reference date from calendar event
+    reference_date = to_local(iso_to_dt(event.get("start_utc"))) or dt.datetime.now(LOCAL_TZ)
     
-    # Group events by pairing ID
-    initial_groups: Dict[str, List[Dict[str, Any]]] = {}
-    for e in events:
-        pid = (e.get("summary") or "").strip()
-        if not pid:
-            uid = (e.get("uid") or "")[:8]
-            pid = f"PAIR-{uid}"
-        initial_groups.setdefault(pid, []).append(e)
+    # Determine the actual date for this day
+    report_date_str = event.get("report_date")
+    if report_date_str:
+        # Date is in the description like "02JAN"
+        actual_date = _parse_report_date(report_date_str, reference_date)
+    else:
+        # Use date from calendar event
+        actual_date = reference_date.date()
     
-    # Split groups based on whether events end at home base
-    final_groups: Dict[str, List[Dict[str, Any]]] = {}
-    group_counter = 0
+    if not actual_date:
+        actual_date = reference_date.date()
     
-    for pid, evs in initial_groups.items():
-        evs_sorted = sorted(evs, key=lambda x: iso_to_dt(x.get("start_utc")) or dt.datetime.min)
-        
-        current_batch = []
-        for e in evs_sorted:
-            if not current_batch:
-                current_batch.append(e)
-            else:
-                prev_event = current_batch[-1]
-                prev_desc = (prev_event.get("description") or "")
-                prev_parsed = parse_pairing_days(prev_desc)
-                prev_days = prev_parsed.get("days") or []
-                
-                ended_at_home = False
-                if prev_days:
-                    last_day = prev_days[-1]
-                    last_legs = last_day.get("legs") or []
-                    if last_legs:
-                        last_arr = last_legs[-1].get("arr", "").upper()
-                        ended_at_home = (last_arr == home_base)
-                
-                if ended_at_home:
-                    final_groups[f"{pid}#{group_counter}"] = current_batch
-                    group_counter += 1
-                    current_batch = [e]
-                else:
-                    current_batch.append(e)
-        
-        if current_batch:
-            final_groups[f"{pid}#{group_counter}"] = current_batch
-            group_counter += 1
-
-    pairings: List[Dict[str, Any]] = []
-
-    for group_key, evs in final_groups.items():
-        pairing_id = group_key.rsplit('#', 1)[0]
-        evs_sorted = sorted(evs, key=lambda x: iso_to_dt(x.get("start_utc")) or dt.datetime.min)
-
-        parsed_days: List[Dict[str, Any]] = []
-        seen_signatures = set()
-        
-        all_parsed_events = []
-        for e in evs_sorted:
-            parsed = parse_pairing_days(e.get("description") or "")
-            event_start_local = to_local(iso_to_dt(e.get("start_utc")))
-            all_parsed_events.append((e, parsed, event_start_local))
-        
-        # Find the first report date
-        first_report_date = None
-        first_report_hhmm = None
-        
-        for e, parsed, event_start_local in all_parsed_events:
-            days = parsed.get("days") or []
-            if days and days[0].get("report_date"):
-                report_date = _parse_report_date(days[0]["report_date"], event_start_local)
-                if report_date:
-                    first_report_date = report_date
-                    first_report_hhmm = days[0].get("report")
-                    break
-        
-        # Build the complete list of days
-        day_prefix_to_date = {}
-        
-        for e, parsed, event_start_local in all_parsed_events:
-            days = parsed.get("days") or []
-            
-            for d in days:
-                sig = _day_signature(d)
-                if sig in seen_signatures:
-                    continue
-                seen_signatures.add(sig)
-                
-                day_date = None
-                day_prefix = None
-                
-                if d.get("legs"):
-                    first_leg = d["legs"][0]
-                    if first_leg.get("day_prefix"):
-                        day_prefix = first_leg["day_prefix"]
-                        day_date = _parse_day_prefix(day_prefix, event_start_local)
-                        
-                        if day_prefix and day_date:
-                            day_prefix_to_date[day_prefix] = day_date
-                
-                if day_prefix and not day_date and day_prefix in day_prefix_to_date:
-                    day_date = day_prefix_to_date[day_prefix]
-                
-                if not parsed_days and first_report_date:
-                    day_date = first_report_date
-                
-                d["actual_date"] = day_date
-                
-                for leg in d.get("legs", []):
-                    is_deadhead = leg.get("deadhead", False)
-                    
-                    if not str(leg.get("flight", "")).startswith("FFT"):
-                        nums = re.findall(r"\d+", str(leg.get("flight", ""))) or []
-                        if nums:
-                            flight_num = nums[0]
-                            if is_deadhead:
-                                leg["flight"] = f"*{flight_num}"
-                            else:
-                                leg["flight"] = flight_num
-                    
-                    dep = leg.get("dep", "")
-                    arr = leg.get("arr", "")
-                    if is_deadhead:
-                        leg["route_display"] = f"*DH {dep}–{arr}"
-                    else:
-                        leg["route_display"] = f"{dep}–{arr}"
-                    
-                    dep_time = leg.get("dep_time", "")
-                    arr_time = leg.get("arr_time", "")
-                    if dep_time and arr_time:
-                        dep_formatted = time_display(dep_time, is_24h)
-                        arr_formatted = time_display(arr_time, is_24h)
-                        leg["block_display"] = f"{dep_formatted} → {arr_formatted}"
-                    elif dep_time:
-                        leg["block_display"] = time_display(dep_time, is_24h)
-                    else:
-                        leg["block_display"] = ""
-                    
-                    leg["dep_time_str"] = time_display(dep_time, is_24h)
-                    leg["arr_time_str"] = time_display(arr_time, is_24h)
-                    
-                    if is_deadhead:
-                        leg["tracking_display"] = "Check FLICA"
-                        leg["tracking_available"] = False
-                        leg["tracking_message"] = "Check FLICA"
-                
-                parsed_days.append(d)
-
-        # Calculate report and release times
-        def combine_local(date_obj: Optional[dt.date], hhmm: Optional[str]) -> Optional[dt.datetime]:
-            if not date_obj or not hhmm:
-                return None
-            hhmm = ensure_hhmm(hhmm)
-            return dt.datetime(date_obj.year, date_obj.month, date_obj.day, 
-                             int(hhmm[:2]), int(hhmm[2:]), tzinfo=LOCAL_TZ)
-
-        pairing_report_local = None
-        if parsed_days and parsed_days[0].get("actual_date") and parsed_days[0].get("report"):
-            import logging
-            logging.info(f"Building report for {pairing_id} from date {parsed_days[0]['actual_date']} and time {parsed_days[0]['report']}")
-            pairing_report_local = combine_local(parsed_days[0]["actual_date"], parsed_days[0]["report"])
-            logging.info(f"Report datetime for {pairing_id}: {pairing_report_local} ({pairing_report_local.strftime('%A %H:%M') if pairing_report_local else 'None'})")
-        elif not parsed_days or not parsed_days[0].get("report"):
-            if evs_sorted:
-                pairing_report_local = to_local(iso_to_dt(evs_sorted[0].get("start_utc")))
-                import logging
-                logging.info(f"Using calendar start_utc for {pairing_id}: {pairing_report_local}")
-        
-        pairing_release_local = None
-        if parsed_days and parsed_days[-1].get("actual_date") and parsed_days[-1].get("release"):
-            last_day = parsed_days[-1]
-            release_date = last_day["actual_date"]
-            
-            if last_day.get("legs"):
-                last_arr = last_day["legs"][-1].get("arr_time", "")
-                release = last_day.get("release", "")
-                if last_arr and release:
-                    arr_hour = int(last_arr[:2])
-                    rel_hour = int(release[:2])
-                    if arr_hour >= 23 and rel_hour < 2:
-                        release_date = release_date + dt.timedelta(days=1)
-            
-            pairing_release_local = combine_local(release_date, last_day["release"])
-        elif not parsed_days or not parsed_days[-1].get("release"):
-            if evs_sorted:
-                pairing_release_local = to_local(iso_to_dt(evs_sorted[-1].get("end_utc")))
-
-        now_local = dt.datetime.now(LOCAL_TZ)
-        in_progress = bool(pairing_report_local and pairing_release_local and pairing_report_local <= now_local <= pairing_release_local)
-
-        if only_reports and not in_progress:
-            parsed_days = [d for d in parsed_days if d.get("report")]
-
-        days_with_flags: List[Dict[str, Any]] = []
-        for idx, d in enumerate(parsed_days, start=1):
-            anchor_date = d.get("actual_date")
-            
-            for leg in d.get("legs", []):
-                dep_dt = None
-                arr_dt = None
-                
-                if anchor_date:
-                    if leg.get("dep_time"):
-                        dep_dt = dt.datetime(anchor_date.year, anchor_date.month, anchor_date.day, 
-                                           int(leg["dep_time"][:2]), int(leg["dep_time"][2:]), tzinfo=LOCAL_TZ)
-                    if leg.get("arr_time"):
-                        arr_dt = dt.datetime(anchor_date.year, anchor_date.month, anchor_date.day, 
-                                           int(leg["arr_time"][:2]), int(leg["arr_time"][2:]), tzinfo=LOCAL_TZ)
-                        if dep_dt and arr_dt and arr_dt < dep_dt:
-                            arr_dt += dt.timedelta(days=1)
-                
-                leg["done"] = bool(arr_dt and now_local >= arr_dt)
-                
-                if not leg.get("deadhead", False):
-                    if dep_dt and leg.get("flight"):
-                        tracking_available_dt = dep_dt - dt.timedelta(hours=24)
-                        leg["tracking_available"] = now_local >= tracking_available_dt
-                        leg["tracking_available_time"] = tracking_available_dt.isoformat()
-                        
-                        if leg.get("tracking_available"):
-                            flight_num = str(leg.get("flight", "")).replace("FFT", "")
-                            flight_num = re.sub(r"[^0-9]", "", flight_num)
-                            if flight_num:
-                                leg["tracking_display"] = f"FFT{flight_num}"
-                                leg["tracking_url"] = f"https://flightaware.com/live/flight/FFT{flight_num}"
-                                leg["tracking_message"] = "Track →"
-                                leg["tracking_clickable"] = True
-                        else:
-                            leg["tracking_message"] = f"Avail. {dep_dt.strftime('%-m/%d')}"
-                            leg["tracking_display"] = leg["tracking_message"]
-                    else:
-                        leg["tracking_available"] = False
-                        leg["tracking_message"] = ""
-                        leg["tracking_display"] = ""
-            
-            day_report_dt = None
-            if anchor_date and d.get("report"):
-                day_report_dt = combine_local(anchor_date, d.get("report"))
-            
-            day_release_dt = None
-            if anchor_date and d.get("release"):
-                day_release_dt = combine_local(anchor_date, d.get("release"))
-                if day_report_dt and day_release_dt and day_release_dt < day_report_dt:
-                    day_release_dt += dt.timedelta(days=1)
-            
-            days_with_flags.append({
-                **d, 
-                "day_index": idx,
-                "actual_date": anchor_date.isoformat() if anchor_date else None,
-                "date_local_iso": day_report_dt.isoformat() if day_report_dt else None,
-                "day_report_dt": day_report_dt.isoformat() if day_report_dt else None,
-                "day_release_dt": day_release_dt.isoformat() if day_release_dt else None,
-            })
-
-        # Calculate number of days
-        num_days = 1
-        if pairing_report_local and pairing_release_local:
-            report_date = pairing_report_local.date()
-            release_date = pairing_release_local.date()
-            delta = (release_date - report_date).days + 1
-            num_days = max(1, delta)
-        
-        # Handle layovers for multi-day trips
-        if num_days > 1 and days_with_flags:
-            legs_by_date = {}
-            for d in days_with_flags:
-                actual_date_val = d.get("actual_date")
-                if actual_date_val:
-                    # actual_date is now an ISO string, extract the date part
-                    if isinstance(actual_date_val, str):
-                        date_key = actual_date_val[:10]  # YYYY-MM-DD
-                    else:
-                        date_key = actual_date_val.strftime("%Y-%m-%d")
-                    if d.get("legs"):
-                        legs_by_date[date_key] = d
-            
-            new_days = []
-            current_date = pairing_report_local.date() if pairing_report_local else report_date
-            prev_arrival = None
-            prev_hotel = None
-            
-            for day_num in range(num_days):
-                date_key = current_date.strftime("%Y-%m-%d")
-                
-                if date_key in legs_by_date:
-                    day = legs_by_date[date_key]
-                    day["day_index"] = day_num + 1
-                    new_days.append(day)
-                    
-                    if day.get("legs"):
-                        last_leg = day["legs"][-1]
-                        prev_arrival = last_leg.get("arr", "")
-                    if day.get("hotel"):
-                        prev_hotel = day.get("hotel")
-                else:
-                    layover_day = {
-                        "actual_date": current_date.isoformat(),
-                        "day_index": day_num + 1,
-                        "legs": [],
-                        "is_layover": True,
-                        "layover_location": prev_arrival or "Unknown",
-                        "no_flights_message": "No flights scheduled"
-                    }
-                    
-                    if prev_hotel:
-                        layover_day["hotel"] = prev_hotel
-                    
-                    if day_num == 0 and parsed_days and parsed_days[0].get("report"):
-                        layover_day["report"] = parsed_days[0].get("report")
-                    
-                    if day_num == num_days - 1 and parsed_days and parsed_days[-1].get("release"):
-                        layover_day["release"] = parsed_days[-1].get("release")
-                    
-                    new_days.append(layover_day)
-                
-                current_date = current_date + dt.timedelta(days=1)
-            
-            days_with_flags = new_days
-        
-        # Format display strings
-        def dword(d: Optional[dt.datetime]) -> str:
-            return d.strftime("%a %b %d") if d else ""
-
-        def hhmm_or_blank(d: Optional[dt.datetime]) -> str:
-            if not d:
-                return ""
-            return d.strftime("%H%M")
-
-        report_disp = f"{dword(pairing_report_local)} {(to_12h(hhmm_or_blank(pairing_report_local)) if pairing_report_local else '')}".strip() if pairing_report_local else ""
-        release_disp = f"{dword(pairing_release_local)} {(to_12h(hhmm_or_blank(pairing_release_local)) if pairing_release_local else '')}".strip() if pairing_release_local else ""
-
-        uid = (evs_sorted[0].get("uid") if evs_sorted else None)
-        total_legs = sum(len(d.get("legs", [])) for d in days_with_flags)
-        
-        # Find first departure airport
-        first_dep_airport = None
-        for d in days_with_flags:
-            legs = d.get("legs", [])
-            if legs and legs[0].get("dep"):
-                first_dep_airport = str(legs[0]["dep"]).upper()
-                break
-        
-        
-        # Determine if out-of-base
-        # D-prefix = Denver-based pairing (out-of-base for DFW pilots)
-        # W, X, Y, Z prefix = DFW home pairings
-        is_home_pairing = False
-        out_of_base_airport = None
-        
-        if pairing_id:
-            # Check for D-prefix (Denver pairings - always out-of-base for DFW pilots)
-            if re.match(r'^D\d', pairing_id, re.IGNORECASE):
-                out_of_base_airport = "DEN"
-            # Check for W, X, Y, Z prefix patterns that indicate DFW home base
-            elif re.match(r'^[WXYZ]\d', pairing_id, re.IGNORECASE):
-                is_home_pairing = True
-        
-        # For non-prefixed pairings, check the first departure airport
-        if not out_of_base_airport and not is_home_pairing and first_dep_airport and first_dep_airport != home_base:
-            out_of_base_airport = first_dep_airport
-
-        pairings.append({
-            "kind": "pairing",
-            "pairing_id": pairing_id,
-            "in_progress": int(in_progress),
-            "report_local_iso": pairing_report_local.isoformat() if pairing_report_local else None,
-            "release_local_iso": pairing_release_local.isoformat() if pairing_release_local else None,
-            "display": {"report_str": report_disp, "release_str": release_disp},
-            "days": days_with_flags,
-            "num_days": num_days,
-            "uid": uid,
-            "total_legs": total_legs,
-            "has_legs": total_legs > 0,
-            "first_dep_airport": first_dep_airport,
-            "out_of_base": bool(out_of_base_airport),
-            "out_of_base_airport": out_of_base_airport,
-        })
-
-    pairings.sort(key=lambda r: r.get("report_local_iso") or "")
-
-    if not include_off_rows:
-        return pairings
-
-    # Build rows with OFF times (no commutes)
-    actual_pairings = []
-    non_pairing_events = []
     now_local = dt.datetime.now(LOCAL_TZ)
     
-    for p in pairings:
-        days = p.get("days", [])
-        has_legs = any(day.get("legs") for day in days)
+    # Format legs
+    formatted_legs = []
+    for leg in event.get("legs", []):
+        is_deadhead = leg.get("deadhead", False)
         
-        if has_legs:
-            actual_pairings.append(p)
+        # Format flight number
+        flight_num = str(leg.get("flight", ""))
+        if not flight_num.startswith("FFT"):
+            nums = re.findall(r"\d+", flight_num) or []
+            if nums:
+                flight_num = nums[0]
+                if is_deadhead:
+                    flight_num = f"*{flight_num}"
+        
+        dep = leg.get("dep", "")
+        arr = leg.get("arr", "")
+        
+        # Route display
+        if is_deadhead:
+            route_display = f"*DH {dep}–{arr}"
         else:
-            non_pairing_events.append(p)
+            route_display = f"{dep}–{arr}"
+        
+        # Time display
+        dep_time = leg.get("dep_time", "")
+        arr_time = leg.get("arr_time", "")
+        
+        if dep_time and arr_time:
+            dep_formatted = time_display(dep_time, is_24h)
+            arr_formatted = time_display(arr_time, is_24h)
+            block_display = f"{dep_formatted} → {arr_formatted}"
+        elif dep_time:
+            block_display = time_display(dep_time, is_24h)
+        else:
+            block_display = ""
+        
+        # Calculate departure/arrival datetimes for tracking
+        dep_dt = None
+        arr_dt = None
+        
+        if actual_date and dep_time:
+            dep_dt = dt.datetime(actual_date.year, actual_date.month, actual_date.day,
+                                 int(dep_time[:2]), int(dep_time[2:]), tzinfo=LOCAL_TZ)
+        if actual_date and arr_time:
+            arr_dt = dt.datetime(actual_date.year, actual_date.month, actual_date.day,
+                                 int(arr_time[:2]), int(arr_time[2:]), tzinfo=LOCAL_TZ)
+            if dep_dt and arr_dt and arr_dt < dep_dt:
+                arr_dt += dt.timedelta(days=1)
+        
+        # Tracking info
+        tracking_info = {}
+        if is_deadhead:
+            tracking_info = {
+                "tracking_display": "Check FLICA",
+                "tracking_available": False,
+                "tracking_message": "Check FLICA",
+            }
+        elif dep_dt and flight_num:
+            tracking_available_dt = dep_dt - dt.timedelta(hours=24)
+            tracking_available = now_local >= tracking_available_dt
+            
+            if tracking_available:
+                clean_num = re.sub(r"[^0-9]", "", flight_num)
+                if clean_num:
+                    tracking_info = {
+                        "tracking_display": f"FFT{clean_num}",
+                        "tracking_url": f"https://flightaware.com/live/flight/FFT{clean_num}",
+                        "tracking_message": "Track →",
+                        "tracking_clickable": True,
+                        "tracking_available": True,
+                        "tracking_available_time": tracking_available_dt.isoformat(),
+                    }
+            else:
+                tracking_info = {
+                    "tracking_available": False,
+                    "tracking_message": f"Avail. {dep_dt.strftime('%-m/%d')}",
+                    "tracking_display": f"Avail. {dep_dt.strftime('%-m/%d')}",
+                    "tracking_available_time": tracking_available_dt.isoformat(),
+                }
+        
+        formatted_legs.append({
+            "flight": flight_num,
+            "dep": dep,
+            "arr": arr,
+            "dep_time": dep_time,
+            "arr_time": arr_time,
+            "dep_time_str": time_display(dep_time, is_24h),
+            "arr_time_str": time_display(arr_time, is_24h),
+            "deadhead": is_deadhead,
+            "route_display": route_display,
+            "block_display": block_display,
+            "done": bool(arr_dt and now_local >= arr_dt),
+            **tracking_info,
+        })
     
-    import logging
-    logging.info(f"Building rows with {len(actual_pairings)} actual pairings and {len(non_pairing_events)} non-pairing events")
+    # Day report/release times
+    report_time = event.get("report_time")
+    release_time = event.get("release_time")
     
-    # Build all events (pairings only, no commutes)
-    all_events = []
+    day_report_dt = _combine_local(actual_date, report_time)
+    day_release_dt = _combine_local(actual_date, release_time)
     
-    for p in actual_pairings:
-        all_events.append(p)
+    if day_report_dt and day_release_dt and day_release_dt < day_report_dt:
+        day_release_dt += dt.timedelta(days=1)
     
-    # Add non-flying events chronologically
-    for npe in non_pairing_events:
-        npe_time = iso_to_dt(npe.get("report_local_iso"))
-        if npe_time:
-            inserted = False
-            for i, event in enumerate(all_events):
-                event_time = iso_to_dt(event.get("report_local_iso"))
-                if event_time and npe_time < event_time:
-                    all_events.insert(i, npe)
-                    inserted = True
-                    break
-            if not inserted:
-                all_events.append(npe)
+    return {
+        "day_index": day_index,
+        "actual_date": actual_date.isoformat() if actual_date else None,
+        "date_local_iso": day_report_dt.isoformat() if day_report_dt else None,
+        "day_report_dt": day_report_dt.isoformat() if day_report_dt else None,
+        "day_release_dt": day_release_dt.isoformat() if day_release_dt else None,
+        "report": report_time,
+        "release": release_time,
+        "legs": formatted_legs,
+        "hotel": event.get("hotel"),
+        "is_layover": len(formatted_legs) == 0,
+    }
+
+
+def _pairing_to_row(pairing: Dict[str, Any], is_24h: bool, home_base: str) -> Dict[str, Any]:
+    """Convert a stored pairing dict to a display row."""
+    
+    now_local = dt.datetime.now(LOCAL_TZ)
+    events = pairing.get("events", [])
+    
+    # Calculate report and release times from first/last events
+    pairing_report_local = None
+    pairing_release_local = None
+    
+    if events:
+        first_event = events[0]
+        last_event = events[-1]
+        
+        # Get reference date from calendar event
+        ref_date = to_local(iso_to_dt(first_event.get("start_utc"))) or now_local
+        
+        # Report time from first event
+        report_time = first_event.get("report_time")
+        report_date_str = first_event.get("report_date")
+        
+        if report_time:
+            # We have a report time - determine the date
+            if report_date_str:
+                # Date is in the description like "02JAN"
+                report_date = _parse_report_date(report_date_str, ref_date)
+            else:
+                # Use date from calendar event
+                report_date = ref_date.date()
+            
+            if report_date:
+                pairing_report_local = _combine_local(report_date, report_time)
+        
+        # Fall back to calendar event start if no report time parsed
+        if not pairing_report_local:
+            pairing_report_local = to_local(iso_to_dt(first_event.get("start_utc")))
+        
+        # Release time from last event
+        release_time = last_event.get("release_time")
+        if release_time:
+            last_ref_date = to_local(iso_to_dt(last_event.get("start_utc"))) or now_local
+            release_date_str = last_event.get("report_date")
+            
+            if release_date_str:
+                release_date = _parse_report_date(release_date_str, last_ref_date)
+            else:
+                release_date = last_ref_date.date()
+            
+            if release_date:
+                # Check if release is next day (overnight flight)
+                # Compare release time to last arrival time
+                legs = last_event.get("legs", [])
+                report_time_val = last_event.get("report_time")
+                
+                if legs and release_time and report_time_val:
+                    try:
+                        # If release time is earlier than report time, it's next day
+                        rel_mins = int(release_time[:2]) * 60 + int(release_time[2:])
+                        rep_mins = int(report_time_val[:2]) * 60 + int(report_time_val[2:])
+                        
+                        if rel_mins < rep_mins:
+                            # Release is on the next day
+                            release_date = release_date + dt.timedelta(days=1)
+                    except (ValueError, IndexError):
+                        pass
+                
+                pairing_release_local = _combine_local(release_date, release_time)
+        
+        # Fall back to calendar event end if no release time
+        if not pairing_release_local:
+            pairing_release_local = to_local(iso_to_dt(last_event.get("end_utc")))
+    
+    # Check if in progress
+    in_progress = bool(
+        pairing_report_local and pairing_release_local and 
+        pairing_report_local <= now_local <= pairing_release_local
+    )
+    
+    # Build day rows
+    days_with_flags = []
+    for idx, event in enumerate(events, start=1):
+        day_row = _build_day_row(event, idx, is_24h)
+        days_with_flags.append(day_row)
+    
+    # Calculate number of days
+    num_days = pairing.get("num_days", len(events))
+    if pairing_report_local and pairing_release_local:
+        delta = (pairing_release_local.date() - pairing_report_local.date()).days + 1
+        num_days = max(num_days, delta)
+    
+    # Format display strings
+    def dword(d: Optional[dt.datetime]) -> str:
+        return d.strftime("%a %b %d") if d else ""
+    
+    def hhmm_or_blank(d: Optional[dt.datetime]) -> str:
+        return d.strftime("%H%M") if d else ""
+    
+    report_disp = ""
+    if pairing_report_local:
+        report_disp = f"{dword(pairing_report_local)} {to_12h(hhmm_or_blank(pairing_report_local))}".strip()
+    
+    release_disp = ""
+    if pairing_release_local:
+        release_disp = f"{dword(pairing_release_local)} {to_12h(hhmm_or_blank(pairing_release_local))}".strip()
+    
+    # Count legs
+    total_legs = sum(len(event.get("legs", [])) for event in events)
+    
+    # Determine out-of-base status (only for actual pairings)
+    is_pairing = pairing.get("is_pairing", True)
+    base_airports = pairing.get("base_airports", [])
+    out_of_base_airport = None
+    
+    if is_pairing and base_airports and home_base not in base_airports:
+        out_of_base_airport = base_airports[0]
+    
+    # Determine the row kind
+    kind = "pairing" if is_pairing else "other"
+    
+    return {
+        "kind": kind,
+        "pairing_id": pairing.get("pairing_id", ""),
+        "is_pairing": is_pairing,
+        "in_progress": int(in_progress),
+        "report_local_iso": pairing_report_local.isoformat() if pairing_report_local else None,
+        "release_local_iso": pairing_release_local.isoformat() if pairing_release_local else None,
+        "display": {"report_str": report_disp, "release_str": release_disp},
+        "days": days_with_flags,
+        "num_days": num_days,
+        "uid": events[0].get("uid") if events else None,
+        "total_legs": total_legs,
+        "has_legs": total_legs > 0,
+        "first_dep_airport": pairing.get("first_departure"),
+        "out_of_base": bool(out_of_base_airport),
+        "out_of_base_airport": out_of_base_airport,
+        "base_airports": base_airports,
+        "is_complete": pairing.get("is_complete", False),
+    }
+
+
+def build_rows(
+    pairings: List[Dict[str, Any]],
+    is_24h: bool = False,
+    include_off_rows: bool = True,
+    home_base: str = "DFW",
+) -> List[Dict[str, Any]]:
+    """
+    Build display rows from stored pairings.
+    
+    Args:
+        pairings: List of pairing dicts from the store
+        is_24h: Use 24-hour time format
+        include_off_rows: Include OFF period rows between pairings
+        home_base: Pilot's home base for out-of-base detection
+    
+    Returns:
+        List of row dicts ready for the frontend
+    """
+    logger.info(f"Building rows from {len(pairings)} pairings")
+    
+    # Convert pairings to rows
+    pairing_rows = []
+    for pairing in pairings:
+        row = _pairing_to_row(pairing, is_24h, home_base)
+        pairing_rows.append(row)
+    
+    # Sort by report time
+    pairing_rows.sort(key=lambda r: r.get("report_local_iso") or "")
+    
+    if not include_off_rows:
+        return pairing_rows
+    
+    # Build rows with OFF times between pairings
+    now_local = dt.datetime.now(LOCAL_TZ)
+    
+    # Separate actual pairings (with legs) from non-flying events
+    actual_pairings = [p for p in pairing_rows if p.get("has_legs")]
+    non_flying_events = [p for p in pairing_rows if not p.get("has_legs")]
+    
+    logger.info(f"Building OFF rows: {len(actual_pairings)} flying pairings, {len(non_flying_events)} non-flying")
     
     # Build final rows with OFF periods
     rows = []
     
-    # Common airport codes pattern for detecting commute flights
-    AIRPORT_CODE_PATTERN = re.compile(r'^[A-Z]{3}-[A-Z]{3}$')
-    
-    def is_commute_flight(event):
-        """Detect commute flights by naming pattern (e.g., LAS-ORD, DEN-DFW)."""
-        pid = event.get("pairing_id", "")
-        if AIRPORT_CODE_PATTERN.match(pid):
-            return True
-        return False
-    
-    # Helper to find the next actual pairing WITH LEGS (skipping commutes and non-pairing events)
-    def get_next_pairing_report(events_list, start_idx):
-        """Find the report time of the next actual pairing with legs, skipping commutes and non-pairing events."""
-        for j in range(start_idx, len(events_list)):
-            event = events_list[j]
-            # Skip commutes by kind
-            if event.get("kind") == "commute":
-                continue
-            # Skip commute flights detected by pattern (e.g., LAS-ORD)
-            if is_commute_flight(event):
-                continue
-            # Skip non-pairing events (no legs) - these are things like CBT, meetings, etc.
-            if not event.get("has_legs"):
-                continue
-            return iso_to_dt(event.get("report_local_iso")), event.get("pairing_id")
-        return None, None
-    
-    # Check for initial OFF period - only consider actual pairings with legs
-    if all_events:
-        # Find first actual pairing with legs (not commute)
-        first_pairing_report, first_pid = get_next_pairing_report(all_events, 0)
-        
-        logging.info(f"OFF CALC: now_local={now_local}, first_pairing_report={first_pairing_report}, first_pid={first_pid}")
-        
-        # Check if currently in a pairing (only consider real pairings with legs, not commutes)
-        in_pairing = False
-        for event in all_events:
-            if event.get("kind") == "commute":
-                continue
-            if is_commute_flight(event):
-                continue
-            if not event.get("has_legs"):
-                continue
-            event_start = iso_to_dt(event.get("report_local_iso"))
-            event_end = iso_to_dt(event.get("release_local_iso"))
-            if event_start and event_end and event_start <= now_local <= event_end:
-                in_pairing = True
-                logging.info(f"OFF CALC: Currently in pairing {event.get('pairing_id')}")
-                break
-        
-        if not in_pairing and first_pairing_report and first_pairing_report > now_local:
-            gap = first_pairing_report - now_local
-            logging.info(f"OFF CALC: gap={gap}, gap_hours={gap.total_seconds()/3600:.2f}")
-            if gap.total_seconds() > 3600:
-                rows.append({
-                    "kind": "off",
-                    "is_current": True,
-                    "display": {
-                        "off_label": "OFF",
-                        "off_duration": format_off_duration(gap, show_minutes=True),
-                        "show_remaining": True
-                    }
-                })
-    
-    # Add all events with OFF periods between them
-    for i, event in enumerate(all_events):
-        rows.append(event)
-        
-        if i + 1 < len(all_events):
-            # Skip OFF calculation for commutes and non-pairing events
-            if event.get("kind") == "commute":
-                continue
-            # Skip commute flights (e.g., LAS-ORD)
-            if is_commute_flight(event):
-                continue
-            if not event.get("has_legs"):
-                # Non-pairing event (like CBT, etc.) - don't create OFF after it
-                continue
+    # Check for initial OFF period (currently off before first pairing)
+    if actual_pairings:
+        first_report = iso_to_dt(actual_pairings[0].get("report_local_iso"))
+        if first_report:
+            first_report_local = to_local(first_report)
             
-            this_end = iso_to_dt(event.get("release_local_iso"))
+            # Check if we're currently in a pairing
+            in_pairing = False
+            for p in actual_pairings:
+                p_start = to_local(iso_to_dt(p.get("report_local_iso")))
+                p_end = to_local(iso_to_dt(p.get("release_local_iso")))
+                if p_start and p_end and p_start <= now_local <= p_end:
+                    in_pairing = True
+                    break
             
-            # Find next actual pairing with legs (skip commutes and non-pairing events)
-            next_start, next_pid = get_next_pairing_report(all_events, i + 1)
-            
-            logging.info(f"OFF CALC between: {event.get('pairing_id')} ends {this_end}, next {next_pid} starts {next_start}")
+            if not in_pairing and first_report_local and first_report_local > now_local:
+                gap = first_report_local - now_local
+                if gap.total_seconds() > 3600:  # More than 1 hour
+                    rows.append({
+                        "kind": "off",
+                        "is_current": True,
+                        "display": {
+                            "off_label": "OFF",
+                            "off_duration": format_off_duration(gap, show_minutes=True),
+                            "show_remaining": True,
+                        }
+                    })
+    
+    # Add pairings with OFF periods between them
+    for i, pairing_row in enumerate(actual_pairings):
+        rows.append(pairing_row)
+        
+        if i + 1 < len(actual_pairings):
+            this_end = to_local(iso_to_dt(pairing_row.get("release_local_iso")))
+            next_start = to_local(iso_to_dt(actual_pairings[i + 1].get("report_local_iso")))
             
             if this_end and next_start and next_start > this_end:
                 gap = next_start - this_end
-                logging.info(f"OFF CALC between: gap={gap}, gap_hours={gap.total_seconds()/3600:.2f}")
-                if gap.total_seconds() > 3600:
+                if gap.total_seconds() > 3600:  # More than 1 hour
                     is_current = (now_local >= this_end and now_local < next_start)
                     
                     rows.append({
@@ -682,8 +697,24 @@ def build_pairing_rows(
                         "display": {
                             "off_label": "OFF",
                             "off_duration": format_off_duration(gap, show_minutes=is_current),
-                            "show_remaining": is_current
+                            "show_remaining": is_current,
                         }
                     })
+    
+    # Insert non-flying events in chronological order
+    for nfe in non_flying_events:
+        nfe_time = iso_to_dt(nfe.get("report_local_iso"))
+        if nfe_time:
+            inserted = False
+            for i, row in enumerate(rows):
+                if row.get("kind") == "off":
+                    continue
+                row_time = iso_to_dt(row.get("report_local_iso"))
+                if row_time and nfe_time < row_time:
+                    rows.insert(i, nfe)
+                    inserted = True
+                    break
+            if not inserted:
+                rows.append(nfe)
     
     return rows

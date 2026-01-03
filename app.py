@@ -103,6 +103,9 @@ VIEW_WINDOW_MODE = os.getenv("VIEW_WINDOW_MODE", "TODAY_TO_END_OF_NEXT_MONTH").u
 STICKY_REQUIRE_FEED = os.getenv("STICKY_REQUIRE_FEED", "1") not in ("0", "false", "False")
 LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "24"))
 
+# Toggle to show/hide non-pairing events (CBT, VAC, meetings, etc.)
+INCLUDE_NON_PAIRING_EVENTS = False  # Set to False to hide non-flying events
+
 class State:
     refresh_seconds: int = int(os.getenv("REFRESH_SECONDS", "1800"))
     poll_task: Optional[asyncio.Task] = None
@@ -214,6 +217,7 @@ async def pull_and_update_once() -> bool:
         new_digest = _events_digest(events)
         changed = (new_digest != old_digest)
 
+        # ALWAYS replace all events - clean slate on every refresh
         meta["events"] = events
         meta["events_digest"] = new_digest
         meta["last_pull_utc"] = _now_utc().isoformat()
@@ -224,11 +228,24 @@ async def pull_and_update_once() -> bool:
 
         if changed:
             state.version += 1
+            # Clear stale live rows when calendar changes
+            await run_in_threadpool(_clear_stale_live_rows)
+            
         await _emit("change", {"changed": changed})
         return changed
     except Exception as e:
         logger.exception("[pull] error: %s", e)
         return False
+
+
+def _clear_stale_live_rows():
+    """Clear all live rows - they'll be rebuilt from fresh data."""
+    try:
+        with get_db() as c:
+            c.execute("DELETE FROM live_rows")
+        logger.info("Cleared live_rows table")
+    except Exception as e:
+        logger.warning(f"Could not clear live_rows: {e}")
 
 async def poller_loop():
     while not state.shutdown_event.is_set():
@@ -246,6 +263,8 @@ async def poller_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    # Clear stale live rows on startup
+    _clear_stale_live_rows()
     state.poll_task = asyncio.create_task(poller_loop())
     try:
         yield
@@ -421,23 +440,31 @@ async def api_pairings(
 
         window_events = [e for e in events if (safe_end(e) > start_utc) and (safe_start(e) < end_utc)]
 
-        # Build ALL rows including past events for calendar (NO OFF rows for calendar)
-        all_rows = await run_in_threadpool(build_pairing_rows, window_events, bool(is_24h), False, False, HOME_BASE)
+        # Build ALL rows including past events for calendar (NO OFF rows, NO past filtering)
+        all_rows = await run_in_threadpool(
+            build_pairing_rows,
+            window_events,
+            bool(is_24h),
+            False,  # only_reports
+            False,  # include_off_rows - NO for calendar
+            HOME_BASE,
+            False,  # filter_past - NO for calendar, show all
+            INCLUDE_NON_PAIRING_EVENTS,
+        )
         
-        # For table: first filter to future events only, THEN build with OFF rows
-        now_local = dt.datetime.now(LOCAL_TZ)
-        
-        # Filter events to future only (keep in-progress)
-        future_events = []
-        for ev in window_events:
-            end_utc_ev = iso_to_dt(ev.get("end_utc"))
-            if end_utc_ev:
-                end_local = to_local(end_utc_ev)
-                if end_local and end_local >= now_local:
-                    future_events.append(ev)
-        
-        # Build filtered rows for table (future only, WITH OFF rows between pairings)
-        table_rows = await run_in_threadpool(build_pairing_rows, future_events, bool(is_24h), bool(only_reports), True, HOME_BASE)
+        # Build table rows from ALL events with OFF rows and past filtering
+        # Pass ALL window_events - the pairing builder needs complete multi-day pairings
+        # filter_past=True will remove completed pairings after building
+        table_rows = await run_in_threadpool(
+            build_pairing_rows,
+            window_events,  # ALL events so multi-day pairings are complete
+            bool(is_24h),
+            bool(only_reports),
+            True,   # include_off_rows
+            HOME_BASE,
+            True,   # filter_past - removes completed pairings, keeps in-progress
+            INCLUDE_NON_PAIRING_EVENTS,
+        )
         
         # Map pairing -> uids
         pid_to_uids: Dict[str, List[str]] = {}
@@ -454,7 +481,7 @@ async def api_pairings(
 
         def fmt_row(r: Dict[str, Any]):
             """Format time displays for a row"""
-            if r.get("kind") != "pairing":
+            if r.get("kind") not in ("pairing", "other"):
                 return
             
             pid = str(r.get("pairing_id") or "")
@@ -490,7 +517,7 @@ async def api_pairings(
 
         logger.info(f"Built {len(calendar_rows)} calendar rows (including past)")
 
-        # Filter table rows by visibility and time - PRESERVE OFF ROWS
+        # Filter table rows by visibility - OFF rows already calculated correctly
         visible: List[Dict[str, Any]] = []
         
         for r in table_rows:
@@ -500,19 +527,14 @@ async def api_pairings(
             if r.get("kind") == "off":
                 visible.append(r)
                 continue
-                
-            if r.get("kind") != "pairing":
-                # Keep non-pairing events too
+            
+            # Keep other (non-pairing) events
+            if r.get("kind") == "other":
                 visible.append(r)
                 continue
-            
-            # Check if past (unless in progress)
-            release_iso = r.get("release_local_iso")
-            if release_iso:
-                release_time = iso_to_dt(release_iso)
-                release_local = to_local(release_time) if release_time else None
-                if release_local and release_local < now_local and not r.get("in_progress"):
-                    continue
+                
+            if r.get("kind") != "pairing":
+                continue
             
             pid = str(r.get("pairing_id") or "")
             

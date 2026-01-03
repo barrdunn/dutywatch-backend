@@ -21,10 +21,21 @@ import re
 from typing import Any, Dict, Optional, List
 
 # --- core patterns ---
+# Report can be either "Report: 15NOV 0545L" or just "Report: 0500L"
 REPORT_RE = re.compile(r"\bReport:\s*(?:(\d{1,2}[A-Z]{3})\s+)?(\d{3,4})L?\b", re.IGNORECASE)
-# FIXED: Changed to \d+ to accept any number of digits for flight numbers
-# Added optional DH prefix detection for deadheads
-LEG_RE = re.compile(r"\b(?:([A-Z]{2}\d{1,2})\s+)?(DH\s*)?(\d+)\s+([A-Z]{3})-([A-Z]{3})\s+(\d{3,4})-(\d{3,4})\b", re.IGNORECASE)
+
+# Leg format: "FR26 1596 ORD-ATL 0555-0853" or "MO29 DH 2066 ATL-ORD 1020-1141"
+# Day prefix (FR26, SA27, SU28, MO29) is optional
+# DH prefix indicates deadhead
+# Also handle "N NTR" which seems to be a special non-revenue/deadhead indicator
+LEG_RE = re.compile(
+    r"\b(?:([A-Z]{2}\d{1,2})\s+)?(?:(DH|N\s*NTR)\s+)?(\d+)\s+([A-Z]{3})-([A-Z]{3})\s+(\d{3,4})-(\d{3,4})\b",
+    re.IGNORECASE
+)
+
+# Pattern for valid pairing IDs: letter + numbers + optional letter suffix
+# Examples: W1234, C3075, D5678F, A1234B
+PAIRING_ID_PATTERN = re.compile(r'^[A-Z]\d+[A-Z]?$', re.IGNORECASE)
 
 # Soft keywords to *prefer* but not require (kept broad and brand-agnostic)
 HOTELISH_KEYWORDS = re.compile(
@@ -34,6 +45,39 @@ HOTELISH_KEYWORDS = re.compile(
 
 PHONE_ONLY_RE = re.compile(r"^\s*[\d\-\s().+]{7,}\s*$")
 BOILERPLATE_RE = re.compile(r"Created by the Flight Crew View App", re.IGNORECASE)
+
+
+def is_valid_pairing_id(pairing_id: str) -> bool:
+    """
+    Check if a string is a valid pairing ID.
+    
+    Valid pairing IDs:
+    - Start with a letter (the base prefix)
+    - Followed by numbers
+    - Optionally end with a letter suffix
+    
+    Examples of valid: W1234, C3075, D5678F, A1234B
+    Examples of invalid: CBT, VAC, SICK, RDO, Training, 1234
+    """
+    if not pairing_id:
+        return False
+    return bool(PAIRING_ID_PATTERN.match(pairing_id.strip()))
+
+
+def extract_pairing_id(summary: str) -> str:
+    """
+    Extract the pairing ID from event summary.
+    
+    Pairing IDs are like W1234, C3075F, D5678.
+    Returns the full ID including any trailing letter suffix.
+    """
+    if not summary:
+        return ""
+    # Match letter + numbers + optional trailing letter
+    match = re.match(r'^([A-Z]\d+[A-Z]?)', summary.strip().upper())
+    if match:
+        return match.group(1)
+    return summary.strip().upper()
 
 
 def _ensure_hhmm(s: str) -> str:
@@ -125,17 +169,18 @@ def parse_pairing_days(text: str, location: Optional[str] = None) -> Dict[str, A
     legs: List[Dict[str, Any]] = []
     for m in LEG_RE.finditer(text or ""):
         day_prefix, dh_prefix, num, dep, arr, t_dep, t_arr = m.groups()
+        # DH or "N NTR" both indicate deadhead
         is_deadhead = bool(dh_prefix)
         legs.append(
             {
                 # Keep numeric flight; prefixing (e.g., 'FFT') can be added by the caller.
                 "flight": num,
-                "dep": dep,
-                "arr": arr,
+                "dep": dep.upper(),
+                "arr": arr.upper(),
                 "dep_time": _ensure_hhmm(t_dep),
                 "arr_time": _ensure_hhmm(t_arr),
                 "deadhead": is_deadhead,
-                "day_prefix": day_prefix,  # e.g., "SU16" or None
+                "day_prefix": day_prefix.upper() if day_prefix else None,  # e.g., "FR26" or None
             }
         )
 
