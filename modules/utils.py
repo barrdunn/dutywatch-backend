@@ -42,8 +42,9 @@ def to_utc(dt_obj):
     
     # Handle all-day events (date objects)
     if isinstance(dt_obj, dt.date) and not isinstance(dt_obj, dt.datetime):
-        # Convert date to datetime at midnight UTC
-        return dt.datetime(dt_obj.year, dt_obj.month, dt_obj.day, tzinfo=dt.timezone.utc)
+        # Treat as midnight LOCAL time, not UTC
+        local_dt = dt.datetime(dt_obj.year, dt_obj.month, dt_obj.day, hour=0, minute=0, tzinfo=LOCAL_TZ)
+        return local_dt.astimezone(dt.timezone.utc)
     
     # Handle datetime objects
     if dt_obj.tzinfo is None:
