@@ -35,3 +35,4 @@ htmlcov/
 __pycache__/
 *.db
 data/
+cache_meta.json
