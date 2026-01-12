@@ -21,13 +21,13 @@ from zoneinfo import ZoneInfo
 from modules import cal_client as cal
 from modules.cache import read_cache_meta, write_cache_meta, normalize_cached_events
 from modules.rows import build_pairing_rows, end_of_next_month_local, grouping_key
-from data.db import get_db, init_db
+from modules.db import get_db, init_db
 from modules.utils import iso_to_dt, to_local, to_utc, human_ago, human_ago_precise, fmt_time
 
 # ---- Optional DB helpers (server-side hidden + sticky rows) ----
 try:
     # Hidden-store is keyed by individual iCloud VEVENT UIDs
-    from data.db import hide_uid, list_hidden_uids, hidden_count, unhide_all, hidden_all
+    from modules.db import hide_uid, list_hidden_uids, hidden_count, unhide_all, hidden_all
 except Exception:  # safe fallbacks if db.py hasn't added these yet
     def hide_uid(uid: str) -> None:  # type: ignore
         pass
@@ -42,7 +42,7 @@ except Exception:  # safe fallbacks if db.py hasn't added these yet
 
 try:
     # Sticky "live" rows so an in-progress pairing isn't dropped mid-fly
-    from data.db import upsert_live_row, list_live_rows, purge_expired_live, delete_live_row
+    from modules.db import upsert_live_row, list_live_rows, purge_expired_live, delete_live_row
 except Exception:  # safe fallbacks
     def upsert_live_row(row: Dict[str, Any]) -> None:  # type: ignore
         pass
@@ -716,7 +716,7 @@ from pydantic import BaseModel
 from fastapi import HTTPException as _HTTPExceptionAlias
 import logging as _logging
 
-from data.db import hidden_add, hidden_clear_all, hidden_count as hidden_pairing_count
+from modules.db import hidden_add, hidden_clear_all, hidden_count as hidden_pairing_count
 
 log = _logging.getLogger("dutywatch")
 
