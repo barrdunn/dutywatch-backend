@@ -9,7 +9,9 @@ DutyWatch config loader (env + tracked JSON)
 
 from __future__ import annotations
 from dotenv import load_dotenv
-load_dotenv()
+from pathlib import Path
+
+load_dotenv(Path(__file__).parent / ".env")
 
 import os, json
 from pathlib import Path

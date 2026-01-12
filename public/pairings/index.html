@@ -6,59 +6,62 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.css" rel="stylesheet" />
-  <link rel="stylesheet" href="/pairings/pairings.css?v=44">
+  <link rel="stylesheet" href="/pairings/pairings.css?v=46">
 </head>
 <body>
   <div class="wrap">
-    <div class="card" style="position:relative">
-      <!-- Calendars -->
-      <div id="calendar-container">
-        <div class="calendar-widget"><div id="calendar-current"></div></div>
-        <div class="calendar-widget"><div id="calendar-next"></div></div>
-      </div>
+    <div class="card">
+      <!-- Header row: title left, calendars right -->
+      <div class="header-row">
+        <div class="header-left">
+          <!-- Page title -->
+          <h1>Pairings for Barry Dunn</h1>
 
-      <!-- Page title -->
-      <div style="display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;flex:1;margin-bottom:6px">
-        <h1 style="margin:0">Pairings for Barry Dunn</h1>
-      </div>
+          <!-- Status (hidden chip only shows when count > 0) -->
+          <div class="sub" id="status-line" style="margin:0;min-height:0">
+            <span class="chip hidden" id="hidden-chip">
+              <span id="hidden-count">Hidden: 0</span>
+              <a href="#" data-unhide-all style="color:var(--accent);text-decoration:none;margin-left:6px">Unhide all</a>
+            </span>
+          </div>
 
-      <!-- Status -->
-      <div class="sub" id="status-line" style="margin:2px 0 8px">
-        <span class="chip" id="hidden-chip">
-          <span id="hidden-count">Hidden: 0</span>
-          <a href="#" data-unhide-all style="color:var(--accent);text-decoration:none;margin-left:6px">Unhide all</a>
-        </span>
-      </div>
+          <!-- Controls -->
+          <div class="controls" style="margin-top:8px;margin-bottom:0;align-items:flex-start;gap:12px;flex-wrap:wrap">
+            <form onsubmit="window.dwManualRefresh(); return false;"
+                  style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+              <button class="btn" type="submit">Refresh</button>
+              <span class="chip">Last: <strong id="last-pull">—</strong></span>
+            </form>
+          </div>
 
-      <!-- Controls -->
-      <div class="controls" style="margin-top:8px;align-items:flex-start;gap:12px;flex-wrap:wrap">
-        <form onsubmit="window.dwManualRefresh(); return false;"
-              style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-          <button class="btn" type="submit">Refresh</button>
-          <span class="chip" id="last-chip">Last: <strong id="last-pull">—</strong></span>
-          <span class="chip" id="next-chip">Next: <strong id="next-refresh">—</strong> <span id="next-refresh-eta"></span></span>
-        </form>
-      </div>
+          <!-- Settings inline -->
+          <div id="settings-inline" style="display:inline-flex;flex-direction:column;gap:12px;margin-top:12px">
+            <div style="display:inline-flex;gap:8px;align-items:center">
+              <span style="font-weight:600">Auto-refresh:</span>
+              <select id="refresh-mins" class="toggle">
+                <option value="1">1 min</option>
+                <option value="5">5 mins</option>
+                <option value="10">10 mins</option>
+                <option value="15">15 mins</option>
+                <option value="30" selected>30 mins</option>
+              </select>
+            </div>
+            <div style="display:inline-flex;gap:8px;align-items:center">
+              <span style="font-weight:600">12h</span>
+              <label class="clock-toggle">
+                <input type="checkbox" id="clock-mode">
+                <span class="clock-slider"></span>
+              </label>
+              <span style="font-weight:600">24h</span>
+            </div>
+          </div>
+        </div>
 
-      <!-- Settings inline -->
-      <div id="settings-inline" style="display:flex;gap:16px;flex-wrap:wrap;margin-top:16px;flex-direction:row">
-        <label class="setting-row" style="gap:8px">
-          <span>Auto-refresh:</span>
-          <select id="refresh-mins" class="toggle">
-            <option value="1">1 min</option>
-            <option value="5">5 mins</option>
-            <option value="10">10 mins</option>
-            <option value="15">15 mins</option>
-            <option value="30" selected>30 mins</option>
-          </select>
-        </label>
-        <label class="setting-row" style="gap:8px">
-          <span>Clock:</span>
-          <select id="clock-mode" class="toggle">
-            <option value="12" selected>12h</option>
-            <option value="24">24h</option>
-          </select>
-        </label>
+        <!-- Calendars -->
+        <div id="calendar-container">
+          <div class="calendar-widget"><div id="calendar-current"></div></div>
+          <div class="calendar-widget"><div id="calendar-next"></div></div>
+        </div>
       </div>
 
       <!-- Pairings table -->
@@ -76,6 +79,28 @@
     </div>
   </div>
 
+  <!-- Plan Modal -->
+  <div id="plan-modal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2>Reminder Plan</h2>
+        <button class="modal-close" id="plan-close-1">&times;</button>
+      </div>
+      <div class="modal-content">
+        <p class="plan-meta" id="plan-meta"></p>
+        <table class="plan-table">
+          <thead>
+            <tr><th>Time</th><th>Type</th><th>Details</th></tr>
+          </thead>
+          <tbody id="plan-rows"></tbody>
+        </table>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" id="plan-close-2">Close</button>
+      </div>
+    </div>
+  </div>
+
   <script id="dw-boot" type="application/json">{
     "clockMode": "12",
     "onlyReports": false,
@@ -86,6 +111,6 @@
   }</script>
 
   <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js"></script>
-  <script src="/pairings/pairings.js?v=45"></script>
+  <script src="/pairings/pairings.js?v=46"></script>
 </body>
 </html>

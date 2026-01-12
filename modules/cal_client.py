@@ -10,23 +10,37 @@ Exports:
 """
 
 import datetime as dt
+import logging
 from typing import Any, Dict, List, Set, Optional
 import pytz
 from caldav import DAVClient
 from icalendar import Calendar
-from config import (
-    ICLOUD_USER, ICLOUD_APP_PW, CALDAV_URL,
-    LOOKAHEAD_HOURS, CALENDAR_NAME_FILTER, TIMEZONE,
-)
-from utils import to_utc
+from .utils import to_utc
 
-TZ = pytz.timezone(TIMEZONE)
+log = logging.getLogger("cal_client")
+
+
+def _get_config():
+    """Import config at runtime to ensure .env is loaded"""
+    from config import (
+        ICLOUD_USER, ICLOUD_APP_PW, CALDAV_URL,
+        LOOKAHEAD_HOURS, CALENDAR_NAME_FILTER, TIMEZONE,
+    )
+    return {
+        'ICLOUD_USER': ICLOUD_USER,
+        'ICLOUD_APP_PW': ICLOUD_APP_PW,
+        'CALDAV_URL': CALDAV_URL,
+        'LOOKAHEAD_HOURS': LOOKAHEAD_HOURS,
+        'CALENDAR_NAME_FILTER': CALENDAR_NAME_FILTER,
+        'TIMEZONE': TIMEZONE,
+    }
 
 
 def _principal():
-    if not (ICLOUD_USER and ICLOUD_APP_PW and CALDAV_URL):
+    cfg = _get_config()
+    if not (cfg['ICLOUD_USER'] and cfg['ICLOUD_APP_PW'] and cfg['CALDAV_URL']):
         raise RuntimeError("ICLOUD_USER / ICLOUD_APP_PW / CALDAV_URL are not set in .env")
-    client = DAVClient(url=CALDAV_URL, username=ICLOUD_USER, password=ICLOUD_APP_PW)
+    client = DAVClient(url=cfg['CALDAV_URL'], username=cfg['ICLOUD_USER'], password=cfg['ICLOUD_APP_PW'])
     return client.principal()
 
 
@@ -53,6 +67,7 @@ def _calendar_display_name(calendar) -> str:
 
 
 def diagnose() -> dict:
+    cfg = _get_config()
     try:
         principal = _principal()
         cals = principal.calendars()
@@ -61,25 +76,26 @@ def diagnose() -> dict:
             names.append(_calendar_display_name(cal) or "<unnamed>")
         return {
             "ok": True,
-            "user": ICLOUD_USER,
-            "url": CALDAV_URL,
-            "filter": (CALENDAR_NAME_FILTER or ""),
+            "user": cfg['ICLOUD_USER'],
+            "url": cfg['CALDAV_URL'],
+            "filter": (cfg['CALENDAR_NAME_FILTER'] or ""),
             "calendars": names,
         }
     except Exception as e:
         return {
             "ok": False,
             "error": f"{type(e).__name__}: {e}",
-            "user_set": bool(ICLOUD_USER),
-            "pw_set": bool(ICLOUD_APP_PW),
-            "url": CALDAV_URL,
+            "user_set": bool(cfg['ICLOUD_USER']),
+            "pw_set": bool(cfg['ICLOUD_APP_PW']),
+            "url": cfg['CALDAV_URL'],
         }
 
 
 def _want_calendar(name: str) -> bool:
-    if not CALENDAR_NAME_FILTER:
+    cfg = _get_config()
+    if not cfg['CALENDAR_NAME_FILTER']:
         return True
-    return CALENDAR_NAME_FILTER.lower() in (name or "").lower()
+    return cfg['CALENDAR_NAME_FILTER'].lower() in (name or "").lower()
 
 
 def _event_records_from_ical(calname: str, ics: bytes) -> List[Dict[str, Any]]:
@@ -115,22 +131,25 @@ def _event_records_from_ical(calname: str, ics: bytes) -> List[Dict[str, Any]]:
     return out
 
 
-def _search_between(start: dt.datetime, end: dt.datetime) -> List[bytes]:
+def _search_between(start: dt.datetime, end: dt.datetime) -> List[tuple]:
+    """Returns list of (calendar_name, ics_bytes) tuples"""
     principal = _principal()
-    events_raw: List[bytes] = []
+    events_raw: List[tuple] = []
     for cal in principal.calendars():
         name = _calendar_display_name(cal)
         if not _want_calendar(name):
             continue
         try:
             items = cal.date_search(start=start, end=end)
-        except Exception:
+            log.info(f"Calendar '{name}': found {len(items)} items")
+        except Exception as e:
+            log.warning(f"Calendar '{name}': search failed - {e}")
             continue
         for ev in items:
             try:
-                events_raw.append(ev.data)
-            except Exception:
-                pass
+                events_raw.append((name, ev.data))
+            except Exception as e:
+                log.warning(f"Calendar '{name}': failed to get event data - {e}")
     return events_raw
 
 
@@ -141,12 +160,13 @@ def fetch_events_between(start_iso: str, end_iso: str) -> List[Dict[str, Any]]:
     if end.tzinfo is None: end = end.replace(tzinfo=pytz.utc)
 
     events: List[Dict[str, Any]] = []
-    for ics in _search_between(start, end):
+    for calname, ics in _search_between(start, end):
         try:
-            calname = ""  # optional
             events.extend(_event_records_from_ical(calname, ics))
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"Failed to parse ical data: {e}")
+    
+    log.info(f"Total events parsed: {len(events)}")
     events.sort(key=lambda e: (e.get("start_utc") or "9999"))
     return events
 
@@ -158,20 +178,21 @@ def list_uids_between(start_iso: str, end_iso: str) -> Set[str]:
     if end.tzinfo is None: end = end.replace(tzinfo=pytz.utc)
 
     uids: Set[str] = set()
-    for ics in _search_between(start, end):
+    for calname, ics in _search_between(start, end):
         try:
             calobj = Calendar.from_ical(ics)
             for comp in calobj.walk("VEVENT"):
                 uid = str(comp.get("uid") or "").strip()
                 if uid:
                     uids.add(uid)
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"Failed to parse ical for UIDs: {e}")
     return uids
 
 
 def fetch_upcoming_events(hours_ahead: Optional[int] = None) -> List[Dict[str, Any]]:
-    hrs = hours_ahead if hours_ahead is not None else LOOKAHEAD_HOURS
+    cfg = _get_config()
+    hrs = hours_ahead if hours_ahead is not None else cfg['LOOKAHEAD_HOURS']
     now = dt.datetime.utcnow().replace(tzinfo=pytz.utc)
     end = now + dt.timedelta(hours=hrs)
     return fetch_events_between(now.isoformat(), end.isoformat())

@@ -22,7 +22,7 @@ import logging
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 
-from parser import parse_pairing_days, is_valid_pairing_id, extract_pairing_id
+from .parser import parse_pairing_days, is_valid_pairing_id, extract_pairing_id
 
 logger = logging.getLogger("pairing_builder")
 

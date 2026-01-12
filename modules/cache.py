@@ -12,7 +12,7 @@ from typing import Any, Dict, List
 
 logger = logging.getLogger("cache_meta")
 
-CACHE_FILE = Path(__file__).parent / "cache_meta.json"
+CACHE_FILE = Path(__file__).parent.parent / "data" / "cache.json"
 
 DEFAULT_META = {
     "events": [],

@@ -9,11 +9,9 @@
 
   const state = {
     lastPullIso: null,
-    nextRefreshIso: null,
     clockMode: cfg.clockMode === '24' ? 24 : 12,
     onlyReports: !!cfg.onlyReports,
     hiddenCount: 0,
-    _zeroKick: 0,
     layoutMode: null
   };
 
@@ -33,33 +31,24 @@
     
     if (!rows || !Array.isArray(rows)) return events;
     
-    // Get today's date at midnight for comparison
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
     rows.forEach(row => {
-      // Only show pairings with legs
       if (!row || row.kind === 'off' || !row.has_legs) return;
-      
-      // Need both report and release dates
       if (!row.report_local_iso || !row.release_local_iso) return;
       
-      // Extract date parts (YYYY-MM-DD)
       const startDate = row.report_local_iso.split('T')[0];
       const releaseDate = row.release_local_iso.split('T')[0];
       
-      // Check if pairing is completely finished (release date is before today)
       const [relYear, relMonth, relDay] = releaseDate.split('-').map(Number);
       const releaseDateObj = new Date(relYear, relMonth - 1, relDay);
-      releaseDateObj.setHours(23, 59, 59, 999); // End of release day
+      releaseDateObj.setHours(23, 59, 59, 999);
       const isPast = releaseDateObj < today;
       
-      // FullCalendar end dates are EXCLUSIVE for all-day events
-      // So to include the release day, we need to add 1 day
       const endDateObj = new Date(relYear, relMonth - 1, relDay + 1);
       const endDate = endDateObj.toISOString().split('T')[0];
       
-      // Use more transparent color for past pairings
       const bgColor = isPast ? 'rgba(73, 179, 124, 0.2)' : '#49b37c';
       const borderColor = isPast ? 'rgba(73, 179, 124, 0.2)' : '#49b37c';
       
@@ -82,100 +71,8 @@
     return events;
   }
 
-  function findBelowAnchor() {
-    // First try to find the medical portal link/button
-    const medPortal = document.querySelector('a[href*="medical"], a[href*="med_portal"], .med-portal-btn, #med-portal-link');
-    if (medPortal) return medPortal;
-    
-    const settingsInline = document.getElementById('settings-inline');
-    if (settingsInline) return settingsInline;
-
-    const controls = document.querySelector('.controls');
-    if (controls) return controls;
-
-    const pairings = document.getElementById('pairings');
-    if (pairings && pairings.previousElementSibling) return pairings.previousElementSibling;
-
-    const card = document.querySelector('.card');
-    return card || document.body;
-  }
-
-  function moveCalendarsBelow() {
-    const cc = document.getElementById('calendar-container');
-    if (!cc) return;
-
-    const anchor = findBelowAnchor();
-    if (anchor && anchor.parentNode) {
-      anchor.insertAdjacentElement('afterend', cc);
-    }
-
-    cc.classList.remove('calendar-desktop');
-    cc.classList.add('calendar-mobile');
-    
-    const calCurrent = document.getElementById('calendar-current');
-    const calNext = document.getElementById('calendar-next');
-    if(calCurrent) calCurrent.style.display = 'block';
-    if(calNext) {
-      calNext.style.cssText = 'display: block !important; visibility: visible !important; opacity: 1 !important;';
-    }
-    
-    cc.style.height = 'auto';
-    cc.style.overflow = 'visible';
-  }
-
-  function moveCalendarsTopRight() {
-    const cc = document.getElementById('calendar-container');
-    const card = cc?.closest('.card') || document.body;
-    if (!cc) return;
-
-    if (cc.parentNode !== card || cc !== card.firstElementChild) {
-      card.insertBefore(cc, card.firstElementChild || null);
-    }
-
-    cc.classList.remove('calendar-mobile');
-    cc.classList.add('calendar-desktop');
-  }
-
   function applyCalendarLayout() {
-    const vw = Math.min(window.innerWidth || 0, document.documentElement.clientWidth || 0) || window.innerWidth;
-    const body = document.body;
-    
-    body.classList.remove(
-      'layout-desktop',
-      'layout-desktop-locked',
-      'layout-mobile',
-      'layout-mobile-narrow',
-      'cal-below'
-    );
-
-    if (vw > 990) {
-      moveCalendarsTopRight();
-      body.classList.add('layout-desktop');
-      state.layoutMode = 'desktop-responsive';
-    } else if (vw > 750) {
-      moveCalendarsTopRight();
-      body.classList.add('layout-desktop-locked');
-      state.layoutMode = 'desktop-locked-990';
-    } else {
-      moveCalendarsBelow();
-      body.classList.add('cal-below');
-      
-      const cc = document.getElementById('calendar-container');
-      if(cc) {
-        cc.style.display = 'flex';
-        cc.style.flexDirection = 'row';
-        cc.style.gap = '8px';
-        cc.style.justifyContent = 'center';
-      }
-      
-      if (vw <= 350) {
-        body.classList.add('layout-mobile-narrow');
-        state.layoutMode = 'mobile-locked-350';
-      } else {
-        body.classList.add('layout-mobile');
-        state.layoutMode = 'mobile-responsive';
-      }
-    }
+    // Layout handled by CSS media queries only
   }
 
   function ensureCalendars() {
@@ -183,7 +80,6 @@
     const calendarElNext = document.getElementById('calendar-next');
 
     if (calendarElCurrent && !calendarCurrent) {
-      // Use current month dynamically
       const now = new Date();
       const currentDate = new Date(now.getFullYear(), now.getMonth(), 1);
       
@@ -246,7 +142,6 @@
     }
 
     if (calendarElNext && !calendarNext) {
-      // Use next month dynamically (handles year rollover automatically)
       const now = new Date();
       const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
 
@@ -334,16 +229,6 @@
     }
     
     setTimeout(applyCalendarLayout, 0);
-    
-    setTimeout(() => {
-      const isMobile = window.innerWidth <= 640;
-      if(isMobile) {
-        const calNext = document.getElementById('calendar-next');
-        if(calNext) {
-          calNext.style.cssText = 'display: block !important; visibility: visible !important; opacity: 1 !important;';
-        }
-      }
-    }, 100);
   }
 
   // ===== Time helpers =====
@@ -361,108 +246,6 @@
       await fetch(apiBase+'/api/refresh',{method:'POST'});
     }catch(e){
       console.error(e);
-    }
-  };
-  
-  // Commute functions
-  window.saveCommuteTime = async function(commuteId) {
-    const input = document.getElementById(`time-${commuteId}`);
-    if (!input || !input.value) {
-      alert('Please select a time');
-      return;
-    }
-    
-    const row = document.querySelector(`[data-commute-id="${commuteId}"]`);
-    const dateStr = row ? row.getAttribute('data-report-date') : '';
-    
-    try {
-      const response = await fetch(`${apiBase}/api/commute/${commuteId}`, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-          report_time: input.value,
-          date_context: dateStr
-        })
-      });
-      
-      if (response.ok) {
-        alert('Commute time saved!');
-        await renderOnce();
-      } else {
-        const error = await response.text();
-        alert(`Failed to save: ${error}`);
-      }
-    } catch(e) {
-      console.error('Failed to save commute time:', e);
-      alert('Failed to save commute time');
-    }
-  };
-  
-  window.saveCommuteTracking = async function(commuteId) {
-    const input = document.getElementById(`tracking-${commuteId}`);
-    if (!input) return;
-    
-    try {
-      const response = await fetch(`${apiBase}/api/commute/${commuteId}`, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({tracking_url: input.value || null})
-      });
-      
-      if (response.ok) {
-        await renderOnce();
-      } else {
-        const error = await response.text();
-        alert(`Failed to save: ${error}`);
-      }
-    } catch(e) {
-      console.error('Failed to save tracking URL:', e);
-      alert('Failed to save tracking URL');
-    }
-  };
-  
-  window.removeCommuteTracking = async function(commuteId) {
-    if (!confirm('Remove tracking link?')) return;
-    
-    try {
-      const response = await fetch(`${apiBase}/api/commute/${commuteId}`, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({tracking_url: ''})
-      });
-      
-      if (response.ok) {
-        await renderOnce();
-      } else {
-        console.error('Failed to remove tracking URL');
-      }
-    } catch(e) {
-      console.error('Failed to remove tracking URL:', e);
-    }
-  };
-  
-  window.editCommuteTracking = function(commuteId) {
-    const trackingDiv = document.querySelector(`#tracking-div-${commuteId}`);
-    const currentUrl = trackingDiv.querySelector('a')?.href || '';
-    
-    trackingDiv.innerHTML = `
-      <input type="url" id="tracking-${esc(commuteId)}" class="commute-tracking-input" 
-             placeholder="https://flightaware.com/..." value="${esc(currentUrl)}" 
-             style="width: 400px; padding: 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--card); color: var(--text);">
-      <button class="btn" style="margin-left: 8px;" onclick="saveCommuteTracking('${esc(commuteId)}')">Save</button>
-      <button class="btn" style="margin-left: 4px;" onclick="renderOnce()">Cancel</button>
-    `;
-  };
-  
-  window.hideCommute = async function(commuteId) {
-    if (!confirm('Hide this commute row?')) return;
-    
-    const row = document.querySelector(`[data-commute-id="${commuteId}"]`);
-    const detailsRow = row ? row.nextElementSibling : null;
-    
-    if (row) row.style.display = 'none';
-    if (detailsRow && detailsRow.classList.contains('details')) {
-      detailsRow.style.display = 'none';
     }
   };
 
@@ -484,9 +267,9 @@
 
   const clockSel=document.getElementById('clock-mode');
   if(clockSel){
-    clockSel.value = String(state.clockMode);
+    clockSel.checked = state.clockMode === 24;
     clockSel.addEventListener('change', () => {
-      state.clockMode = parseInt(clockSel.value,10)===24 ? 24 : 12;
+      state.clockMode = clockSel.checked ? 24 : 12;
       repaintTimesOnly();
     });
   }
@@ -573,7 +356,6 @@
       }
       lastRowToggle = now;
       
-      // Clear focus from any previously focused row
       document.querySelectorAll('tr.summary').forEach(row => {
         row.blur();
         row.querySelectorAll('td').forEach(td => td.blur());
@@ -587,7 +369,6 @@
         tbl.classList.toggle('table-visible', open);
       });
       
-      // Blur the current element to prevent stuck states
       if (document.activeElement) {
         document.activeElement.blur();
       }
@@ -643,18 +424,11 @@
     }
 
     state.lastPullIso=data.last_pull_local_iso||null;
-    state.nextRefreshIso=data.next_pull_local_iso||null;
 
     const hintedHidden=(data&&(data.hidden_count??(data.hidden&&data.hidden.count)));
     applyHiddenCount(typeof hintedHidden==='number'?hintedHidden:state.hiddenCount);
 
     setText('#last-pull', minutesOnlyAgo(state.lastPullIso));
-
-    const nextEl = qs('#next-refresh');
-    if (nextEl) {
-      const base = (data.next_pull_local && data.tz_label) ? `${data.next_pull_local} (${data.tz_label})` : '—';
-      nextEl.innerHTML = base;
-    }
 
     const calendarData = data.calendar_rows || [];
     const tableRows = data.rows || [];
@@ -663,15 +437,6 @@
     
     const tbody=qs('#pairings-body');
     tbody.innerHTML=tableRows.map((row)=>renderRowHTML(row,HOME_BASE)).join('');
-    
-    const isMobile = window.innerWidth <= 740;
-    const table = qs('#pairings');
-    if(isMobile && table && !table.parentElement.classList.contains('table-wrapper')) {
-      const wrapper = document.createElement('div');
-      wrapper.className = 'table-wrapper';
-      table.parentNode.insertBefore(wrapper, table);
-      wrapper.appendChild(table);
-    }
 
     repaintTimesOnly();
     applyCalendarLayout();
@@ -751,97 +516,6 @@
           <td class="sum-first">${labelHtml}</td>
           <td class="off-dur" data-dw="report">${durHtml}</td>
           <td data-dw="release"></td>
-        </tr>`;
-    }
-    
-    if(row.kind==='commute'){
-      const display = row.display || {};
-      const commuteId = row.commute_id || '';
-      const reportStr = display.report_str || 'Set report time';
-      const reportIso = row.report_local_iso || '';
-      const releaseIso = row.release_local_iso || '';
-      const trackingUrl = row.tracking_url || '';
-      const label = display.label || 'Commute';
-      
-      let timeValue = '';
-      let dateStr = '';
-      let arrivalStr = '';
-      
-      if (reportIso) {
-        const dt = new Date(reportIso);
-        const hours = String(dt.getHours()).padStart(2, '0');
-        const mins = String(dt.getMinutes()).padStart(2, '0');
-        timeValue = `${hours}:${mins}`;
-        dateStr = dt.toISOString().split('T')[0];
-      }
-      
-      if (releaseIso) {
-        const arrDt = new Date(releaseIso);
-        const arrHours = arrDt.getHours();
-        const arrMins = String(arrDt.getMinutes()).padStart(2, '0');
-        const ampm = arrHours >= 12 ? 'PM' : 'AM';
-        const displayHours = arrHours % 12 || 12;
-        arrivalStr = `Arrive: ${displayHours}:${arrMins} ${ampm}`;
-      }
-      
-      let trackingHtml = '';
-      if (trackingUrl && trackingUrl !== 'null' && trackingUrl !== '') {
-        trackingHtml = `
-          <div id="tracking-div-${esc(commuteId)}" style="display: flex; align-items: center; gap: 8px;">
-            <a href="${esc(trackingUrl)}" target="_blank" style="color: #0066cc; text-decoration: underline;">
-              Track Flight →
-            </a>
-            <button class="btn btn-icon" style="padding: 4px 8px; font-size: 14px; opacity: 1.0;" onclick="editCommuteTracking('${esc(commuteId)}')" title="Edit">✏️</button>
-            <button class="btn btn-icon" style="padding: 4px 8px; font-size: 14px; background: #aa3333; opacity: 1.0;" onclick="removeCommuteTracking('${esc(commuteId)}')" title="Remove">🗑️</button>
-          </div>
-        `;
-      } else {
-        trackingHtml = `
-          <div id="tracking-div-${esc(commuteId)}">
-            <input type="url" id="tracking-${esc(commuteId)}" class="commute-tracking-input" 
-                   placeholder="https://flightaware.com/..." value="" 
-                   style="width: 400px; padding: 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--card); color: var(--text);">
-            <button class="btn" style="margin-left: 8px;" onclick="saveCommuteTracking('${esc(commuteId)}')">Save</button>
-          </div>
-        `;
-      }
-      
-      return `
-        <tr class="summary commute" data-commute-id="${esc(commuteId)}" data-report-date="${esc(dateStr)}">
-          ${renderCheckCell(row)}
-          <td class="sum-first">
-            <strong>${label}</strong>
-          </td>
-          <td data-dw="report">${esc(reportStr)}</td>
-          <td data-dw="release">
-            ${trackingUrl && trackingUrl !== 'null' && trackingUrl !== '' ? 
-              `<a href="${esc(trackingUrl)}" target="_blank" style="color: #0066cc; text-decoration: underline;">Track →</a>` : ''}
-            ${arrivalStr ? `<div style="font-size: 0.9em; color: var(--muted); margin-top: 2px;">${esc(arrivalStr)}</div>` : ''}
-          </td>
-        </tr>
-        <tr class="details">
-          <td colspan="4">
-            <div class="daysbox" style="padding: 16px;">
-              <div style="margin-bottom: 12px;">
-                <label style="display: block; margin-bottom: 4px; font-weight: 600; color: var(--text);">Commute Report Time:</label>
-                <input type="time" id="time-${esc(commuteId)}" class="commute-report-input" value="${esc(timeValue)}" style="padding: 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--card); color: var(--text);">
-                <button class="btn" style="margin-left: 8px;" onclick="saveCommuteTime('${esc(commuteId)}')">Save</button>
-              </div>
-              <div style="margin-bottom: 12px;">
-                <label style="display: block; margin-bottom: 4px; font-weight: 600; color: var(--text);">Commute Arrival Time:</label>
-                <div style="padding: 6px; color: var(--text);">
-                  ${arrivalStr || 'Arrival time will be set based on pairing report time'}
-                </div>
-              </div>
-              <div style="margin-bottom: 12px;">
-                <label style="display: block; margin-bottom: 4px; font-weight: 600; color: var(--text);">FlightAware Tracking:</label>
-                ${trackingHtml}
-              </div>
-              <div>
-                <button class="btn" style="background: var(--accent); color: #031323;" onclick="hideCommute('${esc(commuteId)}')">Hide This Commute</button>
-              </div>
-            </div>
-          </td>
         </tr>`;
     }
 
@@ -1022,22 +696,7 @@
   }
 
   function tickStatusLine(){
-    if(state.lastPullIso)setText('#last-pull',minutesOnlyAgo(state.lastPullIso));
-    
-    const etaEl=qs('#next-refresh-eta');
-    if(!etaEl||!state.nextRefreshIso)return;
-    const leftSec=Math.max(0,Math.floor((new Date(state.nextRefreshIso).getTime()-Date.now())/1000));
-    if(leftSec>0){
-      const m=Math.ceil(leftSec/60);
-      etaEl.textContent=` (in ${m}m)`;
-    }else{
-      etaEl.textContent=' (refreshing…)';
-      const now=Date.now();
-      if(!state._zeroKick||now-state._zeroKick>4000){
-        state._zeroKick=now;
-        renderOnce();
-      }
-    }
+    if(state.lastPullIso) setText('#last-pull', minutesOnlyAgo(state.lastPullIso));
   }
 
   // Utilities
@@ -1055,7 +714,7 @@
   }
   function safeParseJSON(s){try{return JSON.parse(s||'{}')}catch{return null}}
 
-  // === Resize/orientation/visibility handling ===
+  // === Resize handling ===
   let _rzTimer = null;
   function debouncedApply() {
     if (_rzTimer) clearTimeout(_rzTimer);
@@ -1066,7 +725,6 @@
 
   window.addEventListener('resize', debouncedApply);
 
-  // Clear any stuck hover/focus states after touch
   document.addEventListener('touchend', () => {
     setTimeout(() => {
       if (document.activeElement && document.activeElement !== document.body) {
@@ -1078,7 +736,6 @@
   function handleOrientationChange() {
     applyCalendarLayout();
     setTimeout(applyCalendarLayout, 120);
-    requestAnimationFrame(() => requestAnimationFrame(applyCalendarLayout));
   }
   
   window.addEventListener('orientationchange', handleOrientationChange);
@@ -1086,10 +743,4 @@
     if (!document.hidden) handleOrientationChange();
   });
   window.addEventListener('pageshow', handleOrientationChange);
-
-  const ccObsTarget = document.getElementById('calendar-container');
-  if (window.ResizeObserver && ccObsTarget) {
-    const ro = new ResizeObserver(() => applyCalendarLayout());
-    ro.observe(ccObsTarget);
-  }
 })();

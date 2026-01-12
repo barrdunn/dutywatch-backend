@@ -16,9 +16,9 @@ import logging
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
-from pairing_builder import build_pairings
-from parser import extract_pairing_id
-from utils import iso_to_dt, to_local, ensure_hhmm, to_12h, time_display
+from .pairing_builder import build_pairings
+from .parser import extract_pairing_id
+from .utils import iso_to_dt, to_local, ensure_hhmm, to_12h, time_display
 
 logger = logging.getLogger("rows")
 
