@@ -26,6 +26,12 @@
     el.textContent = (el.textContent || '').replace(/\s*\b(19|20)\d{2}\b\s*/g, ' ').trim();
   }
 
+  // Build calendar events from pairing rows
+  // Rules:
+  // 1. Trip with hotel (layover) → connected bar spanning all duty days
+  // 2. Trip without hotel (no layover, even if crosses midnight) → single bar on report date
+  // 3. Different trips on consecutive days → separate bars (NOT connected)
+  // 4. Past trips are not shown
   function buildCalendarEvents(rows) {
     const events = [];
     
@@ -34,36 +40,79 @@
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
+    // Collect trip events - each trip becomes its own event (not merged with other trips)
+    const tripEvents = [];
+    
     rows.forEach(row => {
       if (!row || row.kind === 'off' || !row.has_legs) return;
-      if (!row.report_local_iso || !row.release_local_iso) return;
+      if (!row.report_local_iso) return;
       
-      const startDate = row.report_local_iso.split('T')[0];
-      const releaseDate = row.release_local_iso.split('T')[0];
+      const reportDate = row.report_local_iso.split('T')[0];
       
-      const [relYear, relMonth, relDay] = releaseDate.split('-').map(Number);
-      const releaseDateObj = new Date(relYear, relMonth - 1, relDay);
-      releaseDateObj.setHours(23, 59, 59, 999);
-      const isPast = releaseDateObj < today;
+      // Check if any day has a hotel (= layover)
+      const hasHotel = row.days && row.days.some(day => day.hotel);
       
-      const endDateObj = new Date(relYear, relMonth - 1, relDay + 1);
-      const endDate = endDateObj.toISOString().split('T')[0];
+      let startDate, endDate;
       
-      const bgColor = isPast ? 'rgba(73, 179, 124, 0.2)' : '#49b37c';
-      const borderColor = isPast ? 'rgba(73, 179, 124, 0.2)' : '#49b37c';
+      if (hasHotel) {
+        // Multi-day trip with layover - collect all duty days for this trip
+        const tripDates = [];
+        row.days.forEach(day => {
+          const dayDate = day.actual_date || (day.date_local_iso ? day.date_local_iso.split('T')[0] : null);
+          if (dayDate && !tripDates.includes(dayDate)) {
+            tripDates.push(dayDate);
+          }
+        });
+        
+        if (tripDates.length > 0) {
+          tripDates.sort();
+          startDate = tripDates[0];
+          endDate = tripDates[tripDates.length - 1];
+        } else {
+          startDate = reportDate;
+          endDate = reportDate;
+        }
+      } else {
+        // No hotel = no layover, single bar on report date
+        startDate = reportDate;
+        endDate = reportDate;
+      }
+      
+      // Skip past trips
+      const [endYear, endMonth, endDay] = endDate.split('-').map(Number);
+      const endDateObj = new Date(endYear, endMonth - 1, endDay);
+      endDateObj.setHours(23, 59, 59, 999);
+      if (endDateObj < today) return;
+      
+      tripEvents.push({
+        pairingId: row.pairing_id,
+        startDate: startDate,
+        endDate: endDate
+      });
+    });
+    
+    // Create events - no merging between different trips
+    tripEvents.forEach(trip => {
+      const [endYear, endMonth, endDay] = trip.endDate.split('-').map(Number);
+      
+      // FullCalendar end date is exclusive, so add 1 day
+      const endDateObj = new Date(endYear, endMonth - 1, endDay + 1);
+      const endDateExclusive = endDateObj.toISOString().split('T')[0];
+      
+      const bgColor = 'rgba(151, 245, 167, 0.7)';
+      const borderColor = 'rgba(151, 245, 167, 0.7)';
       
       events.push({
-        id: row.pairing_id || 'event-' + Math.random(),
-        title: row.pairing_id || 'Event',
-        start: startDate,
-        end: endDate,
+        id: trip.pairingId || 'event-' + Math.random(),
+        title: trip.pairingId || 'Event',
+        start: trip.startDate,
+        end: endDateExclusive,
         allDay: true,
         backgroundColor: bgColor,
         borderColor: borderColor,
         textColor: '#ffffff',
         extendedProps: {
-          pairingId: row.pairing_id,
-          isPast: isPast
+          pairingId: trip.pairingId
         }
       });
     });
@@ -90,7 +139,7 @@
         titleFormat: { month: 'long' },
         height: 'auto',
         fixedWeekCount: false,
-        showNonCurrentDates: true,
+        showNonCurrentDates: false,
         eventDisplay: 'block',
         dayMaxEvents: 3,
         moreLinkClick: 'popover',
@@ -152,7 +201,7 @@
         titleFormat: { month: 'long' },
         height: 'auto',
         fixedWeekCount: false,
-        showNonCurrentDates: true,
+        showNonCurrentDates: false,
         eventDisplay: 'block',
         dayMaxEvents: 3,
         moreLinkClick: 'popover',
@@ -228,7 +277,41 @@
       });
     }
     
+    // Mark days with events for styling
+    setTimeout(() => {
+      markDaysWithEvents();
+    }, 50);
+    
     setTimeout(applyCalendarLayout, 0);
+  }
+  
+  function markDaysWithEvents() {
+    // Get all event dates from both calendars
+    const eventDates = new Set();
+    
+    [calendarCurrent, calendarNext].forEach(cal => {
+      if (!cal) return;
+      cal.getEvents().forEach(event => {
+        // Get all dates this event spans
+        let d = new Date(event.start);
+        const end = event.end ? new Date(event.end) : d;
+        while (d < end) {
+          const dateStr = d.toISOString().split('T')[0];
+          eventDates.add(dateStr);
+          d.setDate(d.getDate() + 1);
+        }
+      });
+    });
+    
+    // Mark all day cells
+    document.querySelectorAll('.fc-daygrid-day').forEach(day => {
+      const dateStr = day.getAttribute('data-date');
+      if (dateStr && eventDates.has(dateStr)) {
+        day.classList.add('has-flying-event');
+      } else {
+        day.classList.remove('has-flying-event');
+      }
+    });
   }
 
   // ===== Time helpers =====

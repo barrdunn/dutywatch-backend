@@ -254,25 +254,30 @@ select.toggle {
 
 #calendar-container {
   display: flex;
-  gap: 20px;
+  gap: 16px;
   flex-shrink: 0;
+  background: rgba(159, 176, 192, 0.03);
+  border-radius: 12px;
+  padding: 12px 16px;
+  width: 340px;
 }
 
-/* Mobile: stack vertically */
-@media (max-width: 900px) {
+/* Mobile: stack vertically - only at smaller breakpoint */
+@media (max-width: 740px) {
   .header-row {
     flex-direction: column;
   }
   
   #calendar-container {
     justify-content: center;
-    width: 100%;
+    width: 340px;
+    max-width: 100%;
   }
 }
 
 .calendar-widget {
-  width: 240px;
-  background: var(--card);
+  width: 145px;
+  background: transparent;
   border: none;
   border-radius: 5px;
   padding: 0px;
@@ -310,7 +315,7 @@ select.toggle {
 }
 
 .fc-toolbar-title {
-  font-size: 18px !important;
+  font-size: 16px !important;
   font-weight: 600 !important;
   color: var(--text) !important;
   line-height: 1.2 !important;
@@ -319,7 +324,7 @@ select.toggle {
 }
 
 .fc-toolbar * {
-  font-size: 18px !important;
+  font-size: 16px !important;
 }
 
 .fc-button {
@@ -330,72 +335,89 @@ select.toggle {
    CALENDAR DAY CELLS
    ======================== */
 .fc-daygrid-day {
-  background: rgba(159, 176, 192, 0.03) !important;
+  background: transparent !important;
   border: none !important;
-  min-height: 30px !important;
-  max-height: 30px !important;
+  min-height: 24px !important;
+  max-height: 24px !important;
 }
 
-.fc-day-other .fc-daygrid-day-number {
-  opacity: 0.5;
-  color: var(--muted);
+/* Hide other month dates completely */
+.fc-day-other {
+  visibility: hidden;
 }
 
-.fc-day-other.fc-daygrid-day,
-.fc-daygrid-day.fc-day-other {
-  background: var(--row) !important;
-}
-
-.fc-day-other .fc-daygrid-event-harness,
-.fc-day-other .fc-daygrid-more-link {
+.fc-day-other .fc-daygrid-day-number,
+.fc-day-other .fc-daygrid-day-events,
+.fc-day-other .fc-daygrid-event-harness {
   display: none !important;
 }
 
 .fc-daygrid-day-frame {
-  min-height: 30px !important;
-  max-height: 30px !important;
+  min-height: 24px !important;
+  max-height: 24px !important;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
 }
 
 .fc-daygrid-day-events {
   margin: 0 !important;
   min-height: 0 !important;
-  max-height: 16px !important;
+  max-height: 8px !important;
   overflow: visible !important;
+  position: absolute;
+  bottom: auto;
+  top: 14px;
+  left: 0;
+  right: 0;
 }
 
 .fc-daygrid-body-unbalanced .fc-daygrid-day-events {
   min-height: 0 !important;
-  position: relative !important;
+  position: absolute !important;
+  top: 14px;
 }
 
 .fc-daygrid-day-top {
-  padding: 1px !important;
+  padding: 0 !important;
   line-height: 1 !important;
   flex: none !important;
+  display: flex;
+  justify-content: center;
+  width: 100%;
 }
 
 .fc-daygrid-day-number {
-  color: var(--text);
-  padding: 0px 2px !important;
-  font-size: 9px !important;
+  color: rgba(159, 176, 192, 0.6);
+  padding: 0 !important;
+  font-size: 10px !important;
+  font-weight: 400 !important;
   line-height: 1 !important;
+  text-align: center;
 }
 
 .fc tbody tr {
-  height: 30px !important;
+  height: 24px !important;
 }
 
 .fc-daygrid-day-bg {
-  height: 30px !important;
+  height: 24px !important;
 }
 
 .fc-day-today {
   background: rgba(111, 177, 255, 0.25) !important;
+  border-radius: 4px;
 }
 
 .fc-day-today .fc-daygrid-day-number {
   color: var(--accent);
-  font-weight: 700;
+  font-weight: 600 !important;
+}
+
+/* Days with events get lighter text */
+.fc-daygrid-day.has-flying-event .fc-daygrid-day-number {
+  color: rgba(255, 255, 255, 0.85) !important;
 }
 
 /* ========================
@@ -403,20 +425,22 @@ select.toggle {
    ======================== */
 .fc-event,
 .fc-daygrid-event {
-  background: #49b37c;
+  background: rgba(151, 245, 167, 0.7);
   border: 0;
-  padding: 0 2px;
-  margin: 1px 3px;
-  border-radius: 10px;
+  padding: 0;
+  margin: 0 4px;
+  border-radius: 4px;
   font-size: 0;
   cursor: pointer;
-  min-height: 5px;
+  min-height: 4px;
+  max-height: 4px;
 }
 
 .fc-event-main {
   padding: 0;
-  height: 5px;
-  border-radius: 10px;
+  height: 3px;
+  border-radius: 4px;
+  background: rgba(151, 245, 167, 0.7);
 }
 
 .fc-daygrid-event-harness {
@@ -427,24 +451,26 @@ select.toggle {
 
 .fc-h-event {
   border-radius: 0 !important;
-  margin: 1px 0 !important;
+  margin: 0 !important;
+  height: 2px !important;
+  min-height: 2px !important;
 }
 
 .fc-h-event.fc-event-start {
-  border-top-left-radius: 10px !important;
-  border-bottom-left-radius: 10px !important;
-  margin-left: 3px !important;
+  border-top-left-radius: 4px !important;
+  border-bottom-left-radius: 4px !important;
+  margin-left: 2px !important;
 }
 
 .fc-h-event.fc-event-end {
-  border-top-right-radius: 10px !important;
-  border-bottom-right-radius: 10px !important;
-  margin-right: 3px !important;
+  border-top-right-radius: 4px !important;
+  border-bottom-right-radius: 4px !important;
+  margin-right: 2px !important;
 }
 
 .fc-h-event.fc-event-start.fc-event-end {
-  border-radius: 10px !important;
-  margin: 1px 3px !important;
+  border-radius: 4px !important;
+  margin: 0 2px !important;
 }
 
 /* ========================
@@ -466,16 +492,16 @@ select.toggle {
 }
 
 .fc-col-header-cell {
-  color: var(--muted);
-  padding: 0 2px !important;
-  font-weight: 700 !important;
-  font-size: 10px;
+  color: rgba(159, 176, 192, 0.5);
+  padding: 0 1px !important;
+  font-weight: 500 !important;
+  font-size: 9px;
   border: none !important;
 }
 
 .fc-col-header-cell-cushion {
   padding: 2px 0 !important;
-  font-weight: 700 !important;
+  font-weight: 500 !important;
   text-align: center !important;
 }
 
@@ -486,22 +512,6 @@ select.toggle {
   border-radius: 5px !important;
   overflow: hidden !important;
   border: none !important;
-}
-
-.fc-daygrid-body tr:first-child .fc-daygrid-day:first-child {
-  border-top-left-radius: 5px !important;
-}
-
-.fc-daygrid-body tr:first-child .fc-daygrid-day:last-child {
-  border-top-right-radius: 5px !important;
-}
-
-.fc-daygrid-body tr:last-child .fc-daygrid-day:first-child {
-  border-bottom-left-radius: 5px !important;
-}
-
-.fc-daygrid-body tr:last-child .fc-daygrid-day:last-child {
-  border-bottom-right-radius: 5px !important;
 }
 
 .fc th,
@@ -1213,10 +1223,13 @@ tr.highlight td {
     justify-content: center;
     margin: 20px auto 12px;
     gap: 8px;
+    width: 340px;
+    max-width: 100%;
+    padding: 12px;
   }
   
   .calendar-widget {
-    width: calc(50% - 4px);
-    max-width: 180px;
+    width: 145px;
+    max-width: calc(50% - 4px);
   }
 }
