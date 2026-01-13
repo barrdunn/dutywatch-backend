@@ -180,7 +180,7 @@ select.toggle {
 }
 
 .calendar-widget {
-  width: 170px;
+  width: 145px;
 }
 
 /* FullCalendar - compact like old version */
@@ -722,10 +722,7 @@ tr.highlight td {
   }
 
   #calendar-container {
-    width: 100%;
-    max-width: 400px;
     margin: 0 auto;
-    padding: 12px 24px 20px;
   }
 
   .remaining-full {
