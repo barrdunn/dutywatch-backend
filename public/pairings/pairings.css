@@ -518,7 +518,7 @@ tr.details > td::before {
 }
 
 .legs-wrap {
-  padding: 0 20px;
+  padding: 0 10px;
 }
 
 /* ========================
@@ -573,16 +573,19 @@ tr.details > td::before {
   font-size: 12px;
 }
 
-/* Equal width columns - 25% each */
+/* Column widths - Flight 15%, others equal share of remaining 85% */
 .legs th:nth-child(1),
-.legs td:nth-child(1),
+.legs td:nth-child(1) {
+  width: 15% !important;
+}
+
 .legs th:nth-child(2),
 .legs td:nth-child(2),
 .legs th:nth-child(3),
 .legs td:nth-child(3),
 .legs th:nth-child(4),
 .legs td:nth-child(4) {
-  width: 25% !important;
+  width: 28.33% !important;
 }
 
 .leg-done td {
@@ -727,6 +730,32 @@ tr.highlight td {
 
   #calendar-container {
     margin: 0 auto;
+    width: 100%;
+    max-width: 360px;
+    padding: 10px 12px 14px;
+    gap: 12px;
+  }
+
+  .calendar-widget {
+    width: calc(50% - 6px);
+    min-width: 0;
+  }
+
+  .fc {
+    font-size: 10px;
+  }
+
+  .fc-toolbar-title {
+    font-size: 13px !important;
+  }
+
+  .fc-daygrid-day-number {
+    font-size: 9px !important;
+    padding: 1px 2px !important;
+  }
+
+  .fc-col-header-cell {
+    font-size: 8px;
   }
 
   .remaining-full {
@@ -739,5 +768,9 @@ tr.highlight td {
 
   #pairings {
     width: 100% !important;
+  }
+
+  .legs-wrap {
+    padding: 0;
   }
 }
