@@ -1,5 +1,5 @@
 (function () {
-  const cfg = safeParseJSON(document.getElementById('dw-boot')?.textContent) || {};
+  const cfg = window.dwConfig || {};
   const apiBase = cfg.apiBase || '';
   const HOME_BASE = (cfg.baseAirport || 'DFW').toUpperCase();
 
@@ -12,7 +12,8 @@
     clockMode: cfg.clockMode === '24' ? 24 : 12,
     onlyReports: !!cfg.onlyReports,
     hiddenCount: 0,
-    layoutMode: null
+    layoutMode: null,
+    isRefreshing: false
   };
 
   // =========================
@@ -26,12 +27,6 @@
     el.textContent = (el.textContent || '').replace(/\s*\b(19|20)\d{2}\b\s*/g, ' ').trim();
   }
 
-  // Build calendar events from pairing rows
-  // Rules:
-  // 1. Trip with hotel (layover) → connected bar spanning all duty days
-  // 2. Trip without hotel (no layover, even if crosses midnight) → single bar on report date
-  // 3. Different trips on consecutive days → separate bars (NOT connected)
-  // 4. Past trips are not shown
   function buildCalendarEvents(rows) {
     const events = [];
     
@@ -40,7 +35,6 @@
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
-    // Collect trip events - each trip becomes its own event (not merged with other trips)
     const tripEvents = [];
     
     rows.forEach(row => {
@@ -48,14 +42,11 @@
       if (!row.report_local_iso) return;
       
       const reportDate = row.report_local_iso.split('T')[0];
-      
-      // Check if any day has a hotel (= layover)
       const hasHotel = row.days && row.days.some(day => day.hotel);
       
       let startDate, endDate;
       
       if (hasHotel) {
-        // Multi-day trip with layover - collect all duty days for this trip
         const tripDates = [];
         row.days.forEach(day => {
           const dayDate = day.actual_date || (day.date_local_iso ? day.date_local_iso.split('T')[0] : null);
@@ -73,12 +64,10 @@
           endDate = reportDate;
         }
       } else {
-        // No hotel = no layover, single bar on report date
         startDate = reportDate;
         endDate = reportDate;
       }
       
-      // Skip past trips
       const [endYear, endMonth, endDay] = endDate.split('-').map(Number);
       const endDateObj = new Date(endYear, endMonth - 1, endDay);
       endDateObj.setHours(23, 59, 59, 999);
@@ -91,11 +80,8 @@
       });
     });
     
-    // Create events - no merging between different trips
     tripEvents.forEach(trip => {
       const [endYear, endMonth, endDay] = trip.endDate.split('-').map(Number);
-      
-      // FullCalendar end date is exclusive, so add 1 day
       const endDateObj = new Date(endYear, endMonth - 1, endDay + 1);
       const endDateExclusive = endDateObj.toISOString().split('T')[0];
       
@@ -277,7 +263,6 @@
       });
     }
     
-    // Mark days with events for styling
     setTimeout(() => {
       markDaysWithEvents();
     }, 50);
@@ -286,13 +271,11 @@
   }
   
   function markDaysWithEvents() {
-    // Get all event dates from both calendars
     const eventDates = new Set();
     
     [calendarCurrent, calendarNext].forEach(cal => {
       if (!cal) return;
       cal.getEvents().forEach(event => {
-        // Get all dates this event spans
         let d = new Date(event.start);
         const end = event.end ? new Date(event.end) : d;
         while (d < end) {
@@ -303,7 +286,6 @@
       });
     });
     
-    // Mark all day cells
     document.querySelectorAll('.fc-daygrid-day').forEach(day => {
       const dateStr = day.getAttribute('data-date');
       if (dateStr && eventDates.has(dateStr)) {
@@ -323,88 +305,126 @@
   function swapFirstTime(str,w,c=true){if(!str)return str;const m12=str.match(TIME_12_RE);if(m12){const h=parseInt(m12[1],10),m=parseInt(m12[2],10),h24=(m12[3].toUpperCase()==='PM'?(h%12)+12:(h%12));return str.replace(TIME_12_RE,w?to24(h24,m,c):`${h}:${String(m).padStart(2,'0')} ${m12[3].toUpperCase()}`);}const m24=str.match(TIME_24_RE);if(m24){const h=parseInt(m24[1],10),m=parseInt(m24[2],10);return str.replace(TIME_24_RE,w?to24(h,m,c):to12(h,m));}return str;}
   function fmtHHMM(hhmm,w,c=true){if(!hhmm)return'';const s=String(hhmm).replace(':','').padStart(4,'0');const hh=parseInt(s.slice(0,2),10),mm=parseInt(s.slice(2),10);return w?to24(hh,mm,c):to12(hh,mm);}
 
+  // ===== Refresh UI helpers =====
+  function setRefreshingState(isRefreshing) {
+    state.isRefreshing = isRefreshing;
+    const btn = qs('#refresh-btn');
+    const chip = qs('#last-pull-chip');
+    
+    if (btn) {
+      btn.disabled = isRefreshing;
+      btn.textContent = isRefreshing ? 'Refreshing…' : 'Refresh';
+      btn.classList.toggle('refreshing', isRefreshing);
+    }
+    
+    if (chip) {
+      chip.classList.toggle('refreshing', isRefreshing);
+    }
+  }
+
+  function flashLastPullChip() {
+    const chip = qs('#last-pull-chip');
+    if (chip) {
+      chip.classList.remove('flash');
+      void chip.offsetWidth;
+      chip.classList.add('flash');
+    }
+  }
+
   // ===== Actions =====
-  window.dwManualRefresh = async function(){
-    try{
-      await fetch(apiBase+'/api/refresh',{method:'POST'});
-    }catch(e){
-      console.error(e);
+  window.dwManualRefresh = async function() {
+    if (state.isRefreshing) return;
+    
+    setRefreshingState(true);
+    
+    try {
+      const res = await fetch(apiBase + '/api/refresh', { method: 'POST' });
+      const data = await res.json();
+      
+      if (data.ok) {
+        await renderOnce();
+        flashLastPullChip();
+      }
+    } catch (e) {
+      console.error('Refresh failed:', e);
+    } finally {
+      setRefreshingState(false);
     }
   };
 
-  // ===== Inline settings =====
-  const refreshSel=document.getElementById('refresh-mins');
-  if(refreshSel){
-    if(cfg.refreshMinutes) refreshSel.value = String(cfg.refreshMinutes);
-    refreshSel.addEventListener('change', async () => {
-      const minutes = parseInt(refreshSel.value,10);
-      try{
-        await fetch(apiBase+'/api/settings/refresh-seconds',{
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({seconds:minutes*60})
-        });
-      }catch(e){console.error(e);}
-    });
+  // ===== Clock mode (controlled by settings.js) =====
+  function setClockMode(mode) {
+    state.clockMode = mode;
+    repaintTimesOnly();
   }
 
-  const clockSel=document.getElementById('clock-mode');
-  if(clockSel){
-    clockSel.checked = state.clockMode === 24;
-    clockSel.addEventListener('change', () => {
-      state.clockMode = clockSel.checked ? 24 : 12;
-      repaintTimesOnly();
-    });
+  function getClockMode() {
+    return state.clockMode;
   }
+
+  // Expose for settings module
+  window.dwPairings = {
+    setClockMode,
+    getClockMode
+  };
 
   // ===== Hidden chip =====
-  function applyHiddenCount(n){
-    state.hiddenCount=Number(n)||0;
-    const chip=qs('#hidden-chip');
-    const countEl=qs('#hidden-count');
-    if(!chip||!countEl) return;
-    countEl.textContent=`Hidden: ${state.hiddenCount}`;
-    chip.classList.toggle('hidden',!(state.hiddenCount>0));
+  function applyHiddenCount(n) {
+    state.hiddenCount = Number(n) || 0;
+    const chip = qs('#hidden-chip');
+    const countEl = qs('#hidden-count');
+    if (!chip || !countEl) return;
+    countEl.textContent = `Hidden: ${state.hiddenCount}`;
+    chip.classList.toggle('hidden', !(state.hiddenCount > 0));
   }
 
   // ===== Live updates =====
   renderOnce();
-  try{
-    const es=new EventSource(apiBase+'/api/events');
-    es.addEventListener('change',async()=>{await renderOnce();});
-    es.addEventListener('schedule_update',async()=>{await renderOnce();});
-    es.addEventListener('hidden_update',async()=>{await renderOnce();});
-  }catch{}
+  try {
+    const es = new EventSource(apiBase + '/api/events');
+    es.addEventListener('change', async (e) => {
+      if (!state.isRefreshing) {
+        await renderOnce();
+        flashLastPullChip();
+      }
+    });
+    es.addEventListener('schedule_update', async (e) => {
+      // Settings modal will query backend when opened
+    });
+    es.addEventListener('hidden_update', async () => {
+      await renderOnce();
+    });
+  } catch {}
 
-  setInterval(tickStatusLine,1000);
+  setInterval(tickStatusLine, 1000);
 
   // ===== Plan modal =====
-  const planModal=qs('#plan-modal');
-  const planClose1=qs('#plan-close-1');
-  const planClose2=qs('#plan-close-2');
-  [planClose1,planClose2].forEach(b=>b&&b.addEventListener('click',closePlan));
+  const planModal = qs('#plan-modal');
+  const planClose1 = qs('#plan-close-1');
+  const planClose2 = qs('#plan-close-2');
+  [planClose1, planClose2].forEach(b => b && b.addEventListener('click', closePlan));
   
-  function openPlan(pairingId,reportIso){
-    if(!planModal) return;
+  function openPlan(pairingId, reportIso) {
+    if (!planModal) return;
     planModal.classList.remove('hidden');
     document.body.classList.add('modal-open');
-    const url=`${apiBase}/api/ack/plan?pairing_id=${encodeURIComponent(pairingId)}&report_local_iso=${encodeURIComponent(reportIso||'')}`;
-    setText('#plan-meta','Loading…');
-    qs('#plan-rows').innerHTML='';
-    fetch(url).then(r=>r.json()).then(data=>{
-      const attempts=data.attempts||[];
-      setText('#plan-meta',`Window: starts ${(data.policy?.push_start_hours||12)}h before report; includes calls during non-quiet hours.`);
-      qs('#plan-rows').innerHTML=attempts.map(a=>{
-        const when=new Date(a.at_iso);
-        const label=a.kind==='push'?'Push':'Call';
-        const details=a.kind==='call'?`Ring ${a?.meta?.ring||1}`:'';
+    const url = `${apiBase}/api/ack/plan?pairing_id=${encodeURIComponent(pairingId)}&report_local_iso=${encodeURIComponent(reportIso || '')}`;
+    setText('#plan-meta', 'Loading…');
+    qs('#plan-rows').innerHTML = '';
+    fetch(url).then(r => r.json()).then(data => {
+      const attempts = data.attempts || [];
+      setText('#plan-meta', `Window: starts ${(data.policy?.push_start_hours || 12)}h before report; includes calls during non-quiet hours.`);
+      qs('#plan-rows').innerHTML = attempts.map(a => {
+        const when = new Date(a.at_iso);
+        const label = a.kind === 'push' ? 'Push' : 'Call';
+        const details = a.kind === 'call' ? `Ring ${a?.meta?.ring || 1}` : '';
         return `<tr><td>${when.toLocaleString()}</td><td class="text-center">${label}</td><td>${details}</td></tr>`;
       }).join('');
-    }).catch(()=>setText('#plan-meta','Unable to load plan.'));
+    }).catch(() => setText('#plan-meta', 'Unable to load plan.'));
   }
   
-  function closePlan(){
-    if(!planModal)return;
+  function closePlan() {
+    if (!planModal) return;
     planModal.classList.add('hidden');
     document.body.classList.remove('modal-open');
   }
@@ -413,25 +433,25 @@
   let lastRowToggle = 0;
   const ROW_TOGGLE_DEBOUNCE = 300;
   
-  document.addEventListener('click',async(e)=>{
-    const unhide=e.target.closest('[data-unhide-all]');
-    if(unhide){
+  document.addEventListener('click', async (e) => {
+    const unhide = e.target.closest('[data-unhide-all]');
+    if (unhide) {
       e.preventDefault();
-      try{
-        await fetch(`${apiBase}/api/hidden/unhide_all`,{method:'POST'});
-      }catch(err){
-        console.error('unhide all failed',err);
+      try {
+        await fetch(`${apiBase}/api/hidden/unhide_all`, { method: 'POST' });
+      } catch (err) {
+        console.error('unhide all failed', err);
       }
       await renderOnce();
       return;
     }
     
-    if(e.target.closest('[data-stop-toggle]')){
+    if (e.target.closest('[data-stop-toggle]')) {
       e.stopPropagation();
     }
     
-    const sum=e.target.closest('tr.summary');
-    if(sum&&!e.target.closest('[data-ck]')){
+    const sum = e.target.closest('tr.summary');
+    if (sum && !e.target.closest('[data-ck]')) {
       const now = Date.now();
       if (now - lastRowToggle < ROW_TOGGLE_DEBOUNCE) {
         e.preventDefault();
@@ -445,10 +465,10 @@
       });
       
       sum.classList.toggle('open');
-      const details=sum.nextElementSibling;
-      if(!details||!details.classList.contains('details'))return;
-      const open=sum.classList.contains('open');
-      details.querySelectorAll('.day .legs').forEach(tbl=>{
+      const details = sum.nextElementSibling;
+      if (!details || !details.classList.contains('details')) return;
+      const open = sum.classList.contains('open');
+      details.querySelectorAll('.day .legs').forEach(tbl => {
         tbl.classList.toggle('table-visible', open);
       });
       
@@ -458,36 +478,36 @@
       return;
     }
     
-    const ck=e.target.closest('[data-ck]');
-    if(ck){
+    const ck = e.target.closest('[data-ck]');
+    if (ck) {
       e.preventDefault();
-      const pairingId=ck.getAttribute('data-pairing')||'';
-      const reportIso=ck.getAttribute('data-report')||'';
-      openPlan(pairingId,reportIso);
+      const pairingId = ck.getAttribute('data-pairing') || '';
+      const reportIso = ck.getAttribute('data-report') || '';
+      openPlan(pairingId, reportIso);
       return;
     }
     
-    const hideBtn=e.target.closest('[data-hide-pairing]');
-    if(hideBtn){
+    const hideBtn = e.target.closest('[data-hide-pairing]');
+    if (hideBtn) {
       e.preventDefault();
       e.stopPropagation();
-      const pairingId=hideBtn.getAttribute('data-hide-pairing')||'';
-      const reportIso=hideBtn.getAttribute('data-report')||'';
-      const details=hideBtn.closest('tr.details');
-      const summary=details?.previousElementSibling;
-      if(summary?.classList.contains('summary')){
+      const pairingId = hideBtn.getAttribute('data-hide-pairing') || '';
+      const reportIso = hideBtn.getAttribute('data-report') || '';
+      const details = hideBtn.closest('tr.details');
+      const summary = details?.previousElementSibling;
+      if (summary?.classList.contains('summary')) {
         summary.remove();
         details.remove();
-        applyHiddenCount(state.hiddenCount+1);
+        applyHiddenCount(state.hiddenCount + 1);
       }
-      try{
-        await fetch(`${apiBase}/api/hidden/hide`,{
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({pairing_id:pairingId,report_local_iso:reportIso})
+      try {
+        await fetch(`${apiBase}/api/hidden/hide`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pairing_id: pairingId, report_local_iso: reportIso })
         });
-      }catch(err){
-        console.error('hide failed',err);
+      } catch (err) {
+        console.error('hide failed', err);
       }
       await renderOnce();
       return;
@@ -495,21 +515,21 @@
   });
 
   // ===== Render function =====
-  async function renderOnce(){
-    const params=new URLSearchParams({is_24h:'0',only_reports:state.onlyReports?'1':'0'});
+  async function renderOnce() {
+    const params = new URLSearchParams({ is_24h: '0', only_reports: state.onlyReports ? '1' : '0' });
     let data;
-    try{
-      const res=await fetch(`${apiBase}/api/pairings?${params.toString()}`,{cache:'no-store'});
-      data=await res.json();
-    }catch(e){
-      console.error('Failed to fetch /api/pairings',e);
+    try {
+      const res = await fetch(`${apiBase}/api/pairings?${params.toString()}`, { cache: 'no-store' });
+      data = await res.json();
+    } catch (e) {
+      console.error('Failed to fetch /api/pairings', e);
       return;
     }
 
-    state.lastPullIso=data.last_pull_local_iso||null;
+    state.lastPullIso = data.last_pull_local_iso || null;
 
-    const hintedHidden=(data&&(data.hidden_count??(data.hidden&&data.hidden.count)));
-    applyHiddenCount(typeof hintedHidden==='number'?hintedHidden:state.hiddenCount);
+    const hintedHidden = (data && (data.hidden_count ?? (data.hidden && data.hidden.count)));
+    applyHiddenCount(typeof hintedHidden === 'number' ? hintedHidden : state.hiddenCount);
 
     setText('#last-pull', minutesOnlyAgo(state.lastPullIso));
 
@@ -518,49 +538,49 @@
     
     updateCalendarsWithRows(calendarData);
     
-    const tbody=qs('#pairings-body');
-    tbody.innerHTML=tableRows.map((row)=>renderRowHTML(row,HOME_BASE)).join('');
+    const tbody = qs('#pairings-body');
+    tbody.innerHTML = tableRows.map((row) => renderRowHTML(row, HOME_BASE)).join('');
 
     repaintTimesOnly();
     applyCalendarLayout();
   }
 
-  function repaintTimesOnly(){
-    const want24=state.clockMode===24;
-    document.querySelectorAll('[data-dw="report"]').forEach(el=>{
-      if(el.classList.contains('off-dur'))return;
-      const orig=el.getAttribute('data-orig')||el.textContent;
-      if(!el.hasAttribute('data-orig'))el.setAttribute('data-orig',orig);
-      el.textContent=swapFirstTime(orig,want24,false);
+  function repaintTimesOnly() {
+    const want24 = state.clockMode === 24;
+    document.querySelectorAll('[data-dw="report"]').forEach(el => {
+      if (el.classList.contains('off-dur')) return;
+      const orig = el.getAttribute('data-orig') || el.textContent;
+      if (!el.hasAttribute('data-orig')) el.setAttribute('data-orig', orig);
+      el.textContent = swapFirstTime(orig, want24, false);
     });
-    document.querySelectorAll('[data-dw="release"]').forEach(el=>{
-      const orig=el.getAttribute('data-orig')||el.textContent;
-      if(!el.hasAttribute('data-orig'))el.setAttribute('data-orig',orig);
-      el.textContent=swapFirstTime(orig,want24,false);
+    document.querySelectorAll('[data-dw="release"]').forEach(el => {
+      const orig = el.getAttribute('data-orig') || el.textContent;
+      if (!el.hasAttribute('data-orig')) el.setAttribute('data-orig', orig);
+      el.textContent = swapFirstTime(orig, want24, false);
     });
-    document.querySelectorAll('[data-dw="day-report"]').forEach(el=>{
-      const raw=el.getAttribute('data-hhmm')||el.textContent;
-      el.textContent=fmtHHMM(raw,want24,false);
+    document.querySelectorAll('[data-dw="day-report"]').forEach(el => {
+      const raw = el.getAttribute('data-hhmm') || el.textContent;
+      el.textContent = fmtHHMM(raw, want24, false);
     });
-    document.querySelectorAll('[data-dw="day-release"]').forEach(el=>{
-      const raw=el.getAttribute('data-hhmm')||el.textContent;
-      el.textContent=fmtHHMM(raw,want24,false);
+    document.querySelectorAll('[data-dw="day-release"]').forEach(el => {
+      const raw = el.getAttribute('data-hhmm') || el.textContent;
+      el.textContent = fmtHHMM(raw, want24, false);
     });
-    document.querySelectorAll('[data-dw="bt"]').forEach(el=>{
-      const dep=el.getAttribute('data-dep')||'';
-      const arr=el.getAttribute('data-arr')||'';
-      const left=fmtHHMM(dep,want24,false);
-      const right=fmtHHMM(arr,want24,false);
-      el.textContent=arr?`${left} → ${right}`:left;
+    document.querySelectorAll('[data-dw="bt"]').forEach(el => {
+      const dep = el.getAttribute('data-dep') || '';
+      const arr = el.getAttribute('data-arr') || '';
+      const left = fmtHHMM(dep, want24, false);
+      const right = fmtHHMM(arr, want24, false);
+      el.textContent = arr ? `${left} → ${right}` : left;
     });
   }
 
-  function pairingNowTag(row){
-    return row?.in_progress?' <span class="text-muted-normal">(Now)</span>':'';
+  function pairingNowTag(row) {
+    return row?.in_progress ? ' <span class="text-muted-normal">(Now)</span>' : '';
   }
 
-  function renderRowHTML(row,homeBase){
-    if(row.kind==='off'){
+  function renderRowHTML(row, homeBase) {
+    if (row.kind === 'off') {
       const display = row.display || {};
       const offLabel = display.off_label || 'OFF';
       const offDur = display.off_dur || '';
@@ -610,43 +630,43 @@
     const oobAirport = row.out_of_base_airport || '';
     const oobPill = showOOB ? `<span class="pill pill-red">${esc(oobAirport)}</span>` : '';
 
-    const days=row.days||[];
-    const detailsDays=hasLegs?days.map((day,i)=>renderDayHTML(row,day,i,days)).join(''):'';
+    const days = row.days || [];
+    const detailsDays = hasLegs ? days.map((day, i) => renderDayHTML(row, day, i, days)).join('') : '';
 
-    const noLegsBlock=!hasLegs?`<div data-stop-toggle class="no-legs-block">
+    const noLegsBlock = !hasLegs ? `<div data-stop-toggle class="no-legs-block">
            <span class="muted">No legs found.</span>
-           <button class="btn" data-hide-pairing="${esc(row.pairing_id||'')}" data-report="${esc(row.report_local_iso||'')}">
+           <button class="btn" data-hide-pairing="${esc(row.pairing_id || '')}" data-report="${esc(row.report_local_iso || '')}">
              Hide Event
            </button>
-         </div>`:'';
+         </div>` : '';
 
     const numDays = row.num_days || 1;
 
     return `
-      <tr class="summary ${isNonPairing?'non-pairing':''}" data-row-id="${esc(row.pairing_id||'')}">
+      <tr class="summary ${isNonPairing ? 'non-pairing' : ''}" data-row-id="${esc(row.pairing_id || '')}">
         ${renderCheckCell(row)}
         <td class="sum-first">
-          <strong>${esc(row.pairing_id||'')}</strong>${pairingNowTag(row)}
-          ${hasLegs?`<span class="pill">${numDays} day</span>`:``}
+          <strong>${esc(row.pairing_id || '')}</strong>${pairingNowTag(row)}
+          ${hasLegs ? `<span class="pill">${numDays} day</span>` : ``}
           ${oobPill}
         </td>
-        <td data-dw="report">${esc(row.display?.report_str||'')}</td>
-        <td data-dw="release">${isNonPairing?'':esc(row.display?.release_str||'')}</td>
+        <td data-dw="report">${esc(row.display?.report_str || '')}</td>
+        <td data-dw="release">${isNonPairing ? '' : esc(row.display?.release_str || '')}</td>
       </tr>
       <tr class="details">
         <td colspan="4">
-          <div class="daysbox">${hasLegs?detailsDays:noLegsBlock}</div>
+          <div class="daysbox">${hasLegs ? detailsDays : noLegsBlock}</div>
         </td>
       </tr>`;
   }
 
-  function renderCheckCell(row){
-    const ack=row.ack||{};
-    const acknowledged=!!ack.acknowledged;
-    const windowOpen=!!ack.window_open;
-    const stateAttr=acknowledged?'ok':(windowOpen?'pending':'off');
-    const ariaChecked=acknowledged?'true':'false';
-    const ariaDisabled=acknowledged?'true':'false';
+  function renderCheckCell(row) {
+    const ack = row.ack || {};
+    const acknowledged = !!ack.acknowledged;
+    const windowOpen = !!ack.window_open;
+    const stateAttr = acknowledged ? 'ok' : (windowOpen ? 'pending' : 'off');
+    const ariaChecked = acknowledged ? 'true' : 'false';
+    const ariaDisabled = acknowledged ? 'true' : 'false';
     return `
       <td class="ckcol">
         <button class="ckbtn ck ${stateAttr}"
@@ -654,20 +674,20 @@
                 role="checkbox"
                 aria-checked="${ariaChecked}"
                 aria-disabled="${ariaDisabled}"
-                title="${stateAttr==='ok'?'Acknowledged':(stateAttr==='pending'?'Click to view plan / acknowledge':'Click to view reminder plan')}"
+                title="${stateAttr === 'ok' ? 'Acknowledged' : (stateAttr === 'pending' ? 'Click to view plan / acknowledge' : 'Click to view reminder plan')}"
                 data-ck="${stateAttr}"
-                data-pairing="${esc(row.pairing_id||'')}"
-                data-report="${esc((ack&&ack.report_local_iso)||row.report_local_iso||'')}">
+                data-pairing="${esc(row.pairing_id || '')}"
+                data-report="${esc((ack && ack.report_local_iso) || row.report_local_iso || '')}">
           <span class="ckbox" aria-hidden="true"></span>
         </button>
       </td>`;
   }
 
-  function renderDayHTML(row,day,idx,days){
-    const want24=state.clockMode===24;
-    const isMobile=window.matchMedia&&window.matchMedia('(max-width: 640px)').matches;
-    const dayISO=dayDateFromRow(row,idx,day);
-    const dow=weekdayFromISO(dayISO);
+  function renderDayHTML(row, day, idx, days) {
+    const want24 = state.clockMode === 24;
+    const isMobile = window.matchMedia && window.matchMedia('(max-width: 640px)').matches;
+    const dayISO = dayDateFromRow(row, idx, day);
+    const dow = weekdayFromISO(dayISO);
     
     if (day.is_layover) {
       const layoverLocation = day.layover_location || '';
@@ -678,7 +698,7 @@
         <div class="day">
           <div class="dayhdr">
             <span class="dot"></span>
-            <span class="daytitle">Day ${idx+1}</span>
+            <span class="daytitle">Day ${idx + 1}</span>
             ${layoverLocation ? ` · Layover: ${esc(layoverLocation)}` : ''}
             ${hotel ? ` · Hotel: ${esc(hotel)}` : ''}
           </div>
@@ -697,7 +717,7 @@
         </div>`;
     }
     
-    const legs=(day.legs||[]).map(leg=>{
+    const legs = (day.legs || []).map(leg => {
       const route = leg.route_display || '';
       const depTime = leg.dep_time || '';
       const arrTime = leg.arr_time || '';
@@ -715,87 +735,87 @@
       const isDeadhead = leg.deadhead || false;
       
       return `
-        <tr class="leg-row ${leg.done?'leg-done':''}${isDeadhead?' leg-deadhead':''}">
-          <td>${esc(leg.flight||'')}</td>
+        <tr class="leg-row ${leg.done ? 'leg-done' : ''}${isDeadhead ? ' leg-deadhead' : ''}">
+          <td>${esc(leg.flight || '')}</td>
           <td>${route}</td>
           <td class="bt" data-dw="bt" data-dep="${esc(depTime)}" data-arr="${esc(arrTime)}">${blockTime}</td>
           <td>${trackCell}</td>
         </tr>`;
     }).join('');
     
-    const dayRepRaw=pickHHMM(day.report_hhmm,day.report);
-    const dayRelRaw=pickHHMM(day.release_hhmm,day.release);
-    const repDisp=fmtHHMM(dayRepRaw,want24,false);
-    const relDisp=fmtHHMM(dayRelRaw,want24,false);
-    const blockLabel='Block';
-    const trackLabel=isMobile?'Track':'Tracking';
+    const dayRepRaw = pickHHMM(day.report_hhmm, day.report);
+    const dayRelRaw = pickHHMM(day.release_hhmm, day.release);
+    const repDisp = fmtHHMM(dayRepRaw, want24, false);
+    const relDisp = fmtHHMM(dayRelRaw, want24, false);
+    const blockLabel = 'Block';
+    const trackLabel = isMobile ? 'Track' : 'Tracking';
     
     return `
       <div class="day">
         <div class="dayhdr">
           <span class="dot"></span>
-          <span class="daytitle">Day ${idx+1}</span>
-          ${dayRepRaw?` · Report: ${esc(dow)} <span data-dw="day-report" data-hhmm="${esc(dayRepRaw)}">${esc(repDisp)}</span>`:''}
-          ${dayRelRaw?` · Release: <span data-dw="day-release" data-hhmm="${esc(dayRelRaw)}">${esc(relDisp)}</span>`:''}
-          ${day.hotel?` · Hotel: ${esc(day.hotel)}`:''}
+          <span class="daytitle">Day ${idx + 1}</span>
+          ${dayRepRaw ? ` · Report: ${esc(dow)} <span data-dw="day-report" data-hhmm="${esc(dayRepRaw)}">${esc(repDisp)}</span>` : ''}
+          ${dayRelRaw ? ` · Release: <span data-dw="day-release" data-hhmm="${esc(dayRelRaw)}">${esc(relDisp)}</span>` : ''}
+          ${day.hotel ? ` · Hotel: ${esc(day.hotel)}` : ''}
         </div>
-        ${legs?`
+        ${legs ? `
           <div class="legs-wrap">
             <table class="legs">
               <thead><tr><th>Flight</th><th>Route</th><th>${blockLabel}</th><th>${trackLabel}</th></tr></thead>
               <tbody>${legs}</tbody>
             </table>
-          </div>`:``}
+          </div>` : ``}
       </div>`;
   }
 
-  function dayDateFromRow(row,dayIndex,dayObj){
-    const keys=['date_local_iso','local_iso','start_local_iso','date_iso'];
-    for(const k of keys){
-      if(dayObj&&dayObj[k])return dayObj[k];
+  function dayDateFromRow(row, dayIndex, dayObj) {
+    const keys = ['date_local_iso', 'local_iso', 'start_local_iso', 'date_iso'];
+    for (const k of keys) {
+      if (dayObj && dayObj[k]) return dayObj[k];
     }
-    const leg=(dayObj&&dayObj.legs&&dayObj.legs[0])||null;
-    if(leg){
-      const legKeys=['dep_local_iso','dep_iso','dep_dt_iso','local_iso'];
-      for(const k of legKeys){
-        if(leg[k])return leg[k];
+    const leg = (dayObj && dayObj.legs && dayObj.legs[0]) || null;
+    if (leg) {
+      const legKeys = ['dep_local_iso', 'dep_iso', 'dep_dt_iso', 'local_iso'];
+      for (const k of legKeys) {
+        if (leg[k]) return leg[k];
       }
     }
-    if(row&&row.report_local_iso){
-      const shifted=new Date(row.report_local_iso);
-      if(!isNaN(shifted)){
-        shifted.setDate(shifted.getDate()+dayIndex);
+    if (row && row.report_local_iso) {
+      const shifted = new Date(row.report_local_iso);
+      if (!isNaN(shifted)) {
+        shifted.setDate(shifted.getDate() + dayIndex);
         return shifted.toISOString();
       }
     }
     return null;
   }
   
-  function weekdayFromISO(iso){
-    if(!iso)return'';
-    const d=new Date(iso);
-    if(isNaN(d))return'';
-    return d.toLocaleDateString(undefined,{weekday:'short'});
+  function weekdayFromISO(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d)) return '';
+    return d.toLocaleDateString(undefined, { weekday: 'short' });
   }
 
-  function tickStatusLine(){
-    if(state.lastPullIso) setText('#last-pull', minutesOnlyAgo(state.lastPullIso));
+  function tickStatusLine() {
+    if (state.lastPullIso) setText('#last-pull', minutesOnlyAgo(state.lastPullIso));
   }
 
   // Utilities
-  function qs(sel){return document.querySelector(sel)}
-  function setText(sel,v){const el=qs(sel); if(el) el.textContent=v;}
-  function esc(s){return String(s).replace(/[&<>"'`=\/]/g,(ch)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','/':'&#x2F;','`':'&#x60;','=':'&#x3D;'}[ch]));}
-  function minutesOnlyAgo(iso){
-    if(!iso)return'—';
-    const d=new Date(iso);
-    if(isNaN(d))return'—';
-    const sec=Math.max(0,Math.floor((Date.now()-d.getTime())/1000));
-    const m=Math.max(0,Math.floor(sec/60));
-    if(m<=0)return'just now';
+  function qs(sel) { return document.querySelector(sel); }
+  function setText(sel, v) { const el = qs(sel); if (el) el.textContent = v; }
+  function esc(s) { return String(s).replace(/[&<>"'`=\/]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '/': '&#x2F;', '`': '&#x60;', '=': '&#x3D;' }[ch])); }
+  function minutesOnlyAgo(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (isNaN(d)) return '—';
+    const sec = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
+    const m = Math.max(0, Math.floor(sec / 60));
+    if (m <= 0) return 'just now';
     return `${m}m ago`;
   }
-  function safeParseJSON(s){try{return JSON.parse(s||'{}')}catch{return null}}
+  function safeParseJSON(s) { try { return JSON.parse(s || '{}'); } catch { return null; } }
 
   // === Resize handling ===
   let _rzTimer = null;

@@ -53,6 +53,50 @@ except Exception:  # safe fallbacks
     def delete_live_row(pairing_id: str) -> None:  # type: ignore
         pass
 
+# --- Profile table helpers (functions only - endpoints are below after app is created) ---
+
+def _ensure_profile_table():
+    """Create profile table if it doesn't exist."""
+    with get_db() as c:
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS profile (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                first_name TEXT DEFAULT 'Barry',
+                last_name TEXT DEFAULT 'Dunn',
+                photo TEXT DEFAULT NULL
+            )
+        """)
+        # Ensure there's exactly one row
+        existing = c.execute("SELECT 1 FROM profile WHERE id = 1").fetchone()
+        if not existing:
+            c.execute("INSERT INTO profile (id, first_name, last_name) VALUES (1, 'Barry', 'Dunn')")
+
+
+def get_profile() -> Dict[str, Any]:
+    """Get the user profile."""
+    _ensure_profile_table()
+    with get_db() as c:
+        row = c.execute("SELECT first_name, last_name, photo FROM profile WHERE id = 1").fetchone()
+        if row:
+            return {
+                "firstName": row["first_name"] or "Barry",
+                "lastName": row["last_name"] or "Dunn",
+                "photo": row["photo"]
+            }
+        return {"firstName": "Barry", "lastName": "Dunn", "photo": None}
+
+
+def save_profile(first_name: str, last_name: str, photo: Optional[str] = None):
+    """Save the user profile."""
+    _ensure_profile_table()
+    with get_db() as c:
+        c.execute("""
+            UPDATE profile 
+            SET first_name = ?, last_name = ?, photo = ?
+            WHERE id = 1
+        """, (first_name or "Barry", last_name or "Dunn", photo))
+
+
 # ---------------- Paths / Static ----------------
 BASE_DIR = Path(__file__).parent.resolve()
 PAIRINGS_DIR = BASE_DIR / "public" / "pairings"
@@ -74,6 +118,29 @@ def root_index():
 def medical_portal():
     """Serve the medical portal page"""
     return FileResponse(MED_PORTAL_DIR / "index.html")
+
+# --- Profile API endpoints ---
+
+@app.get("/api/profile")
+async def api_get_profile():
+    """Get user profile."""
+    profile = await run_in_threadpool(get_profile)
+    return profile
+
+
+@app.post("/api/profile")
+async def api_save_profile(payload: Dict[str, Any] = Body(...)):
+    """Save user profile."""
+    first_name = str(payload.get("firstName") or "").strip() or "Barry"
+    last_name = str(payload.get("lastName") or "").strip() or "Dunn"
+    photo = payload.get("photo")  # base64 string or None
+    
+    # Limit photo size (roughly 500KB base64 = ~375KB image)
+    if photo and len(photo) > 500_000:
+        raise HTTPException(400, "Photo too large. Please use a smaller image.")
+    
+    await run_in_threadpool(save_profile, first_name, last_name, photo)
+    return {"ok": True}
 
 # ---------------- Logging + middleware ----------------
 logging.basicConfig(

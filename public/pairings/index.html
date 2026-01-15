@@ -6,7 +6,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.css" rel="stylesheet" />
-  <link rel="stylesheet" href="/pairings/pairings.css?v=46">
+  <link rel="stylesheet" href="/pairings/pairings.css?v=50">
+  <link rel="stylesheet" href="/pairings/settings/settings.css?v=50">
 </head>
 <body>
   <div class="wrap">
@@ -14,8 +15,13 @@
       <!-- Header row: title left, calendars right -->
       <div class="header-row">
         <div class="header-left">
-          <!-- Page title -->
-          <h1>Pairings for Barry Dunn</h1>
+          <!-- Page title with account icon -->
+          <div class="title-row">
+            <button class="avatar-btn" id="avatar-btn" type="button" aria-label="Open settings">
+              <span class="avatar" id="header-avatar">BD</span>
+            </button>
+            <h1>Pairings for <span id="display-name">Barry Dunn</span></h1>
+          </div>
 
           <!-- Status (hidden chip only shows when count > 0) -->
           <div class="sub" id="status-line" style="margin:0;min-height:0">
@@ -29,31 +35,9 @@
           <div class="controls" style="margin-top:8px;margin-bottom:0;align-items:flex-start;gap:12px;flex-wrap:wrap">
             <form onsubmit="window.dwManualRefresh(); return false;"
                   style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-              <button class="btn" type="submit">Refresh</button>
-              <span class="chip">Last: <strong id="last-pull">—</strong></span>
+              <button class="btn" type="submit" id="refresh-btn">Refresh</button>
+              <span class="chip" id="last-pull-chip">Last: <strong id="last-pull">—</strong></span>
             </form>
-          </div>
-
-          <!-- Settings inline -->
-          <div id="settings-inline" style="display:inline-flex;flex-direction:column;gap:12px;margin-top:12px">
-            <div style="display:inline-flex;gap:8px;align-items:center">
-              <span style="font-weight:600">Auto-refresh:</span>
-              <select id="refresh-mins" class="toggle">
-                <option value="1">1 min</option>
-                <option value="5">5 mins</option>
-                <option value="10">10 mins</option>
-                <option value="15">15 mins</option>
-                <option value="30" selected>30 mins</option>
-              </select>
-            </div>
-            <div style="display:inline-flex;gap:8px;align-items:center">
-              <span style="font-weight:600">12h</span>
-              <label class="clock-toggle">
-                <input type="checkbox" id="clock-mode">
-                <span class="clock-slider"></span>
-              </label>
-              <span style="font-weight:600">24h</span>
-            </div>
           </div>
         </div>
 
@@ -76,6 +60,76 @@
         </thead>
         <tbody id="pairings-body"></tbody>
       </table>
+    </div>
+  </div>
+
+  <!-- Settings Modal -->
+  <div id="settings-modal" class="modal hidden">
+    <div class="modal-card settings-card">
+      <div class="modal-header">
+        <h2>Settings</h2>
+        <button class="modal-close" id="settings-close">&times;</button>
+      </div>
+      <div class="modal-content">
+        <!-- Profile section -->
+        <div class="settings-section">
+          <h3>Profile</h3>
+          <div class="profile-row">
+            <div class="profile-avatar-wrapper">
+              <button class="profile-avatar-btn" id="profile-avatar-btn" type="button" aria-label="Change profile photo">
+                <span class="profile-avatar" id="settings-avatar">BD</span>
+                <span class="profile-avatar-overlay">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                    <circle cx="12" cy="13" r="4"/>
+                  </svg>
+                </span>
+              </button>
+              <input type="file" id="photo-input" accept="image/*" style="display:none">
+              <button class="remove-photo-btn hidden" id="remove-photo-btn" type="button">Remove photo</button>
+            </div>
+            <div class="profile-fields">
+              <div class="field-group">
+                <label for="first-name">First name</label>
+                <input type="text" id="first-name" placeholder="Barry" autocomplete="given-name">
+              </div>
+              <div class="field-group">
+                <label for="last-name">Last name</label>
+                <input type="text" id="last-name" placeholder="Dunn" autocomplete="family-name">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Preferences section -->
+        <div class="settings-section">
+          <h3>Preferences</h3>
+          <div class="field-group">
+            <label for="settings-refresh-mins">Auto-refresh interval</label>
+            <select id="settings-refresh-mins" class="settings-select">
+              <option value="1">1 minute</option>
+              <option value="5">5 minutes</option>
+              <option value="10">10 minutes</option>
+              <option value="15">15 minutes</option>
+              <option value="30">30 minutes</option>
+            </select>
+          </div>
+          <div class="field-group" style="margin-top: 16px;">
+            <label>Time format</label>
+            <div class="clock-toggle-row">
+              <span class="clock-label" data-mode="12">12-hour</span>
+              <label class="clock-toggle">
+                <input type="checkbox" id="clock-mode">
+                <span class="clock-slider"></span>
+              </label>
+              <span class="clock-label" data-mode="24">24-hour</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" id="settings-done">Done</button>
+      </div>
     </div>
   </div>
 
@@ -105,12 +159,17 @@
     "clockMode": "12",
     "onlyReports": false,
     "tz": "CT",
-    "refreshMinutes": 30,
     "apiBase": "",
     "baseAirport": "DFW"
   }</script>
 
+  <script>
+    // Parse and expose config globally for all modules
+    window.dwConfig = JSON.parse(document.getElementById('dw-boot')?.textContent || '{}');
+  </script>
+
   <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js"></script>
-  <script src="/pairings/pairings.js?v=46"></script>
+  <script src="/pairings/settings/settings.js?v=50"></script>
+  <script src="/pairings/pairings.js?v=50"></script>
 </body>
 </html>
