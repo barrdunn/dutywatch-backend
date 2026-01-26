@@ -11,6 +11,7 @@ This is the display/formatting layer:
 from __future__ import annotations
 import os
 import datetime as dt
+import hashlib
 import re
 import logging
 from typing import Any, Dict, List, Optional
@@ -23,6 +24,12 @@ from .utils import iso_to_dt, to_local, ensure_hhmm, to_12h, time_display
 logger = logging.getLogger("rows")
 
 LOCAL_TZ = ZoneInfo(os.getenv("LOCAL_TZ", "America/Chicago"))
+
+
+def _make_row_id(row: Dict[str, Any]) -> str:
+    """Generate a deterministic ID for a row."""
+    key = f"{row.get('kind', '')}-{row.get('pairing_id', '')}-{row.get('report_local_iso', '')}-{row.get('release_local_iso', '')}"
+    return hashlib.md5(key.encode()).hexdigest()[:16]
 
 
 # =============================================================================
@@ -159,15 +166,19 @@ def _filter_past_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if not in_pairing and first_report and first_report > now_local:
             gap = first_report - now_local
             if gap.total_seconds() > 0:  # Show any remaining OFF time
-                result.append({
+                off_row = {
                     "kind": "off",
                     "is_current": True,
+                    "report_local_iso": now_local.isoformat(),
+                    "release_local_iso": first_report.isoformat(),
                     "display": {
                         "off_label": "OFF",
                         "off_duration": format_off_duration(gap, show_minutes=True),
                         "show_remaining": True,
                     }
-                })
+                }
+                off_row["row_id"] = _make_row_id(off_row)
+                result.append(off_row)
     
     # Add pairings with OFF between them
     for i, pairing_row in enumerate(kept_pairings):
@@ -181,15 +192,19 @@ def _filter_past_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 gap = next_start - this_end
                 if gap.total_seconds() > 3600:
                     is_current = (now_local >= this_end and now_local < next_start)
-                    result.append({
+                    off_row = {
                         "kind": "off",
                         "is_current": is_current,
+                        "report_local_iso": this_end.isoformat(),
+                        "release_local_iso": next_start.isoformat(),
                         "display": {
                             "off_label": "OFF",
                             "off_duration": format_off_duration(gap, show_minutes=is_current),
                             "show_remaining": is_current,
                         }
-                    })
+                    }
+                    off_row["row_id"] = _make_row_id(off_row)
+                    result.append(off_row)
     
     # Insert non-flying events chronologically
     for nfe in kept_other:
@@ -585,7 +600,7 @@ def _pairing_to_row(pairing: Dict[str, Any], is_24h: bool, home_base: str) -> Di
     # Determine the row kind
     kind = "pairing" if is_pairing else "other"
     
-    return {
+    row = {
         "kind": kind,
         "pairing_id": pairing.get("pairing_id", ""),
         "is_pairing": is_pairing,
@@ -604,6 +619,9 @@ def _pairing_to_row(pairing: Dict[str, Any], is_24h: bool, home_base: str) -> Di
         "base_airports": base_airports,
         "is_complete": pairing.get("is_complete", False),
     }
+    
+    row["row_id"] = _make_row_id(row)
+    return row
 
 
 def build_rows(
@@ -668,15 +686,19 @@ def build_rows(
             if not in_pairing and first_report_local and first_report_local > now_local:
                 gap = first_report_local - now_local
                 if gap.total_seconds() > 3600:  # More than 1 hour
-                    rows.append({
+                    off_row = {
                         "kind": "off",
                         "is_current": True,
+                        "report_local_iso": now_local.isoformat(),
+                        "release_local_iso": first_report_local.isoformat(),
                         "display": {
                             "off_label": "OFF",
                             "off_duration": format_off_duration(gap, show_minutes=True),
                             "show_remaining": True,
                         }
-                    })
+                    }
+                    off_row["row_id"] = _make_row_id(off_row)
+                    rows.append(off_row)
     
     # Add pairings with OFF periods between them
     for i, pairing_row in enumerate(actual_pairings):
@@ -691,15 +713,19 @@ def build_rows(
                 if gap.total_seconds() > 3600:  # More than 1 hour
                     is_current = (now_local >= this_end and now_local < next_start)
                     
-                    rows.append({
+                    off_row = {
                         "kind": "off",
                         "is_current": is_current,
+                        "report_local_iso": this_end.isoformat(),
+                        "release_local_iso": next_start.isoformat(),
                         "display": {
                             "off_label": "OFF",
                             "off_duration": format_off_duration(gap, show_minutes=is_current),
                             "show_remaining": is_current,
                         }
-                    })
+                    }
+                    off_row["row_id"] = _make_row_id(off_row)
+                    rows.append(off_row)
     
     # Insert non-flying events in chronological order
     for nfe in non_flying_events:
