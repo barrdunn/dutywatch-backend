@@ -2,12 +2,62 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Pairings for Barry Dunn</title>
+  <title>Pairings - DutyWatch</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.css" rel="stylesheet" />
-  <link rel="stylesheet" href="/pairings/pairings.css?v=50">
-  <link rel="stylesheet" href="/pairings/settings/settings.css?v=50">
+  <link rel="stylesheet" href="/pairings/pairings.css?v=51">
+  <link rel="stylesheet" href="/pairings/settings/settings.css?v=51">
+  
+  <style>
+    /* User badge in header */
+    .user-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(111, 177, 255, 0.1);
+      border: 1px solid rgba(111, 177, 255, 0.3);
+      border-radius: 20px;
+      padding: 4px 12px 4px 6px;
+      font-size: 13px;
+      color: var(--accent);
+      margin-left: 12px;
+    }
+    .user-badge .user-icon {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: #031323;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    
+    /* Setup prompt banner */
+    .setup-banner {
+      background: rgba(255, 174, 96, 0.15);
+      border: 1px solid rgba(255, 174, 96, 0.4);
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .setup-banner .icon {
+      font-size: 24px;
+    }
+    .setup-banner .text {
+      flex: 1;
+    }
+    .setup-banner .btn {
+      background: #ffae60;
+      color: #1a0f00;
+    }
+  </style>
 </head>
 <body>
   <div class="wrap">
@@ -20,7 +70,23 @@
             <button class="avatar-btn" id="avatar-btn" type="button" aria-label="Open settings">
               <span class="avatar" id="header-avatar">BD</span>
             </button>
-            <h1>Pairings for <span id="display-name">Barry Dunn</span></h1>
+            <h1>
+              Pairings for <span id="display-name">Loading...</span>
+              <span class="user-badge" id="user-badge" style="display:none">
+                <span class="user-icon" id="user-icon">?</span>
+                <span id="username-display">user</span>
+              </span>
+            </h1>
+          </div>
+
+          <!-- Setup banner (shown if not configured) -->
+          <div class="setup-banner" id="setup-banner" style="display:none">
+            <span class="icon">⚙️</span>
+            <div class="text">
+              <strong>Setup Required</strong><br>
+              Connect your iCloud calendar to see your pairings.
+            </div>
+            <a href="#" class="btn" id="setup-link">Complete Setup</a>
           </div>
 
           <!-- Status (hidden chip only shows when count > 0) -->
@@ -91,14 +157,25 @@
             <div class="profile-fields">
               <div class="field-group">
                 <label for="first-name">First name</label>
-                <input type="text" id="first-name" placeholder="Barry" autocomplete="given-name">
+                <input type="text" id="first-name" placeholder="First" autocomplete="given-name">
               </div>
               <div class="field-group">
                 <label for="last-name">Last name</label>
-                <input type="text" id="last-name" placeholder="Dunn" autocomplete="family-name">
+                <input type="text" id="last-name" placeholder="Last" autocomplete="family-name">
               </div>
             </div>
           </div>
+        </div>
+
+        <!-- iCloud Settings (only for multi-user) -->
+        <div class="settings-section" id="icloud-settings" style="display:none">
+          <h3>iCloud Calendar</h3>
+          <p style="color: var(--muted); font-size: 13px; margin-bottom: 12px;">
+            Calendar: <strong id="current-calendar">Not configured</strong>
+          </p>
+          <a href="#" class="btn" id="reconfigure-btn" style="display:inline-block;width:auto;padding:8px 16px;font-size:13px">
+            Reconfigure iCloud
+          </a>
         </div>
 
         <!-- Preferences section -->
@@ -160,16 +237,70 @@
     "onlyReports": false,
     "tz": "CT",
     "apiBase": "",
-    "baseAirport": "DFW"
+    "baseAirport": "DFW",
+    "username": null
   }</script>
 
   <script>
-    // Parse and expose config globally for all modules
-    window.dwConfig = JSON.parse(document.getElementById('dw-boot')?.textContent || '{}');
+    // Parse config and check for user in URL
+    const bootConfig = JSON.parse(document.getElementById('dw-boot')?.textContent || '{}');
+    
+    // Check URL for user parameter: /pairings/?user=username or /username
+    const urlParams = new URLSearchParams(window.location.search);
+    const pathMatch = window.location.pathname.match(/^\/([a-zA-Z0-9_-]+)\/?$/);
+    
+    let username = urlParams.get('user') || (pathMatch ? pathMatch[1] : null);
+    
+    // Don't treat reserved paths as usernames
+    const reserved = ['pairings', 'medical', 'med_portal', 'api', 'health', 'static', 'admin'];
+    if (username && reserved.includes(username.toLowerCase())) {
+      username = null;
+    }
+    
+    // Configure API base for user
+    if (username) {
+      bootConfig.apiBase = `/api/u/${username}`;
+      bootConfig.username = username;
+    }
+    
+    window.dwConfig = bootConfig;
+    
+    // Update UI for multi-user mode
+    if (username) {
+      document.getElementById('user-badge').style.display = 'inline-flex';
+      document.getElementById('username-display').textContent = username;
+      document.getElementById('user-icon').textContent = username.charAt(0).toUpperCase();
+      document.getElementById('setup-link').href = `/${username}/setup`;
+      document.getElementById('reconfigure-btn').href = `/${username}/setup`;
+      document.getElementById('icloud-settings').style.display = 'block';
+    }
   </script>
 
   <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js"></script>
-  <script src="/pairings/settings/settings.js?v=50"></script>
-  <script src="/pairings/pairings.js?v=50"></script>
+  <script src="/pairings/settings/settings.js?v=51"></script>
+  <script src="/pairings/pairings.js?v=51"></script>
+  
+  <script>
+    // Handle setup banner visibility
+    document.addEventListener('DOMContentLoaded', () => {
+      if (window.dwConfig.username) {
+        // Check if user is configured by trying to load pairings
+        // If it fails with "Credentials not configured", show banner
+        fetch(`${window.dwConfig.apiBase}/pairings`)
+          .then(r => r.json())
+          .then(data => {
+            if (data.error === 'pairings_failed' && data.message?.includes('Credentials')) {
+              document.getElementById('setup-banner').style.display = 'flex';
+              document.getElementById('pairings-body').innerHTML = `
+                <tr><td colspan="4" style="text-align:center;padding:40px;color:var(--muted)">
+                  Complete setup to view your pairings
+                </td></tr>
+              `;
+            }
+          })
+          .catch(() => {});
+      }
+    });
+  </script>
 </body>
 </html>

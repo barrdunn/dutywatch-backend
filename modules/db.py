@@ -1,341 +1,341 @@
-# db.py
-from __future__ import annotations
+# db_multiuser.py
+"""
+Multi-user database extensions for DutyWatch
+Add this to your existing db.py or import from it
+"""
 
+from __future__ import annotations
 import os
 import json
 import sqlite3
 import datetime as dt
+import hashlib
+import secrets
 from typing import Any, Dict, List, Optional
+from cryptography.fernet import Fernet
 
-# ---- Paths -----------------------------------------------------------------
+# ---- Encryption Setup ----
+# Generate this ONCE and store in .env: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+ENCRYPTION_KEY = os.getenv("DUTYWATCH_ENCRYPTION_KEY", "")
 
-BASE_DIR = os.path.dirname(__file__)
-DATA_DIR = os.path.join(BASE_DIR, "data")
-os.makedirs(DATA_DIR, exist_ok=True)
-DB_FILE = os.path.join(DATA_DIR, "dutywatch.db")
+def _get_cipher():
+    """Get Fernet cipher for encrypting/decrypting passwords."""
+    if not ENCRYPTION_KEY:
+        raise RuntimeError("DUTYWATCH_ENCRYPTION_KEY not set in .env")
+    return Fernet(ENCRYPTION_KEY.encode())
 
+def encrypt_password(password: str) -> str:
+    """Encrypt a password for storage."""
+    cipher = _get_cipher()
+    return cipher.encrypt(password.encode()).decode()
 
-# ---- Connection -------------------------------------------------------------
-
-def get_db() -> sqlite3.Connection:
-    con = sqlite3.connect(DB_FILE, check_same_thread=False)
-    con.row_factory = sqlite3.Row
-    # Pragmas tuned for a small local app
-    con.execute("PRAGMA journal_mode=WAL;")
-    con.execute("PRAGMA synchronous=NORMAL;")
-    con.execute("PRAGMA foreign_keys=ON;")
-    return con
-
-
-# ---- Schema (idempotent, safe on every start) ------------------------------
-
-def init_db() -> None:
-    with get_db() as c:
-        c.executescript(
-            """
-            -- Original/expected app tables
-            CREATE TABLE IF NOT EXISTS devices(
-                id INTEGER PRIMARY KEY,
-                device_token TEXT UNIQUE,
-                created_at TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS policy(
-                id INTEGER PRIMARY KEY CHECK (id=1),
-                json TEXT,
-                updated_at TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS acks(
-                ack_id TEXT PRIMARY KEY,
-                event_uid TEXT,
-                deadline_utc TEXT,
-                state TEXT,
-                last_update_utc TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS notifications(
-                id INTEGER PRIMARY KEY,
-                ack_id TEXT,
-                event_uid TEXT,
-                event_start_utc TEXT,
-                fire_at_utc TEXT,
-                kind TEXT,
-                attempt INTEGER DEFAULT 0,
-                sent INTEGER DEFAULT 0
-            );
-
-            -- Snapshots of calendar pulls (rolling or month scopes)
-            CREATE TABLE IF NOT EXISTS events_cache(
-                scope TEXT PRIMARY KEY,
-                uid_hash TEXT,
-                json TEXT,          -- JSON array of event dicts
-                updated_at TEXT
-            );
-
-            -- Tiny KV for misc metadata (e.g., last pull time per scope)
-            CREATE TABLE IF NOT EXISTS kv(
-                key TEXT PRIMARY KEY,
-                value TEXT
-            );
-
-            -- Pairings/events the user asked to hide (by pairing_id)
-            CREATE TABLE IF NOT EXISTS hidden_items(
-                pairing_id TEXT PRIMARY KEY,
-                report_local_iso TEXT,
-                created_at TEXT
-            );
-
-            -- VEVENT UIDs hidden (server-side hide by UID)
-            CREATE TABLE IF NOT EXISTS hidden_uids(
-                uid TEXT PRIMARY KEY,
-                created_at TEXT
-            );
-
-            -- Sticky live rows so in-progress pairings persist in UI
-            CREATE TABLE IF NOT EXISTS live_rows(
-                pairing_id TEXT PRIMARY KEY,
-                json TEXT,
-                release_local_iso TEXT,
-                can_hide INTEGER DEFAULT 0,
-                updated_at TEXT
-            );
-            
-            -- Commute preferences for out-of-base pairings
-            CREATE TABLE IF NOT EXISTS commute_prefs(
-                pairing_id TEXT PRIMARY KEY,
-                report_local_iso TEXT,
-                tracking_url TEXT,
-                last_updated TEXT
-            );
-            """
-        )
-        # Ensure unique indexes (idempotent)
-        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_hidden_pairing_id ON hidden_items(pairing_id)")
-        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_hidden_uid ON hidden_uids(uid)")
+def decrypt_password(encrypted: str) -> str:
+    """Decrypt a stored password."""
+    cipher = _get_cipher()
+    return cipher.decrypt(encrypted.encode()).decode()
 
 
-# -------------------- events_cache helpers ----------------------------------
+# ---- Multi-User Schema ----
 
-def read_events_cache(scope: str) -> List[Dict[str, Any]]:
-    with get_db() as c:
-        row = c.execute("SELECT json FROM events_cache WHERE scope=?", (scope,)).fetchone()
-        if not row or not row["json"]:
-            return []
-        try:
-            return json.loads(row["json"])
-        except Exception:
-            return []
-
-def overwrite_events_cache(scope: str, events: List[Dict[str, Any]], *, uid_hash: Optional[str] = None) -> None:
-    payload = json.dumps(events, ensure_ascii=False)
-    now = dt.datetime.utcnow().isoformat()
-    with get_db() as c:
-        c.execute(
-            "INSERT INTO events_cache(scope, uid_hash, json, updated_at) "
-            "VALUES(?,?,?,?) "
-            "ON CONFLICT(scope) DO UPDATE SET uid_hash=excluded.uid_hash, json=excluded.json, updated_at=excluded.updated_at",
-            (scope, uid_hash, payload, now),
-        )
-
-def clear_events_cache(scope: str) -> None:
-    with get_db() as c:
-        c.execute("DELETE FROM events_cache WHERE scope=?", (scope,))
-
-def read_uid_hash(scope: str) -> Optional[str]:
-    with get_db() as c:
-        row = c.execute("SELECT uid_hash FROM events_cache WHERE scope=?", (scope,)).fetchone()
-        return row["uid_hash"] if row else None
-
-def write_uid_hash(scope: str, uid_hash: Optional[str]) -> None:
-    now = dt.datetime.utcnow().isoformat()
-    with get_db() as c:
-        cur = c.execute("SELECT 1 FROM events_cache WHERE scope=?", (scope,)).fetchone()
-        if cur:
-            c.execute("UPDATE events_cache SET uid_hash=?, updated_at=? WHERE scope=?", (uid_hash, now, scope))
-        else:
-            c.execute("INSERT INTO events_cache(scope, uid_hash, json, updated_at) VALUES(?,?,?,?)", (scope, uid_hash, "[]", now))
-
-
-# -------------------- kv helpers (last pull time, misc) ---------------------
-
-def read_last_pull_utc(scope: str) -> Optional[str]:
-    key = f"{scope}:last_pull_utc"
-    with get_db() as c:
-        row = c.execute("SELECT value FROM kv WHERE key=?", (key,)).fetchone()
-        return row["value"] if row else None
-
-def set_last_pull_utc(scope: str, iso_ts: Optional[str] = None) -> None:
-    key = f"{scope}:last_pull_utc"
-    if iso_ts is None:
-        iso_ts = dt.datetime.utcnow().isoformat()
-    with get_db() as c:
-        c.execute(
-            "INSERT INTO kv(key,value) VALUES(?,?) "
-            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (key, iso_ts),
-        )
-
-
-# -------------------- hidden helpers (pairing_id) ---------------------------
-
-def hidden_add(pairing_id: str, report_local_iso: Optional[str] = None) -> None:
-    if not pairing_id:
-        return
-    now = dt.datetime.utcnow().isoformat()
-    with get_db() as c:
-        c.execute(
-            "INSERT INTO hidden_items(pairing_id, report_local_iso, created_at) VALUES(?,?,?) "
-            "ON CONFLICT(pairing_id) DO UPDATE SET report_local_iso=excluded.report_local_iso",
-            (pairing_id, report_local_iso or "", now),
-        )
-
-def hidden_clear_all() -> None:
-    with get_db() as c:
-        c.execute("DELETE FROM hidden_items")
-
-def hidden_all() -> List[str]:
-    with get_db() as c:
-        rows = c.execute("SELECT pairing_id FROM hidden_items").fetchall()
-        return [r["pairing_id"] for r in rows]
-
-def hidden_count() -> int:
-    """Return total hidden count across both mechanisms for the UI chip."""
-    with get_db() as c:
-        r1 = c.execute("SELECT COUNT(*) AS n FROM hidden_items").fetchone()
-        r2 = c.execute("SELECT COUNT(*) AS n FROM hidden_uids").fetchone()
-        n1 = int(r1["n"] if r1 else 0)
-        n2 = int(r2["n"] if r2 else 0)
-        return n1 + n2
-
-
-# -------------------- hidden helpers (UID-based) ----------------------------
-
-def hide_uid(uid: str) -> None:
-    if not uid:
-        return
-    now = dt.datetime.utcnow().isoformat()
-    with get_db() as c:
-        c.execute(
-            "INSERT INTO hidden_uids(uid, created_at) VALUES(?,?) "
-            "ON CONFLICT(uid) DO NOTHING",
-            (uid, now),
-        )
-
-def list_hidden_uids() -> List[str]:
-    with get_db() as c:
-        rows = c.execute("SELECT uid FROM hidden_uids").fetchall()
-        return [r["uid"] for r in rows]
-
-def unhide_all() -> None:
-    with get_db() as c:
-        c.execute("DELETE FROM hidden_uids")
-
-
-# -------------------- live row helpers --------------------------------------
-
-def upsert_live_row(row: Dict[str, Any]) -> None:
-    """
-    Persist a rendered row so an in-progress pairing isn't dropped mid-fly.
-    Expects row['pairing_id'] and (optionally) row['release_local_iso'], row['can_hide'].
-    """
-    pid = str(row.get("pairing_id") or "").strip()
-    if not pid:
-        return
-    release_local_iso = str(row.get("release_local_iso") or "")
-    can_hide_int = 1 if row.get("can_hide") else 0
-    now = dt.datetime.utcnow().isoformat()
-    blob = json.dumps(row, ensure_ascii=False)
-
-    with get_db() as c:
-        c.execute(
-            "INSERT INTO live_rows(pairing_id, json, release_local_iso, can_hide, updated_at) "
-            "VALUES(?,?,?,?,?) "
-            "ON CONFLICT(pairing_id) DO UPDATE SET "
-            "  json=excluded.json, release_local_iso=excluded.release_local_iso, "
-            "  can_hide=excluded.can_hide, updated_at=excluded.updated_at",
-            (pid, blob, release_local_iso, can_hide_int, now),
-        )
-
-def list_live_rows() -> List[Dict[str, Any]]:
-    with get_db() as c:
-        rows = c.execute("SELECT json FROM live_rows").fetchall()
-        out: List[Dict[str, Any]] = []
-        for r in rows:
-            try:
-                out.append(json.loads(r["json"]))
-            except Exception:
-                pass
-        return out
-
-def purge_expired_live(now_iso: str) -> None:
-    """Remove sticky rows after their release time (if present)."""
-    try:
-        now = dt.datetime.fromisoformat(now_iso.replace("Z", "+00:00"))
-    except Exception:
-        now = dt.datetime.utcnow()
-
-    with get_db() as c:
-        rows = c.execute("SELECT pairing_id, release_local_iso FROM live_rows").fetchall()
-        to_delete: List[str] = []
-        for r in rows:
-            rel = r["release_local_iso"]
-            if not rel:
-                continue
-            try:
-                rel_dt = dt.datetime.fromisoformat(str(rel).replace("Z", "+00:00"))
-            except Exception:
-                continue
-            if rel_dt < now:
-                to_delete.append(r["pairing_id"])
-        if to_delete:
-            c.executemany("DELETE FROM live_rows WHERE pairing_id=?", [(pid,) for pid in to_delete])
-
-def delete_live_row(pairing_id: str) -> None:
-    """Delete a specific live row"""
-    with get_db() as c:
-        c.execute("DELETE FROM live_rows WHERE pairing_id=?", (pairing_id,))
-
-
-# -------------------- misc ---------------------------------------------------
-
-def list_scopes() -> List[str]:
-    with get_db() as c:
-        rows = c.execute("SELECT scope FROM events_cache ORDER BY scope").fetchall()
-        return [r["scope"] for r in rows]
-
-
-# -------------------- commute preferences -----------------------------------
-
-def get_commute_pref(pairing_id: str) -> Optional[Dict[str, Any]]:
-    """Get commute preferences for a pairing"""
-    with get_db() as c:
-        row = c.execute(
-            "SELECT * FROM commute_prefs WHERE pairing_id = ?",
-            (pairing_id,)
-        ).fetchone()
-        return dict(row) if row else None
-
-def save_commute_pref(pairing_id: str, report_iso: str = None, tracking_url: str = None):
-    """Save commute preferences for a pairing"""
-    now_iso = dt.datetime.utcnow().isoformat()
-    
-    with get_db() as c:
-        existing = c.execute(
-            "SELECT 1 FROM commute_prefs WHERE pairing_id = ?",
-            (pairing_id,)
-        ).fetchone()
+def init_multiuser_tables(conn: sqlite3.Connection) -> None:
+    """Create multi-user tables. Call this from init_db()."""
+    conn.executescript("""
+        -- Users table
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            display_name TEXT,
+            icloud_user TEXT,
+            icloud_app_pw_encrypted TEXT,
+            caldav_url TEXT DEFAULT 'https://caldav.icloud.com/',
+            calendar_name TEXT,
+            timezone TEXT DEFAULT 'America/Chicago',
+            home_base TEXT DEFAULT 'DFW',
+            created_at TEXT,
+            last_login_at TEXT,
+            is_active INTEGER DEFAULT 1
+        );
         
-        if existing:
-            c.execute(
-                """UPDATE commute_prefs 
-                   SET report_local_iso = ?, tracking_url = ?, last_updated = ?
-                   WHERE pairing_id = ?""",
-                (report_iso, tracking_url, now_iso, pairing_id)
-            )
-        else:
-            c.execute(
-                """INSERT INTO commute_prefs (pairing_id, report_local_iso, tracking_url, last_updated)
-                   VALUES (?, ?, ?, ?)""",
-                (pairing_id, report_iso, tracking_url, now_iso)
-            )
+        -- User sessions (optional - for cookie-based auth)
+        CREATE TABLE IF NOT EXISTS user_sessions (
+            session_id TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            created_at TEXT,
+            expires_at TEXT,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        );
+        
+        -- Per-user events cache
+        CREATE TABLE IF NOT EXISTS user_events_cache (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            scope TEXT DEFAULT 'default',
+            uid_hash TEXT,
+            json TEXT,
+            updated_at TEXT,
+            UNIQUE(user_id, scope),
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        );
+        
+        -- Per-user hidden items
+        CREATE TABLE IF NOT EXISTS user_hidden_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            pairing_id TEXT NOT NULL,
+            report_local_iso TEXT,
+            created_at TEXT,
+            UNIQUE(user_id, pairing_id),
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        );
+        
+        -- Per-user profile
+        CREATE TABLE IF NOT EXISTS user_profile (
+            user_id INTEGER PRIMARY KEY,
+            first_name TEXT,
+            last_name TEXT,
+            photo TEXT,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        );
+        
+        -- Per-user commute prefs
+        CREATE TABLE IF NOT EXISTS user_commute_prefs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            pairing_id TEXT NOT NULL,
+            report_local_iso TEXT,
+            tracking_url TEXT,
+            last_updated TEXT,
+            UNIQUE(user_id, pairing_id),
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        );
+        
+        -- Per-user acks
+        CREATE TABLE IF NOT EXISTS user_acks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            ack_id TEXT NOT NULL,
+            event_uid TEXT,
+            deadline_utc TEXT,
+            state TEXT,
+            last_update_utc TEXT,
+            UNIQUE(user_id, ack_id),
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        );
+        
+        CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+        CREATE INDEX IF NOT EXISTS idx_user_events_user ON user_events_cache(user_id);
+        CREATE INDEX IF NOT EXISTS idx_user_hidden_user ON user_hidden_items(user_id);
+    """)
+
+
+# ---- User CRUD ----
+
+def create_user(
+    conn: sqlite3.Connection,
+    username: str,
+    display_name: str = None,
+    icloud_user: str = None,
+    icloud_app_pw: str = None,
+    calendar_name: str = None,
+    timezone: str = "America/Chicago",
+    home_base: str = "DFW"
+) -> int:
+    """Create a new user. Returns user_id."""
+    now = dt.datetime.utcnow().isoformat()
+    
+    # Validate username (alphanumeric, underscore, hyphen only)
+    import re
+    if not re.match(r'^[a-zA-Z0-9_-]{3,30}$', username):
+        raise ValueError("Username must be 3-30 characters, alphanumeric, underscore or hyphen only")
+    
+    # Encrypt password if provided
+    encrypted_pw = encrypt_password(icloud_app_pw) if icloud_app_pw else None
+    
+    cursor = conn.execute("""
+        INSERT INTO users (username, display_name, icloud_user, icloud_app_pw_encrypted, 
+                          calendar_name, timezone, home_base, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (username.lower(), display_name or username, icloud_user, encrypted_pw,
+          calendar_name, timezone, home_base, now))
+    
+    user_id = cursor.lastrowid
+    
+    # Create profile entry
+    conn.execute("""
+        INSERT INTO user_profile (user_id, first_name, last_name)
+        VALUES (?, ?, ?)
+    """, (user_id, display_name or username, ""))
+    
+    return user_id
+
+
+def get_user_by_username(conn: sqlite3.Connection, username: str) -> Optional[Dict[str, Any]]:
+    """Get user by username."""
+    row = conn.execute(
+        "SELECT * FROM users WHERE username = ? AND is_active = 1",
+        (username.lower(),)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def get_user_by_id(conn: sqlite3.Connection, user_id: int) -> Optional[Dict[str, Any]]:
+    """Get user by ID."""
+    row = conn.execute(
+        "SELECT * FROM users WHERE id = ? AND is_active = 1",
+        (user_id,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def update_user_credentials(
+    conn: sqlite3.Connection,
+    user_id: int,
+    icloud_user: str = None,
+    icloud_app_pw: str = None,
+    calendar_name: str = None
+) -> bool:
+    """Update user's iCloud credentials."""
+    updates = []
+    params = []
+    
+    if icloud_user is not None:
+        updates.append("icloud_user = ?")
+        params.append(icloud_user)
+    
+    if icloud_app_pw is not None:
+        updates.append("icloud_app_pw_encrypted = ?")
+        params.append(encrypt_password(icloud_app_pw) if icloud_app_pw else None)
+    
+    if calendar_name is not None:
+        updates.append("calendar_name = ?")
+        params.append(calendar_name)
+    
+    if not updates:
+        return False
+    
+    params.append(user_id)
+    conn.execute(f"UPDATE users SET {', '.join(updates)} WHERE id = ?", params)
+    return True
+
+
+def get_user_decrypted_credentials(conn: sqlite3.Connection, user_id: int) -> Optional[Dict[str, str]]:
+    """Get user's decrypted iCloud credentials for calendar fetching."""
+    row = conn.execute(
+        "SELECT icloud_user, icloud_app_pw_encrypted, caldav_url, calendar_name FROM users WHERE id = ?",
+        (user_id,)
+    ).fetchone()
+    
+    if not row:
+        return None
+    
+    return {
+        "icloud_user": row["icloud_user"],
+        "icloud_app_pw": decrypt_password(row["icloud_app_pw_encrypted"]) if row["icloud_app_pw_encrypted"] else None,
+        "caldav_url": row["caldav_url"],
+        "calendar_name": row["calendar_name"]
+    }
+
+
+def list_all_users(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
+    """List all active users (for admin)."""
+    rows = conn.execute(
+        "SELECT id, username, display_name, calendar_name, home_base, created_at FROM users WHERE is_active = 1"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ---- Per-User Events Cache ----
+
+def get_user_events_cache(conn: sqlite3.Connection, user_id: int, scope: str = "default") -> List[Dict[str, Any]]:
+    """Get cached events for a user."""
+    row = conn.execute(
+        "SELECT json FROM user_events_cache WHERE user_id = ? AND scope = ?",
+        (user_id, scope)
+    ).fetchone()
+    if not row or not row["json"]:
+        return []
+    try:
+        return json.loads(row["json"])
+    except:
+        return []
+
+
+def set_user_events_cache(conn: sqlite3.Connection, user_id: int, events: List[Dict[str, Any]], 
+                          scope: str = "default", uid_hash: str = None) -> None:
+    """Set cached events for a user."""
+    now = dt.datetime.utcnow().isoformat()
+    payload = json.dumps(events, ensure_ascii=False)
+    
+    conn.execute("""
+        INSERT INTO user_events_cache (user_id, scope, uid_hash, json, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(user_id, scope) DO UPDATE SET 
+            uid_hash = excluded.uid_hash,
+            json = excluded.json,
+            updated_at = excluded.updated_at
+    """, (user_id, scope, uid_hash, payload, now))
+
+
+# ---- Per-User Hidden Items ----
+
+def user_hidden_add(conn: sqlite3.Connection, user_id: int, pairing_id: str, report_local_iso: str = None) -> None:
+    """Hide a pairing for a specific user."""
+    now = dt.datetime.utcnow().isoformat()
+    conn.execute("""
+        INSERT INTO user_hidden_items (user_id, pairing_id, report_local_iso, created_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id, pairing_id) DO UPDATE SET report_local_iso = excluded.report_local_iso
+    """, (user_id, pairing_id, report_local_iso or "", now))
+
+
+def user_hidden_list(conn: sqlite3.Connection, user_id: int) -> List[str]:
+    """List hidden pairing IDs for a user."""
+    rows = conn.execute(
+        "SELECT pairing_id FROM user_hidden_items WHERE user_id = ?",
+        (user_id,)
+    ).fetchall()
+    return [r["pairing_id"] for r in rows]
+
+
+def user_hidden_clear(conn: sqlite3.Connection, user_id: int) -> int:
+    """Clear all hidden items for a user. Returns count cleared."""
+    cursor = conn.execute("DELETE FROM user_hidden_items WHERE user_id = ?", (user_id,))
+    return cursor.rowcount
+
+
+def user_hidden_count(conn: sqlite3.Connection, user_id: int) -> int:
+    """Count hidden items for a user."""
+    row = conn.execute(
+        "SELECT COUNT(*) as n FROM user_hidden_items WHERE user_id = ?",
+        (user_id,)
+    ).fetchone()
+    return row["n"] if row else 0
+
+
+# ---- Per-User Profile ----
+
+def get_user_profile(conn: sqlite3.Connection, user_id: int) -> Dict[str, Any]:
+    """Get user profile."""
+    row = conn.execute(
+        "SELECT first_name, last_name, photo FROM user_profile WHERE user_id = ?",
+        (user_id,)
+    ).fetchone()
+    if row:
+        return {
+            "firstName": row["first_name"] or "",
+            "lastName": row["last_name"] or "",
+            "photo": row["photo"]
+        }
+    return {"firstName": "", "lastName": "", "photo": None}
+
+
+def save_user_profile(conn: sqlite3.Connection, user_id: int, first_name: str, last_name: str, photo: str = None) -> None:
+    """Save user profile."""
+    conn.execute("""
+        INSERT INTO user_profile (user_id, first_name, last_name, photo)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET 
+            first_name = excluded.first_name,
+            last_name = excluded.last_name,
+            photo = excluded.photo
+    """, (user_id, first_name, last_name, photo))
