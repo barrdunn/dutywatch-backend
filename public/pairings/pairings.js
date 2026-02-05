@@ -698,7 +698,7 @@
         <div class="day">
           <div class="dayhdr">
             <span class="dot"></span>
-            <span class="daytitle">Day ${idx + 1}</span>
+            <span class="daytitle">Day ${day.day_index || (idx + 1)}</span>
             ${layoverLocation ? ` · Layover: ${esc(layoverLocation)}` : ''}
             ${hotel ? ` · Hotel: ${esc(hotel)}` : ''}
           </div>
@@ -754,7 +754,7 @@
       <div class="day">
         <div class="dayhdr">
           <span class="dot"></span>
-          <span class="daytitle">Day ${idx + 1}</span>
+          <span class="daytitle">Day ${day.day_index || (idx + 1)}</span>
           ${dayRepRaw ? ` · Report: ${esc(dow)} <span data-dw="day-report" data-hhmm="${esc(dayRepRaw)}">${esc(repDisp)}</span>` : ''}
           ${dayRelRaw ? ` · Release: <span data-dw="day-release" data-hhmm="${esc(dayRelRaw)}">${esc(relDisp)}</span>` : ''}
           ${day.hotel ? ` · Hotel: ${esc(day.hotel)}` : ''}

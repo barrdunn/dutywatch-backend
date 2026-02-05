@@ -485,6 +485,7 @@ def _pairing_to_row(pairing: Dict[str, Any], is_24h: bool, home_base: str) -> Di
     """Convert a stored pairing dict to a display row."""
     
     now_local = dt.datetime.now(LOCAL_TZ)
+    today = now_local.date()
     events = pairing.get("events", [])
     
     # Calculate report and release times from first/last events
@@ -564,6 +565,12 @@ def _pairing_to_row(pairing: Dict[str, Any], is_24h: bool, home_base: str) -> Di
     for idx, event in enumerate(events, start=1):
         day_row = _build_day_row(event, idx, is_24h)
         days_with_flags.append(day_row)
+    
+    # Filter to only show current/future days (not past days) for expanded view
+    days_with_flags = [
+        d for d in days_with_flags 
+        if not d.get("actual_date") or d["actual_date"] >= today.isoformat()
+    ]
     
     # Calculate number of days
     num_days = pairing.get("num_days", len(events))
